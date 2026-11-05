@@ -1,0 +1,7 @@
+artifacts/
+.agyloop/
+.worktrees/
+__pycache__/
+*.pyc
+.env
+
