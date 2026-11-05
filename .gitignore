@@ -1,7 +1,15 @@
-artifacts/
-.agyloop/
+artifacts
+.agyloop
 .worktrees/
 __pycache__/
 *.pyc
 .env
+.venv/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
 
