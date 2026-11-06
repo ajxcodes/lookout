@@ -221,3 +221,13 @@ def test_notification_target_threat_level_parsing() -> None:
             destination="http://localhost",
             min_threat_level=12.34,  # type: ignore[arg-type]
         )
+
+
+def test_storage_config_sqlite_settings() -> None:
+    """TR-27: Verify storage config supports SQLite path, WAL mode, and retention parameters."""
+    config = load_config_from_yaml(SAMPLE_VALID_YAML)
+    assert config.storage.wal_mode is True
+    assert config.storage.database_path == "./data/lookout.db"
+    assert config.storage.routine_retention_days == 7
+    assert config.storage.critical_retention_days == 30
+    assert config.storage.busy_timeout_ms == 5000
