@@ -135,3 +135,51 @@ def test_media_transcoder_port_is_runtime_checkable() -> None:
     assert isinstance(FFmpegTranscoderAdapter(), MediaTranscoderPort)
     assert isinstance(Go2RtcAdapter(), VideoRecorderPort)
     assert isinstance(RingAdapter(), VideoRecorderPort)
+
+
+def test_ai_ports_are_runtime_checkable() -> None:
+    """TR-1: Verify AI ports (vision, audio, face) are runtime_checkable protocols."""
+    assert isinstance(MockVisionInferenceAdapter(), VisionInferencePort)
+    assert isinstance(MockAudioClassifierAdapter(), AudioClassifierPort)
+    assert isinstance(MockFaceRecognitionAdapter(), FaceRecognitionPort)
+
+
+def test_ai_adapters_do_not_cross_import_siblings() -> None:
+    """TR-2: Verify AI adapters do not cross-import sibling adapters."""
+    ai_modules = {"ai_cascade", "audio_classifier", "face_recognition", "immich"}
+    adapters_dir = LOOKOUT_ROOT / "adapters"
+    all_adapter_modules = {
+        py_file.stem for py_file in adapters_dir.glob("*.py") if py_file.stem != "__init__"
+    }
+
+    forbidden_imports: list[str] = []
+    for module_name in ai_modules:
+        py_file = adapters_dir / f"{module_name}.py"
+        if not py_file.exists():
+            continue
+        sibling_modules = all_adapter_modules - {module_name}
+
+        imported_modules = _extract_imported_modules(py_file)
+        for mod in imported_modules:
+            for sibling in sibling_modules:
+                if (
+                    mod == f"lookout.adapters.{sibling}"
+                    or mod.endswith(f".{sibling}")
+                    or mod == sibling
+                ):
+                    forbidden_imports.append(f"{py_file.name} -> {mod}")
+
+    assert forbidden_imports == []
+
+
+def test_phase3_adapters_implement_egress_ports() -> None:
+    """TR-33: Verify Phase 3 concrete adapters implement egress ports."""
+    from lookout.adapters import (
+        CascadeVisionAdapter,
+        FaceRecognitionAdapter,
+        YamnetAudioClassifierAdapter,
+    )
+
+    assert isinstance(CascadeVisionAdapter(), VisionInferencePort)
+    assert isinstance(FaceRecognitionAdapter(), FaceRecognitionPort)
+    assert isinstance(YamnetAudioClassifierAdapter(), AudioClassifierPort)

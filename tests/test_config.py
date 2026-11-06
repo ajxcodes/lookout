@@ -255,3 +255,45 @@ def test_ring_stream_url_scheme_validation() -> None:
     """
     config = load_config_from_yaml(yaml_content)
     assert config.cameras[0].stream_url == "ring://front-doorbell"
+
+
+def test_ai_inference_config_validation() -> None:
+    """TR-30: Validate AI inference configurations for Ollama, OpenCode, and Gemini."""
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+
+    assert config.ollama.model == "moondream"
+    assert config.ollama.host == "http://localhost:11434"
+    assert config.ollama.timeout_seconds == 5.0
+    assert config.opencode.model_go == "deepseek-v4.1-flash"
+    assert config.opencode.model_free == "deepseek-v4.1-flash-free"
+    assert config.gemini.model == "gemini-3.5-flash-lite"
+
+
+def test_cascade_tiers_validation() -> None:
+    """TR-31: Validate multi-tier cascade configuration and default tier sequence."""
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+
+    assert len(config.cascade.tiers) == 6
+    assert config.cascade.tiers == [
+        "ollama",
+        "opencode_go",
+        "gemini",
+        "opencode_free",
+        "local_edge",
+        "offline",
+    ]
+    assert config.cascade.total_timeout_seconds == 25.0
+
+
+def test_immich_config_validation() -> None:
+    """TR-32: Validate Immich synchronization parameters and inclusion filters."""
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+
+    assert config.immich.sync_interval_hours == 24
+    assert config.immich.url == "http://localhost:2283"
+    assert "Alice" in config.immich.include_persons
+    assert config.face_recognition.similarity_threshold == 0.6
+    assert config.audio_classifier.sample_rate == 16000

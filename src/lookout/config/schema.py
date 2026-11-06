@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lookout.domain.models import ThreatLevel
+from lookout.domain.models import EventCategory, ThreatLevel
 
 
 class ResidentConfig(BaseModel):
@@ -163,6 +163,122 @@ class StorageConfig(BaseModel):
     )
 
 
+class OllamaConfig(BaseModel):
+    """Configuration for local Ollama LAN vision inference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(default="http://localhost:11434", description="Ollama server endpoint")
+    model: str = Field(default="moondream", description="Ollama vision model tag")
+    timeout_seconds: float = Field(default=5.0, gt=0.0, description="Request timeout in seconds")
+    enabled: bool = Field(default=True, description="Whether Ollama inference is active")
+
+
+class OpenCodeConfig(BaseModel):
+    """Configuration for OpenCode cloud vision inference (Go / Free)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, description="OpenCode API key")
+    api_url: str = Field(
+        default="https://api.opencode.ai/v1", description="OpenCode API base endpoint"
+    )
+    model_go: str = Field(default="deepseek-v4.1-flash", description="Model for OpenCode Go tier")
+    model_free: str = Field(
+        default="deepseek-v4.1-flash-free", description="Model for OpenCode Free tier"
+    )
+    timeout_seconds: float = Field(default=8.0, gt=0.0, description="Request timeout in seconds")
+    enabled: bool = Field(default=True, description="Whether OpenCode inference is active")
+
+
+class GeminiConfig(BaseModel):
+    """Configuration for Google Gemini cloud multimodal vision inference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, description="Google Gemini API key")
+    api_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        description="Gemini API base endpoint",
+    )
+    model: str = Field(default="gemini-3.5-flash-lite", description="Gemini model name")
+    timeout_seconds: float = Field(default=8.0, gt=0.0, description="Request timeout in seconds")
+    enabled: bool = Field(default=True, description="Whether Gemini inference is active")
+
+
+class CascadeConfig(BaseModel):
+    """Configuration for multi-tier vision inference cascade."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tiers: list[str] = Field(
+        default_factory=lambda: [
+            "ollama",
+            "opencode_go",
+            "gemini",
+            "opencode_free",
+            "local_edge",
+            "offline",
+        ],
+        description="Ordered sequence of inference tier identifiers",
+    )
+    total_timeout_seconds: float = Field(
+        default=25.0, gt=0.0, description="Cumulative timeout across all tiers"
+    )
+    fallback_category: EventCategory = Field(
+        default=EventCategory.UNKNOWN_VISITOR,
+        description="Default fallback category when all tiers fail",
+    )
+
+
+class FaceRecognitionConfig(BaseModel):
+    """Configuration for local biometric face recognition."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    similarity_threshold: float = Field(
+        default=0.6, ge=0.0, le=1.0, description="Cosine similarity threshold for resident match"
+    )
+    model_name: str = Field(default="facenet-light", description="Face embedding model identifier")
+    gallery_dir: str | None = Field(default=None, description="Optional local directory for faces")
+    enabled: bool = Field(default=True, description="Whether face recognition is active")
+
+
+class ImmichConfig(BaseModel):
+    """Configuration for self-hosted Immich gallery synchronization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(default="http://localhost:2283", description="Immich instance base URL")
+    api_key: str | None = Field(default=None, description="Immich API key")
+    sync_interval_hours: int = Field(default=24, ge=1, description="Hours between sync cycles")
+    include_persons: list[str] = Field(
+        default_factory=list, description="Person names to include in sync (empty syncs all)"
+    )
+    enabled: bool = Field(default=True, description="Whether Immich sync is active")
+
+
+class AudioClassifierConfig(BaseModel):
+    """Configuration for acoustic event classification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_path: str = Field(default="models/yamnet.tflite", description="YAMNet model file path")
+    confidence_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="Minimum confidence for acoustic events"
+    )
+    sample_rate: int = Field(default=16000, gt=0, description="Expected audio sample rate in Hz")
+    emergency_labels: list[str] = Field(
+        default_factory=lambda: ["glass_break", "alarm", "smoke_alarm", "gunshot", "scream"],
+        description="Sound labels categorized as emergencies",
+    )
+    pet_labels: list[str] = Field(
+        default_factory=lambda: ["dog_bark", "dog_whimper", "cat_meow"],
+        description="Sound labels categorized as pet activity",
+    )
+    enabled: bool = Field(default=True, description="Whether audio classification is active")
+
+
 class LookoutConfig(BaseModel):
     """Top-level configuration schema for Lookout."""
 
@@ -177,6 +293,13 @@ class LookoutConfig(BaseModel):
     go2rtc: Go2RtcConfig = Field(default_factory=Go2RtcConfig)
     ring: RingConfig = Field(default_factory=RingConfig)
     transcode: TranscodeConfig = Field(default_factory=TranscodeConfig)
+    cascade: CascadeConfig = Field(default_factory=CascadeConfig)
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    opencode: OpenCodeConfig = Field(default_factory=OpenCodeConfig)
+    gemini: GeminiConfig = Field(default_factory=GeminiConfig)
+    face_recognition: FaceRecognitionConfig = Field(default_factory=FaceRecognitionConfig)
+    immich: ImmichConfig = Field(default_factory=ImmichConfig)
+    audio_classifier: AudioClassifierConfig = Field(default_factory=AudioClassifierConfig)
 
     @model_validator(mode="after")
     def validate_cross_field_invariants(self) -> "LookoutConfig":
