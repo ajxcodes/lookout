@@ -1,0 +1,68 @@
+name: CI
+
+'on':
+  push:
+    branches: [main, 'phase/**']
+  pull_request:
+    branches: [main, 'phase/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Code Quality & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Lint with Ruff
+        run: uv run ruff check .
+
+      - name: Check formatting with Ruff
+        run: uv run ruff format --check .
+
+      - name: Type check with Mypy
+        run: uv run mypy src
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=lookout --cov-report=term-missing
+
+  critique:
+    name: Critique AI Code Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Critique AI PR Review
+        uses: ajxcodes/critique@v0
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_pr_description: "true"
+          post_inline_comments: "true"
+          post_summary_comment: "true"
+          fail_on_severity: "none"

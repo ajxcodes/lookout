@@ -1,0 +1,37 @@
+# Lookout Reference Configuration
+system_name: "Lookout Home"
+
+residents:
+  - id: "resident-alice"
+    name: "Alice"
+    notification_targets:
+      - "primary-webhook"
+    enrolled_faces:
+      - "/data/faces/alice_1.jpg"
+      - "/data/faces/alice_2.jpg"
+
+pets:
+  - id: "pet-buster"
+    name: "Buster"
+    species: "dog"
+
+cameras:
+  - id: "front-porch"
+    name: "Front Porch Camera"
+    stream_url: "rtsp://camera-front.local:554/live"
+    enabled: true
+    location: "Front Porch"
+    sensitivity: 0.75
+    record_duration: 15.0
+
+notification_targets:
+  - name: "primary-webhook"
+    target_type: "webhook"
+    destination: "https://notify.local/webhook/alerts"
+    min_threat_level: "low"
+    enabled: true
+
+storage:
+  base_path: "./data"
+  retention_days: 30
+  max_storage_gb: 100.0

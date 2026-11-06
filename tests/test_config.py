@@ -1,0 +1,223 @@
+"""Unit tests for configuration schemas and YAML loader."""
+
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from lookout.config.loader import (
+    load_config,
+    load_config_from_dict,
+    load_config_from_yaml,
+)
+from lookout.config.schema import (
+    CameraConfig,
+    NotificationTargetConfig,
+)
+from lookout.domain.models import ThreatLevel
+
+SAMPLE_VALID_YAML = """
+system_name: "Test Lookout"
+residents:
+  - id: "res-1"
+    name: "Alice"
+    notification_targets:
+      - "webhook-alert"
+    enrolled_faces:
+      - "/faces/alice.jpg"
+pets:
+  - id: "pet-1"
+    name: "Rex"
+    species: "dog"
+cameras:
+  - id: "cam-front"
+    name: "Front Door"
+    stream_url: "rtsp://camera.local:554/live"
+    enabled: true
+    location: "Porch"
+    sensitivity: 0.8
+    record_duration: 12.0
+notification_targets:
+  - name: "webhook-alert"
+    target_type: "webhook"
+    destination: "https://notify.example.com/alerts"
+    min_threat_level: "low"
+    enabled: true
+storage:
+  base_path: "/tmp/lookout"
+  retention_days: 14
+  max_storage_gb: 50.0
+"""
+
+
+def test_valid_config_loads() -> None:
+    """TR-5: Verify valid configuration parses and populates camera collection."""
+    config = load_config_from_yaml(SAMPLE_VALID_YAML)
+    assert len(config.cameras) == 1
+    assert config.system_name == "Test Lookout"
+    assert config.cameras[0].id == "cam-front"
+    assert config.cameras[0].stream_url == "rtsp://camera.local:554/live"
+
+
+def test_duplicate_camera_id_fails() -> None:
+    """TR-6: Verify duplicate camera identifiers are rejected with validation error."""
+    invalid_data = {
+        "cameras": [
+            {"id": "cam-duplicate", "name": "Camera 1", "stream_url": "rtsp://cam1.local/live"},
+            {"id": "cam-duplicate", "name": "Camera 2", "stream_url": "rtsp://cam2.local/live"},
+        ]
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        load_config_from_dict(invalid_data)
+    assert exc_info.value is not None
+
+
+def test_resident_and_pet_validation() -> None:
+    """TR-7: Verify resident and pet entities validate with correct attributes."""
+    config = load_config_from_yaml(SAMPLE_VALID_YAML)
+    assert config.residents[0].name == "Alice"
+    assert config.residents[0].id == "res-1"
+    assert config.pets[0].name == "Rex"
+    assert config.pets[0].species == "dog"
+
+
+def test_load_example_config_file() -> None:
+    """Verify reference config.example.yaml file loads and passes all validation."""
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+    assert len(config.cameras) == 1
+    assert len(config.residents) == 1
+    assert len(config.pets) == 1
+    assert len(config.notification_targets) == 1
+    assert config.residents[0].name == "Alice"
+    assert config.cameras[0].id == "front-porch"
+
+
+def test_duplicate_resident_id_fails() -> None:
+    """Verify duplicate resident identifiers fail validation."""
+    data = {
+        "residents": [
+            {"id": "res-dup", "name": "Alice"},
+            {"id": "res-dup", "name": "Bob"},
+        ]
+    }
+    with pytest.raises(ValidationError):
+        load_config_from_dict(data)
+
+
+def test_duplicate_pet_id_fails() -> None:
+    """Verify duplicate pet identifiers fail validation."""
+    data = {
+        "pets": [
+            {"id": "pet-dup", "name": "Dog 1"},
+            {"id": "pet-dup", "name": "Dog 2"},
+        ]
+    }
+    with pytest.raises(ValidationError):
+        load_config_from_dict(data)
+
+
+def test_duplicate_notification_target_fails() -> None:
+    """Verify duplicate notification target names fail validation."""
+    data = {
+        "notification_targets": [
+            {"name": "ntfy", "target_type": "ntfy", "destination": "topic1"},
+            {"name": "ntfy", "target_type": "ntfy", "destination": "topic2"},
+        ]
+    }
+    with pytest.raises(ValidationError):
+        load_config_from_dict(data)
+
+
+def test_resident_references_undefined_target_fails() -> None:
+    """Verify resident notification target must exist in notification_targets."""
+    data = {
+        "residents": [{"id": "res-1", "name": "Alice", "notification_targets": ["unknown-target"]}],
+        "notification_targets": [
+            {"name": "valid-target", "target_type": "email", "destination": "a@b.com"}
+        ],
+    }
+    with pytest.raises(ValidationError):
+        load_config_from_dict(data)
+
+
+def test_invalid_stream_url_scheme() -> None:
+    """Verify unsupported camera stream schemes are rejected."""
+    with pytest.raises(ValidationError):
+        CameraConfig(id="c1", name="Cam", stream_url="ftp://camera.local/stream")
+
+
+def test_invalid_stream_url_missing_host() -> None:
+    """Verify camera stream url with no netloc or path is rejected."""
+    with pytest.raises(ValidationError):
+        CameraConfig(id="c1", name="Cam", stream_url="rtsp://")
+
+
+def test_empty_yaml_produces_defaults() -> None:
+    """Verify empty YAML returns default config."""
+    config = load_config_from_yaml("")
+    assert config.system_name == "Lookout"
+    assert config.cameras == []
+    assert config.residents == []
+    assert config.storage.base_path == "./data"
+
+
+def test_non_mapping_yaml_raises_value_error() -> None:
+    """Verify non-mapping top-level YAML raises ValueError."""
+    with pytest.raises(ValueError):
+        load_config_from_yaml("- item 1\n- item 2")
+
+
+def test_non_dict_config_raises_value_error() -> None:
+    """Verify non-dict data passed to load_config_from_dict raises ValueError."""
+    with pytest.raises(ValueError):
+        load_config_from_dict(["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+def test_file_not_found_raises() -> None:
+    """Verify non-existent config file path raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_config("/non/existent/path/config.yaml")
+
+
+def test_notification_target_threat_level_parsing() -> None:
+    """Verify min_threat_level parses from string, int, and enum."""
+    t1 = NotificationTargetConfig(
+        name="t1",
+        target_type="webhook",
+        destination="http://localhost",
+        min_threat_level="high",  # type: ignore[arg-type]
+    )
+    assert t1.min_threat_level == ThreatLevel.HIGH
+
+    t2 = NotificationTargetConfig(
+        name="t2",
+        target_type="webhook",
+        destination="http://localhost",
+        min_threat_level=3,  # type: ignore[arg-type]
+    )
+    assert t2.min_threat_level == ThreatLevel.HIGH
+
+    t3 = NotificationTargetConfig(
+        name="t3",
+        target_type="webhook",
+        destination="http://localhost",
+        min_threat_level=ThreatLevel.CRITICAL,
+    )
+    assert t3.min_threat_level == ThreatLevel.CRITICAL
+
+    with pytest.raises(ValidationError):
+        NotificationTargetConfig(
+            name="t4",
+            target_type="webhook",
+            destination="http://localhost",
+            min_threat_level="invalid_level",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValidationError):
+        NotificationTargetConfig(
+            name="t5",
+            target_type="webhook",
+            destination="http://localhost",
+            min_threat_level=12.34,  # type: ignore[arg-type]
+        )
