@@ -221,3 +221,37 @@ def test_notification_target_threat_level_parsing() -> None:
             destination="http://localhost",
             min_threat_level=12.34,  # type: ignore[arg-type]
         )
+
+
+def test_transcode_optimization_config_parsing() -> None:
+    """TR-19: Verify transcode optimization configuration fields parse correctly."""
+    yaml_content = """
+    transcode:
+      ffmpeg_path: "/opt/bin/ffmpeg"
+      use_stream_copy: true
+      max_threads: 2
+      nice_level: 10
+      temp_dir: "/dev/shm"
+      gif_fps: 6
+      gif_width: 320
+      gif_duration: 2.5
+      thumbnail_count: 5
+    """
+    config = load_config_from_yaml(yaml_content)
+    assert config.transcode.use_stream_copy is True
+    assert config.transcode.max_threads == 2
+    assert config.transcode.nice_level == 10
+    assert config.transcode.temp_dir == "/dev/shm"
+
+
+def test_ring_stream_url_scheme_validation() -> None:
+    """TR-20: Verify ring:// scheme URLs are permitted for camera stream_url."""
+    yaml_content = """
+    cameras:
+      - id: "ring-doorbell"
+        name: "Front Doorbell"
+        camera_type: "ring"
+        stream_url: "ring://front-doorbell"
+    """
+    config = load_config_from_yaml(yaml_content)
+    assert config.cameras[0].stream_url == "ring://front-doorbell"
