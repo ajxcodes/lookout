@@ -577,9 +577,13 @@ class CascadeVisionAdapter(VisionInferencePort):
 
             tier_start = time.perf_counter()
             try:
-                # Per-tier timeout budget
-                timeout_sec = 10.0
-                if hasattr(provider, "config") and hasattr(provider.config, "timeout_seconds"):
+                # Per-tier timeout budget: check provider-specific config first,
+                # falling back to the configured cascade total_timeout_seconds
+                timeout_sec = float(self.cascade_config.total_timeout_seconds)
+                if (
+                    hasattr(provider, "config")
+                    and getattr(provider.config, "timeout_seconds", None) is not None
+                ):
                     timeout_sec = float(provider.config.timeout_seconds)
 
                 cat, metrics, prov = await asyncio.wait_for(

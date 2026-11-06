@@ -4,8 +4,8 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Sequence
+from typing import Any, TypeGuard
 
 from lookout.config.schema import FaceRecognitionConfig, ResidentConfig
 from lookout.ports.egress import FaceRecognitionPort
@@ -44,6 +44,11 @@ def generate_deterministic_embedding(seed: bytes, dim: int = 128) -> list[float]
     return vec
 
 
+def _is_1d_numeric_vector(val: Sequence[Any]) -> TypeGuard[Sequence[float | int]]:
+    """Determine whether a sequence represents a 1D numeric vector."""
+    return bool(val) and isinstance(val[0], (int, float))
+
+
 class FaceRecognitionAdapter(FaceRecognitionPort):
     """Egress adapter performing local biometric face verification against enrolled gallery."""
 
@@ -78,8 +83,8 @@ class FaceRecognitionAdapter(FaceRecognitionPort):
             return
 
         # Handle 1D vector passed directly
-        if isinstance(embeddings[0], (int, float)):
-            to_add: list[list[float]] = [[float(x) for x in embeddings]]  # type: ignore[arg-type]
+        if _is_1d_numeric_vector(embeddings):
+            to_add: list[list[float]] = [[float(x) for x in embeddings]]
         else:
             to_add = []
             for item in embeddings:

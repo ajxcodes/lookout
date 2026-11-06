@@ -93,3 +93,13 @@ def test_cosine_similarity_edge_cases() -> None:
     assert compute_cosine_similarity([], []) == 0.0
     assert compute_cosine_similarity([1.0], [1.0, 2.0]) == 0.0
     assert compute_cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
+
+
+def test_face_recognition_update_with_1d_vector() -> None:
+    """Verify updating resident embeddings with a direct 1D numeric vector."""
+    adapter = FaceRecognitionAdapter()
+    vec_1d = [0.1, 0.2, 0.3, 0.4]
+    adapter.update_resident_embeddings("bob", vec_1d)
+    assert "bob" in adapter.gallery
+    assert len(adapter.gallery["bob"]) == 1
+    assert adapter.gallery["bob"][0] == [0.1, 0.2, 0.3, 0.4]

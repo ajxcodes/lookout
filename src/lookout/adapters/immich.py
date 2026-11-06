@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -44,7 +45,15 @@ class FaceGalleryTarget(Protocol):
 
 @dataclass
 class ImmichSyncResult:
-    """Result summary of an Immich gallery synchronization cycle."""
+    """Result summary of an Immich gallery synchronization cycle.
+
+    This class serves a dual purpose:
+    1. A structured dataclass preserving synchronization telemetry (success status,
+       count of synced faces, names of synced individuals, and error details).
+    2. A convenient comparison and control-flow wrapper supporting truthiness testing
+       via `__bool__`, numeric conversion via `__int__`, threshold evaluation via `__ge__`,
+       and tuple unpacking via `__iter__`.
+    """
 
     success: bool
     count: int
@@ -52,17 +61,41 @@ class ImmichSyncResult:
     error: str | None = None
 
     def __bool__(self) -> bool:
+        """Evaluate truthiness based on sync success.
+
+        Allows idiomatic status checks such as:
+            if sync_result:
+                ...
+        """
         return self.success
 
     def __int__(self) -> int:
+        """Convert the result to an integer representing the count of synced identities.
+
+        Allows ergonomic numeric usage such as:
+            total_faces = int(sync_result)
+        """
         return self.count
 
     def __ge__(self, other: Any) -> bool:
+        """Compare the count of synced identities against a numeric threshold.
+
+        Supports expressions such as:
+            if sync_result >= 1:
+                ...
+
+        Returns NotImplemented if compared against non-numeric types.
+        """
         if isinstance(other, (int, float)):
             return self.count >= other
         return NotImplemented
 
-    def __iter__(self) -> Any:
+    def __iter__(self) -> Iterator[Any]:
+        """Iterate over core fields to support tuple unpacking.
+
+        Enables unpacking syntax such as:
+            success, count, synced_names = sync_result
+        """
         return iter((self.success, self.count, self.synced_names))
 
 

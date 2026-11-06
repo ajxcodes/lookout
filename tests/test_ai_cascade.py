@@ -334,3 +334,38 @@ def test_cascade_implements_vision_inference_port() -> None:
     """TR-18: CascadeVisionAdapter implements VisionInferencePort Protocol."""
     adapter = CascadeVisionAdapter()
     assert isinstance(adapter, VisionInferencePort)
+
+
+@pytest.mark.asyncio
+async def test_cascade_falls_back_to_total_timeout_seconds() -> None:
+    """Verify tier without explicit timeout_seconds uses total_timeout_seconds fallback."""
+    import asyncio
+
+    from lookout.domain.models import DetectionMetrics, InferenceProvenance
+
+    class SlowMockProvider:
+        async def analyze(
+            self, image_bytes: bytes, prompt: str | None = None
+        ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
+            await asyncio.sleep(0.5)
+            return (
+                EventCategory.PACKAGE_DELIVERY,
+                DetectionMetrics(confidence=0.9),
+                InferenceProvenance(
+                    provider="slow",
+                    model_name="mock",
+                    latency_ms=500.0,
+                    confidence=0.9,
+                    raw_output="slow",
+                ),
+            )
+
+    adapter = CascadeVisionAdapter(
+        cascade_config=CascadeConfig(tiers=["slow", "offline"], total_timeout_seconds=0.05),
+        providers={"slow": SlowMockProvider(), "offline": OfflineVisionFallbackProvider()},  # type: ignore[dict-item]
+    )
+
+    category, metrics, provenance = await adapter.analyze_scene(b"test")
+    # Must have timed out on the slow provider and fallen back to offline_fallback
+    assert provenance.provider == "offline_fallback"
+    assert category == EventCategory.UNKNOWN_VISITOR

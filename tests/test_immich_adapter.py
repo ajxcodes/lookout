@@ -6,7 +6,7 @@ import respx
 from httpx import Response
 
 from lookout.adapters.face_recognition import FaceRecognitionAdapter
-from lookout.adapters.immich import ImmichGalleryAdapter
+from lookout.adapters.immich import ImmichGalleryAdapter, ImmichSyncResult
 from lookout.config.schema import ImmichConfig
 
 
@@ -96,3 +96,38 @@ async def test_immich_gallery_sync_disabled_noop() -> None:
 
     assert result.success is True
     assert result.count == 0
+
+
+def test_immich_sync_result_magic_methods_and_docstrings() -> None:
+    """Verify ImmichSyncResult magic methods and presence of descriptive docstrings."""
+    # Ensure docstrings exist on class and methods
+    assert ImmichSyncResult.__doc__ is not None
+    assert ImmichSyncResult.__bool__.__doc__ is not None
+    assert ImmichSyncResult.__int__.__doc__ is not None
+    assert ImmichSyncResult.__ge__.__doc__ is not None
+    assert ImmichSyncResult.__iter__.__doc__ is not None
+
+    success_result = ImmichSyncResult(
+        success=True, count=3, synced_names=["alice", "bob", "charlie"]
+    )
+    failure_result = ImmichSyncResult(success=False, count=0, error="Network error")
+
+    # __bool__
+    assert bool(success_result) is True
+    assert bool(failure_result) is False
+
+    # __int__
+    assert int(success_result) == 3
+    assert int(failure_result) == 0
+
+    # __ge__
+    assert success_result >= 3
+    assert success_result >= 2.5
+    assert not (success_result >= 4)
+    assert (success_result.__ge__("not-a-number")) is NotImplemented
+
+    # __iter__
+    success, count, names = success_result
+    assert success is True
+    assert count == 3
+    assert names == ["alice", "bob", "charlie"]
