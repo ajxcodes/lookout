@@ -1,6 +1,7 @@
 """SQLite connection manager with WAL mode, foreign keys, and safe read/write separation."""
 
 import asyncio
+import contextlib
 import sqlite3
 import uuid
 from collections.abc import Callable
@@ -94,6 +95,25 @@ class SqliteConnectionManager:
             self._write_conn.close()
             self._write_conn = None  # type: ignore[assignment]
 
+    async def aclose(self) -> None:
+        """Close the write connection asynchronously."""
+        async with self._write_lock:
+            if self._write_conn:
+                await asyncio.to_thread(self._write_conn.close)
+                self._write_conn = None  # type: ignore[assignment]
+
+    async def __aenter__(self) -> "SqliteConnectionManager":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()
+
     def __del__(self) -> None:
-        """Ensure connection is closed upon garbage collection."""
-        self.close()
+        """Ensure connection is closed upon garbage collection if not already closed."""
+        with contextlib.suppress(Exception):
+            self.close()

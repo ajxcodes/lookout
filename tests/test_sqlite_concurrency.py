@@ -102,3 +102,39 @@ async def test_concurrent_multi_reader_multi_writer_load(tmp_path: Path) -> None
 
     total_count = await repo.count()
     assert total_count == 25
+
+
+@pytest.mark.asyncio
+async def test_sqlite_connection_manager_async_lifecycle(tmp_path: Path) -> None:
+    """Verify SqliteConnectionManager and SqliteEventRepository support async context manager."""
+    db_file = tmp_path / "lifecycle.db"
+
+    # Test SqliteEventRepository as async context manager
+    async with SqliteEventRepository(db_path=db_file) as repo:
+        now = datetime.now(UTC)
+        await repo.save(
+            CameraEvent(
+                id="lifecycle-evt-1",
+                camera_id="cam-1",
+                timestamp=now,
+                category=EventCategory.COURIER_DELIVERY,
+                threat_level=ThreatLevel.LOW,
+                summary="Lifecycle test event",
+            )
+        )
+        assert await repo.count() == 1
+
+    # Verify connection was closed
+    assert repo.manager._write_conn is None
+
+    # Test explicit aclose() on SqliteConnectionManager directly
+    from lookout.adapters.sqlite.connection import SqliteConnectionManager
+
+    manager = SqliteConnectionManager(db_path=tmp_path / "mgr_lifecycle.db")
+    assert manager._write_conn is not None
+    await manager.aclose()
+    assert manager._write_conn is None
+
+    # Idempotent closing
+    await manager.aclose()
+    manager.close()
