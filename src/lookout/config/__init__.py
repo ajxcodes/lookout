@@ -7,20 +7,26 @@ from lookout.config.loader import (
 )
 from lookout.config.schema import (
     CameraConfig,
+    Go2RtcConfig,
     LookoutConfig,
     NotificationTargetConfig,
     PetConfig,
     ResidentConfig,
+    RingConfig,
     StorageConfig,
+    TranscodeConfig,
 )
 
 __all__ = [
     "CameraConfig",
+    "Go2RtcConfig",
     "LookoutConfig",
     "NotificationTargetConfig",
     "PetConfig",
     "ResidentConfig",
+    "RingConfig",
     "StorageConfig",
+    "TranscodeConfig",
     "load_config",
     "load_config_from_dict",
     "load_config_from_yaml",

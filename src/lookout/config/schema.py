@@ -41,6 +41,9 @@ class CameraConfig(BaseModel):
     id: str = Field(..., description="Unique camera identifier")
     name: str = Field(..., description="Human-readable camera name")
     stream_url: str = Field(..., description="RTSP, HTTP, or HTTPS stream endpoint")
+    camera_type: str = Field(
+        default="generic", description="Camera adapter type (e.g., generic, ring, go2rtc)"
+    )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(
@@ -54,13 +57,70 @@ class CameraConfig(BaseModel):
     @classmethod
     def validate_stream_url(cls, v: str) -> str:
         parsed = urlparse(v)
-        if parsed.scheme not in ("rtsp", "rtsps", "http", "https"):
+        if parsed.scheme not in ("rtsp", "rtsps", "http", "https", "ring"):
             raise ValueError(
-                f"Invalid stream URL scheme '{parsed.scheme}'. Must be rtsp, rtsps, http, or https."
+                f"Invalid stream URL scheme '{parsed.scheme}'. "
+                "Must be rtsp, rtsps, http, https, or ring."
             )
         if not parsed.netloc and not parsed.path:
             raise ValueError("Invalid stream URL: missing host or network location.")
         return v
+
+
+class Go2RtcConfig(BaseModel):
+    """Configuration for go2rtc streaming server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_url: str = Field(
+        default="http://localhost:1984", description="Base URL for go2rtc REST API"
+    )
+    timeout_seconds: float = Field(
+        default=10.0, gt=0.0, description="HTTP request and stream timeout in seconds"
+    )
+
+
+class RingConfig(BaseModel):
+    """Configuration for Ring cloud adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auth_token: str | None = Field(default=None, description="Ring authentication / refresh token")
+    api_url: str = Field(default="https://api.ring.com", description="Ring REST API base endpoint")
+    timeout_seconds: float = Field(
+        default=15.0, gt=0.0, description="Timeout for Ring cloud API requests"
+    )
+
+
+class TranscodeConfig(BaseModel):
+    """Configuration for FFmpeg media normalization and preview generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ffmpeg_path: str = Field(default="ffmpeg", description="Path to ffmpeg executable")
+    ffprobe_path: str = Field(default="ffprobe", description="Path to ffprobe executable")
+    use_stream_copy: bool = Field(
+        default=True, description="Attempt direct stream-copy remux before re-encoding"
+    )
+    max_threads: int = Field(
+        default=2, ge=1, description="Maximum CPU threads allowed for transcode subprocesses"
+    )
+    nice_level: int = Field(
+        default=10, ge=-20, le=19, description="Process priority (niceness) for transcode workers"
+    )
+    temp_dir: str = Field(
+        default="/dev/shm", description="Temporary scratch directory for transcoding"
+    )
+    gif_fps: int = Field(default=6, ge=1, description="Frame rate for preview GIF generation")
+    gif_width: int = Field(
+        default=320, ge=16, description="Pixel width for preview GIF downscaling"
+    )
+    gif_duration: float = Field(
+        default=2.5, gt=0.0, description="Maximum duration in seconds for preview GIF"
+    )
+    thumbnail_count: int = Field(
+        default=5, ge=1, description="Number of scrubbed thumbnail images to extract"
+    )
 
 
 class NotificationTargetConfig(BaseModel):
@@ -114,6 +174,9 @@ class LookoutConfig(BaseModel):
     cameras: list[CameraConfig] = Field(default_factory=list)
     notification_targets: list[NotificationTargetConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    go2rtc: Go2RtcConfig = Field(default_factory=Go2RtcConfig)
+    ring: RingConfig = Field(default_factory=RingConfig)
+    transcode: TranscodeConfig = Field(default_factory=TranscodeConfig)
 
     @model_validator(mode="after")
     def validate_cross_field_invariants(self) -> "LookoutConfig":

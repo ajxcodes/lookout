@@ -3,11 +3,17 @@
 import ast
 from pathlib import Path
 
+from lookout.adapters import (
+    FFmpegTranscoderAdapter,
+    Go2RtcAdapter,
+    RingAdapter,
+)
 from lookout.adapters.memory import (
     InMemoryEventRepository,
     MockAudioClassifierAdapter,
     MockFaceRecognitionAdapter,
     MockNotificationAdapter,
+    MockTranscoderAdapter,
     MockVideoRecorderAdapter,
     MockVisionInferenceAdapter,
 )
@@ -16,6 +22,7 @@ from lookout.ports.egress import (
     AudioClassifierPort,
     EventRepositoryPort,
     FaceRecognitionPort,
+    MediaTranscoderPort,
     NotificationPort,
     VideoRecorderPort,
     VisionInferencePort,
@@ -120,3 +127,11 @@ def test_adapters_do_not_cross_import_siblings() -> None:
                     forbidden_cross_imports.append(f"{py_file.name} -> {mod}")
 
     assert forbidden_cross_imports == []
+
+
+def test_media_transcoder_port_is_runtime_checkable() -> None:
+    """TR-21: Verify MediaTranscoderPort is runtime checkable protocol."""
+    assert isinstance(MockTranscoderAdapter(), MediaTranscoderPort)
+    assert isinstance(FFmpegTranscoderAdapter(), MediaTranscoderPort)
+    assert isinstance(Go2RtcAdapter(), VideoRecorderPort)
+    assert isinstance(RingAdapter(), VideoRecorderPort)
