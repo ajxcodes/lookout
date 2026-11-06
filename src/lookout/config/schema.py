@@ -97,6 +97,19 @@ class StorageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     base_path: str = Field(default="./data", description="Root directory for local data")
+    database_path: str = Field(
+        default="./data/lookout.db", description="Path to SQLite database file"
+    )
+    wal_mode: bool = Field(default=True, description="Enable SQLite Write-Ahead Logging (WAL) mode")
+    routine_retention_days: int = Field(
+        default=7, ge=1, description="Days to retain routine non-threat events and media"
+    )
+    critical_retention_days: int = Field(
+        default=30, ge=1, description="Days to retain critical threat events and media"
+    )
+    busy_timeout_ms: int = Field(
+        default=5000, ge=0, description="SQLite busy handler timeout in milliseconds"
+    )
     retention_days: int = Field(default=30, ge=1, description="Days to retain events and clips")
     max_storage_gb: float = Field(
         default=100.0, gt=0.0, description="Max disk allocation in gigabytes"
