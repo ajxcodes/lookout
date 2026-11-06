@@ -1,5 +1,6 @@
 """Egress port definitions for media recording, AI inference, persistence, and notifications."""
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from lookout.domain.models import (
@@ -70,6 +71,9 @@ class EventRepositoryPort(Protocol):
         camera_id: str | None = None,
         category: EventCategory | None = None,
         min_threat: ThreatLevel | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        query: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[CameraEvent]:
@@ -78,6 +82,10 @@ class EventRepositoryPort(Protocol):
 
     async def count(self) -> int:
         """Return total number of saved events."""
+        ...
+
+    async def delete(self, event_id: str) -> bool:
+        """Delete an event by ID; returns True if deleted, False if not found."""
         ...
 
 

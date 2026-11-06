@@ -14,25 +14,61 @@ from lookout.adapters.face_recognition import FaceRecognitionAdapter
 from lookout.adapters.ffmpeg import FFmpegNotFoundError, FFmpegTranscoderAdapter, TranscodeError
 from lookout.adapters.go2rtc import Go2RtcAdapter
 from lookout.adapters.immich import ImmichGalleryAdapter
+from lookout.adapters.memory import (
+    InMemoryEventRepository,
+    MockAudioClassifierAdapter,
+    MockFaceRecognitionAdapter,
+    MockNotificationAdapter,
+    MockTranscoderAdapter,
+    MockVideoRecorderAdapter,
+    MockVisionInferenceAdapter,
+)
 from lookout.adapters.ring import RingAdapter
+from lookout.adapters.sqlite import (
+    AuditLogger,
+    HouseholdMember,
+    HouseholdMembersRepository,
+    ImportResult,
+    MediaRetentionWorker,
+    RetentionResult,
+    SqliteConnectionManager,
+    SqliteEventRepository,
+    import_legacy_events,
+)
 from lookout.adapters.tempfile import TempMediaContext, TempMediaManager
 
 __all__ = [
+    "AuditLogger",
     "CascadeVisionAdapter",
     "FFmpegNotFoundError",
     "FFmpegTranscoderAdapter",
     "FaceRecognitionAdapter",
     "GeminiVisionProvider",
     "Go2RtcAdapter",
+    "HouseholdMember",
+    "HouseholdMembersRepository",
     "ImmichGalleryAdapter",
+    "ImportResult",
+    "InMemoryEventRepository",
     "LocalEdgeVisionProvider",
+    "MediaRetentionWorker",
+    "MockAudioClassifierAdapter",
+    "MockFaceRecognitionAdapter",
+    "MockNotificationAdapter",
+    "MockTranscoderAdapter",
+    "MockVideoRecorderAdapter",
+    "MockVisionInferenceAdapter",
     "OfflineVisionFallbackProvider",
     "OllamaVisionProvider",
     "OpenCodeVisionProvider",
+    "RetentionResult",
     "RingAdapter",
+    "SqliteConnectionManager",
+    "SqliteEventRepository",
     "StructuredOutputParser",
     "TempMediaContext",
     "TempMediaManager",
     "TranscodeError",
     "YamnetAudioClassifierAdapter",
+    "import_legacy_events",
 ]

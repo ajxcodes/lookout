@@ -17,6 +17,7 @@ from lookout.adapters.memory import (
     MockVideoRecorderAdapter,
     MockVisionInferenceAdapter,
 )
+from lookout.adapters.sqlite import SqliteEventRepository
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import (
     AudioClassifierPort,
@@ -127,6 +128,11 @@ def test_adapters_do_not_cross_import_siblings() -> None:
                     forbidden_cross_imports.append(f"{py_file.name} -> {mod}")
 
     assert forbidden_cross_imports == []
+
+
+def test_sqlite_adapter_implements_event_repository_port() -> None:
+    """TR-28: Verify SqliteEventRepository implements EventRepositoryPort protocol."""
+    assert isinstance(SqliteEventRepository(":memory:"), EventRepositoryPort)
 
 
 def test_media_transcoder_port_is_runtime_checkable() -> None:

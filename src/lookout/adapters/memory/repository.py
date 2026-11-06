@@ -1,5 +1,7 @@
 """In-memory event repository implementation."""
 
+from datetime import datetime
+
 from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
 from lookout.ports.egress import EventRepositoryPort
 
@@ -23,6 +25,9 @@ class InMemoryEventRepository(EventRepositoryPort):
         camera_id: str | None = None,
         category: EventCategory | None = None,
         min_threat: ThreatLevel | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        query: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[CameraEvent]:
@@ -35,6 +40,24 @@ class InMemoryEventRepository(EventRepositoryPort):
                 continue
             if min_threat is not None and event.threat_level < min_threat:
                 continue
+            if start_time is not None and event.timestamp < start_time:
+                continue
+            if end_time is not None and event.timestamp > end_time:
+                continue
+            if query is not None:
+                q = query.lower()
+                tags_str = ""
+                raw_tags = event.metadata.get("tags")
+                if isinstance(raw_tags, list):
+                    tags_str = " ".join(str(t) for t in raw_tags).lower()
+                elif isinstance(raw_tags, str):
+                    tags_str = raw_tags.lower()
+                if (
+                    q not in event.summary.lower()
+                    and q not in event.category.value.lower()
+                    and q not in tags_str
+                ):
+                    continue
             results.append(event)
 
         # Sort newest first
@@ -44,3 +67,10 @@ class InMemoryEventRepository(EventRepositoryPort):
     async def count(self) -> int:
         """Return count of stored events."""
         return len(self._events)
+
+    async def delete(self, event_id: str) -> bool:
+        """Delete event by ID; returns True if deleted, False if not found."""
+        if event_id in self._events:
+            del self._events[event_id]
+            return True
+        return False

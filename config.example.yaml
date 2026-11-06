@@ -33,6 +33,11 @@ notification_targets:
 
 storage:
   base_path: "./data"
+  database_path: "./data/lookout.db"
+  wal_mode: true
+  routine_retention_days: 7
+  critical_retention_days: 30
+  busy_timeout_ms: 5000
   retention_days: 30
   max_storage_gb: 100.0
 
