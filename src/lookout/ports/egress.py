@@ -90,3 +90,44 @@ class NotificationPort(Protocol):
     ) -> bool:
         """Dispatch notification for an event to specified target destination."""
         ...
+
+
+@runtime_checkable
+class MediaTranscoderPort(Protocol):
+    """Port for video normalization, preview generation, and thumbnail extraction."""
+
+    async def normalize_mp4(self, input_path: str, output_path: str | None = None) -> str:
+        """Normalize or remux video into standard faststart MP4; returns output path."""
+        ...
+
+    async def generate_preview_gif(
+        self,
+        input_path: str,
+        output_path: str | None = None,
+        duration_seconds: float = 2.5,
+        fps: int = 6,
+        width: int = 320,
+    ) -> str:
+        """Generate animated GIF push preview; returns output path."""
+        ...
+
+    async def generate_preview_webp(
+        self,
+        input_path: str,
+        output_path: str | None = None,
+        duration_seconds: float = 2.5,
+        fps: int = 6,
+        width: int = 320,
+    ) -> str:
+        """Generate animated WebP push preview; returns output path."""
+        ...
+
+    async def generate_thumbnails(
+        self,
+        input_path: str,
+        output_dir: str | None = None,
+        count: int = 5,
+        width: int = 320,
+    ) -> list[str]:
+        """Extract scrubbed thumbnail stills across video duration; returns list of image paths."""
+        ...

@@ -13,3 +13,16 @@ __pycache__/
 dist/
 build/
 
+
+# codeloop / codeloop ephemeral runtime state
+!.agyloop/
+.agyloop/state.json
+.agyloop/tasks/
+.agyloop/critique/
+.agyloop/locks/
+.agyloop/logs/
+.agyloop/critique-update-cache.json
+.agyloop/*.bak
+
+# Antigravity Persistent Plans
+artifacts/plans/

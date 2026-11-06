@@ -36,6 +36,27 @@ storage:
   retention_days: 30
   max_storage_gb: 100.0
 
+go2rtc:
+  api_url: "http://localhost:1984"
+  timeout_seconds: 10.0
+
+ring:
+  auth_token: null
+  api_url: "https://api.ring.com"
+  timeout_seconds: 15.0
+
+transcode:
+  ffmpeg_path: "ffmpeg"
+  ffprobe_path: "ffprobe"
+  use_stream_copy: true
+  max_threads: 2
+  nice_level: 10
+  temp_dir: "/dev/shm"
+  gif_fps: 6
+  gif_width: 320
+  gif_duration: 2.5
+  thumbnail_count: 5
+
 cascade:
   tiers:
     - "ollama"
@@ -97,3 +118,4 @@ audio_classifier:
     - "dog_whimper"
     - "cat_meow"
   enabled: true
+

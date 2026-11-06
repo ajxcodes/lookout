@@ -3,11 +3,17 @@
 import ast
 from pathlib import Path
 
+from lookout.adapters import (
+    FFmpegTranscoderAdapter,
+    Go2RtcAdapter,
+    RingAdapter,
+)
 from lookout.adapters.memory import (
     InMemoryEventRepository,
     MockAudioClassifierAdapter,
     MockFaceRecognitionAdapter,
     MockNotificationAdapter,
+    MockTranscoderAdapter,
     MockVideoRecorderAdapter,
     MockVisionInferenceAdapter,
 )
@@ -16,6 +22,7 @@ from lookout.ports.egress import (
     AudioClassifierPort,
     EventRepositoryPort,
     FaceRecognitionPort,
+    MediaTranscoderPort,
     NotificationPort,
     VideoRecorderPort,
     VisionInferencePort,
@@ -122,6 +129,14 @@ def test_adapters_do_not_cross_import_siblings() -> None:
     assert forbidden_cross_imports == []
 
 
+def test_media_transcoder_port_is_runtime_checkable() -> None:
+    """TR-21: Verify MediaTranscoderPort is runtime checkable protocol."""
+    assert isinstance(MockTranscoderAdapter(), MediaTranscoderPort)
+    assert isinstance(FFmpegTranscoderAdapter(), MediaTranscoderPort)
+    assert isinstance(Go2RtcAdapter(), VideoRecorderPort)
+    assert isinstance(RingAdapter(), VideoRecorderPort)
+
+
 def test_ai_ports_are_runtime_checkable() -> None:
     """TR-1: Verify AI ports (vision, audio, face) are runtime_checkable protocols."""
     assert isinstance(MockVisionInferenceAdapter(), VisionInferencePort)
@@ -131,17 +146,18 @@ def test_ai_ports_are_runtime_checkable() -> None:
 
 def test_ai_adapters_do_not_cross_import_siblings() -> None:
     """TR-2: Verify AI adapters do not cross-import sibling adapters."""
+    ai_modules = {"ai_cascade", "audio_classifier", "face_recognition", "immich"}
     adapters_dir = LOOKOUT_ROOT / "adapters"
-    adapter_module_names = {
+    all_adapter_modules = {
         py_file.stem for py_file in adapters_dir.glob("*.py") if py_file.stem != "__init__"
     }
 
     forbidden_imports: list[str] = []
-    for py_file in adapters_dir.glob("*.py"):
-        if py_file.stem == "__init__":
+    for module_name in ai_modules:
+        py_file = adapters_dir / f"{module_name}.py"
+        if not py_file.exists():
             continue
-        current_module = py_file.stem
-        sibling_modules = adapter_module_names - {current_module}
+        sibling_modules = all_adapter_modules - {module_name}
 
         imported_modules = _extract_imported_modules(py_file)
         for mod in imported_modules:
