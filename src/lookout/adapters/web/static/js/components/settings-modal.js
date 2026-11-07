@@ -1,6 +1,8 @@
 /**
  * Admin settings modal and face gallery management component.
  */
+import { resolveUrl } from "../utils/url.js";
+
 export class SettingsModal {
   constructor({ modalBackdrop, onClose, onAiModeChanged }) {
     this.modal = modalBackdrop;
@@ -33,7 +35,7 @@ export class SettingsModal {
       this.aiSelect.addEventListener("change", async (e) => {
         const newMode = e.target.value;
         try {
-          const res = await fetch("/api/settings/ai-mode", {
+          const res = await fetch(resolveUrl("/api/settings/ai-mode"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: newMode }),
@@ -92,7 +94,7 @@ export class SettingsModal {
 
   async loadSettings() {
     try {
-      const res = await fetch("/api/settings/ai-mode");
+      const res = await fetch(resolveUrl("/api/settings/ai-mode"));
       if (res.ok) {
         const data = await res.json();
         if (this.aiSelect && data.active_mode) {
@@ -107,7 +109,7 @@ export class SettingsModal {
   async loadFaces() {
     if (!this.facesContainer) return;
     try {
-      const res = await fetch("/api/settings/faces");
+      const res = await fetch(resolveUrl("/api/settings/faces"));
       if (!res.ok) return;
       const data = await res.json();
       this.facesContainer.innerHTML = "";
@@ -121,14 +123,16 @@ export class SettingsModal {
       faces.forEach((f) => {
         const card = document.createElement("div");
         card.className = "face-card";
+        const faceImgUrl = resolveUrl(`/media/faces/${encodeURIComponent(f.resident_id)}/${encodeURIComponent(f.filename)}`);
+        const placeholderUrl = resolveUrl("/static/placeholder.jpg");
         card.innerHTML = `
-          <img class="face-img" src="/media/faces/${encodeURIComponent(f.resident_id)}/${encodeURIComponent(f.filename)}" alt="${f.filename}" onerror="this.src='/static/placeholder.jpg'" />
+          <img class="face-img" src="${faceImgUrl}" alt="${f.filename}" onerror="this.src='${placeholderUrl}'" />
           <button class="face-card-del" title="Delete face">✕</button>
         `;
 
         const delBtn = card.querySelector(".face-card-del");
         delBtn.addEventListener("click", async () => {
-          await fetch(`/api/settings/faces/${encodeURIComponent(f.resident_id)}/${encodeURIComponent(f.filename)}`, {
+          await fetch(resolveUrl(`/api/settings/faces/${encodeURIComponent(f.resident_id)}/${encodeURIComponent(f.filename)}`), {
             method: "DELETE",
           });
           await this.loadFaces();
@@ -147,7 +151,7 @@ export class SettingsModal {
     formData.append("resident_id", "default");
 
     try {
-      const res = await fetch("/api/settings/faces/upload", {
+      const res = await fetch(resolveUrl("/api/settings/faces/upload"), {
         method: "POST",
         body: formData,
       });

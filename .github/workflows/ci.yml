@@ -43,6 +43,35 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov=lookout --cov-report=term-missing
 
+  playwright-e2e:
+    name: Playwright E2E Browser Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Install Playwright Chromium with dependencies
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run Playwright E2E tests
+        run: uv run pytest tests/e2e --video=retain-on-failure --tracing=retain-on-failure
+
+      - name: Upload test results artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+
   container-and-ha:
     name: Container & Home Assistant Integration
     runs-on: ubuntu-latest

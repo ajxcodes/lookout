@@ -2,13 +2,14 @@
 
 import logging
 import os
-from collections.abc import AsyncGenerator
+import re
+from collections.abc import AsyncGenerator, MutableMapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
@@ -26,6 +27,53 @@ from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import EventRepositoryPort
 
 logger = logging.getLogger(__name__)
+
+
+class IngressSimulationMiddleware:
+    """ASGI middleware simulating Home Assistant Ingress reverse proxy path routing.
+
+    Intercepts requests starting with `/api/hassio_ingress/{token}`:
+    - Injects `X-Ingress-Path: /api/hassio_ingress/{token}`
+    - Rewrites the request path to `/{subpath}`
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            match = re.match(r"^/api/hassio_ingress/([^/]+)(/?.*)$", path)
+            if match:
+                token = match.group(1)
+                subpath = match.group(2)
+                ingress_path = f"/api/hassio_ingress/{token}"
+
+                rewritten_path = subpath if subpath.startswith("/") else f"/{subpath}"
+                scope["path"] = rewritten_path
+                if "raw_path" in scope:
+                    scope["raw_path"] = rewritten_path.encode("ascii")
+
+                headers = [h for h in scope.get("headers", []) if h[0].lower() != b"x-ingress-path"]
+                headers.append((b"x-ingress-path", ingress_path.encode("utf-8")))
+                scope["headers"] = headers
+
+        await self.app(scope, receive, send)
+
+
+def _get_ingress_path(request: Request) -> str:
+    """Extract and normalize X-Ingress-Path header."""
+    return request.headers.get("x-ingress-path", "").rstrip("/")
+
+
+def _inject_base_href(html_content: str, ingress_path: str) -> str:
+    """Inject or replace base href in HTML content."""
+    base_href = f"{ingress_path}/" if ingress_path else "/"
+    if re.search(r'<base\s+href="[^"]*"\s*/?>', html_content):
+        return re.sub(r'<base\s+href="[^"]*"\s*/?>', f'<base href="{base_href}">', html_content)
+    if "<head>" in html_content:
+        return html_content.replace("<head>", f'<head>\n  <base href="{base_href}">', 1)
+    return html_content
 
 
 def create_app(
@@ -96,6 +144,8 @@ def create_app(
         lifespan=lifespan,
     )
 
+    app.add_middleware(IngressSimulationMiddleware)
+
     active_event_service: EventProcessingService = (
         event_service
         if event_service is not None
@@ -160,20 +210,25 @@ def create_app(
     # Root viewer entrypoint with setup redirection guardrail
     @app.get("/", include_in_schema=False)
     async def root_view(request: Request) -> Response:
+        ingress_path = _get_ingress_path(request)
         if not app.state.is_configured:
-            return RedirectResponse(url="/setup", status_code=307)
+            setup_redirect = f"{ingress_path}/setup" if ingress_path else "/setup"
+            return RedirectResponse(url=setup_redirect, status_code=307)
 
         index_file = static_dir / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            content = index_file.read_text(encoding="utf-8")
+            return HTMLResponse(_inject_base_href(content, ingress_path))
         return HTMLResponse("<!DOCTYPE html><html><body><h1>Lookout Web Viewer</h1></body></html>")
 
     # Setup wizard entrypoint
     @app.get("/setup", include_in_schema=False)
     async def setup_view(request: Request) -> Response:
+        ingress_path = _get_ingress_path(request)
         setup_file = static_dir / "setup.html"
         if setup_file.exists():
-            return FileResponse(setup_file)
+            content = setup_file.read_text(encoding="utf-8")
+            return HTMLResponse(_inject_base_href(content, ingress_path))
         return HTMLResponse(
             "<!DOCTYPE html><html><body><h1>Lookout Setup Wizard</h1></body></html>"
         )
