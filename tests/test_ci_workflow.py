@@ -107,3 +107,26 @@ def test_ci_workflow_concurrency_and_permissions(workflow_data: dict[str, Any]) 
 
     top_permissions = workflow_data.get("permissions", {})
     assert top_permissions.get("contents") == "read"
+
+
+def test_ci_workflow_container_and_ha_job(workflow_data: dict[str, Any]) -> None:
+    """Verify container-and-ha testing job configuration, steps, and linters (TR-8)."""
+    assert "container-and-ha" in workflow_data["jobs"]
+    ha_job = workflow_data["jobs"]["container-and-ha"]
+    assert ha_job.get("runs-on") == "ubuntu-latest"
+
+    steps = ha_job.get("steps", [])
+    assert any("docker compose config" in step.get("run", "") for step in steps)
+    assert any(
+        "docker compose -f docker-compose.sidecar.yml config" in step.get("run", "")
+        for step in steps
+    )
+    assert any("docker build -t lookout:test" in step.get("run", "") for step in steps)
+
+    linter_step = next((s for s in steps if "action-addon-linter" in s.get("uses", "")), None)
+    assert linter_step is not None
+    assert linter_step.get("with", {}).get("path") == "./ha-addon"
+
+    assert any("check_config" in step.get("run", "") for step in steps)
+    assert any("docker network create" in step.get("run", "") for step in steps)
+    assert any("/api/v1/events/trigger" in step.get("run", "") for step in steps)

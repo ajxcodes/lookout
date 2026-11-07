@@ -43,6 +43,41 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov=lookout --cov-report=term-missing
 
+  container-and-ha:
+    name: Container & Home Assistant Integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configurations
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.sidecar.yml config --quiet
+
+      - name: Build Docker image
+        run: docker build -t lookout:test .
+
+      - name: Lint Home Assistant Add-On
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./ha-addon"
+          community: false
+
+      - name: Validate Home Assistant Core configuration schema
+        run: |
+          docker run --rm -v $(pwd)/tests/fixtures/ha_config:/config:ro ghcr.io/home-assistant/home-assistant:stable python -m homeassistant --config /config --script check_config
+
+      - name: Test end-to-end container network trigger
+        run: |
+          docker network create lookout-net
+          docker run -d --name lookout-e2e --network lookout-net -p 8000:8000 -e LOOKOUT_CONFIG=/data/config.yaml lookout:test
+          sleep 3
+          docker run --rm --network lookout-net curlimages/curl:latest curl --retry 10 --retry-delay 2 --retry-connrefused -f http://lookout-e2e:8000/health
+          docker run --rm --network lookout-net curlimages/curl:latest curl -f -X POST -H "Content-Type: application/json" -d '{"camera_id": "front_door"}' http://lookout-e2e:8000/api/v1/events/trigger
+          docker stop lookout-e2e && docker rm lookout-e2e
+          docker network rm lookout-net
+
   critique:
     name: Critique AI Code Review
     runs-on: ubuntu-latest

@@ -1,0 +1,28 @@
+blueprint:
+  name: "Lookout Camera Motion Trigger"
+  description: "Trigger Lookout event analysis when Home Assistant detects camera motion."
+  domain: automation
+  input:
+    motion_sensor:
+      name: Motion Sensor
+      description: The motion binary sensor to monitor
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: motion
+    camera_id:
+      name: Lookout Camera ID
+      description: The camera ID defined in Lookout config
+      default: front_door
+      selector:
+        text: {}
+
+trigger:
+  - platform: state
+    entity_id: !input motion_sensor
+    to: "on"
+
+action:
+  - service: rest_command.lookout_trigger_event
+    data:
+      camera_id: !input camera_id
