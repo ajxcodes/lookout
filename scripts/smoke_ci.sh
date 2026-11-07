@@ -127,8 +127,10 @@ if [[ "${RUN_ACT}" == "true" ]]; then
     exit 0
 fi
 
+RELEASE_VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+
 if [[ "${RUN_MULTIARCH}" == "true" ]]; then
-    log_info "Validating local multi-architecture build capability (linux/amd64,linux/arm64) using ${CONTAINER_BIN}..."
+    log_info "Validating local multi-architecture build capability (linux/amd64,linux/arm64) using ${CONTAINER_BIN} (version ${RELEASE_VERSION})..."
     HAS_QEMU_BINFMT=false
     if ls /proc/sys/fs/binfmt_misc/*aarch64* >/dev/null 2>&1; then
         HAS_QEMU_BINFMT=true
@@ -147,9 +149,9 @@ if [[ "${RUN_MULTIARCH}" == "true" ]]; then
             PLATFORMS="${NATIVE_PLATFORM}"
         fi
         log_info "Running multi-arch build check for Standalone Lookout (Dockerfile) [${PLATFORMS}]..."
-        docker buildx build --platform "${PLATFORMS}" -f Dockerfile .
+        docker buildx build --platform "${PLATFORMS}" --build-arg RELEASE_VERSION="${RELEASE_VERSION}" -f Dockerfile .
         log_info "Running multi-arch build check for Home Assistant Add-On (ha-addon/Dockerfile) [${PLATFORMS}]..."
-        docker buildx build --platform "${PLATFORMS}" --build-arg BUILD_FROM=python:3.12-slim-bookworm -f ha-addon/Dockerfile .
+        docker buildx build --platform "${PLATFORMS}" --build-arg BUILD_FROM=python:3.12-slim-bookworm --build-arg RELEASE_VERSION="${RELEASE_VERSION}" -f ha-addon/Dockerfile .
     elif [[ "${CONTAINER_BIN}" == "podman" ]]; then
         if ! podman buildx version >/dev/null 2>&1; then
             log_error "podman buildx / buildah support is not available."
@@ -169,10 +171,10 @@ if [[ "${RUN_MULTIARCH}" == "true" ]]; then
         }
         trap cleanup_multiarch EXIT
         log_info "Running multi-arch build check for Standalone Lookout (Dockerfile) [${PLATFORMS}]..."
-        podman build --platform "${PLATFORMS}" --manifest "${STANDALONE_MANIFEST}" -f Dockerfile .
+        podman build --platform "${PLATFORMS}" --build-arg RELEASE_VERSION="${RELEASE_VERSION}" --manifest "${STANDALONE_MANIFEST}" -f Dockerfile .
         podman manifest inspect "${STANDALONE_MANIFEST}" >/dev/null
         log_info "Running multi-arch build check for Home Assistant Add-On (ha-addon/Dockerfile) [${PLATFORMS}]..."
-        podman build --platform "${PLATFORMS}" --manifest "${ADDON_MANIFEST}" --build-arg BUILD_FROM=python:3.12-slim-bookworm -f ha-addon/Dockerfile .
+        podman build --platform "${PLATFORMS}" --build-arg BUILD_FROM=python:3.12-slim-bookworm --build-arg RELEASE_VERSION="${RELEASE_VERSION}" --manifest "${ADDON_MANIFEST}" -f ha-addon/Dockerfile .
         podman manifest inspect "${ADDON_MANIFEST}" >/dev/null
     else
         log_error "Unsupported container runtime for --multiarch: ${CONTAINER_BIN}"
@@ -198,7 +200,7 @@ fi
 # 2. Build Container Image
 # ------------------------------------------------------------------------------
 log_info "Step 2: Building container image (lookout:smoke-test)..."
-${CONTAINER_BIN} build -t lookout:smoke-test .
+${CONTAINER_BIN} build --build-arg RELEASE_VERSION="${RELEASE_VERSION}" -t lookout:smoke-test .
 log_success "Container image built successfully."
 
 # ------------------------------------------------------------------------------

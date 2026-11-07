@@ -1,7 +1,7 @@
 ARG BUILD_FROM=python:3.12-slim-bookworm
 FROM ${BUILD_FROM}
 
-ARG RELEASE_VERSION=0.1.0
+ARG RELEASE_VERSION=""
 LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
 LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
 

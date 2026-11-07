@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from lookout import __version__
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.broadcast import SSEBroadcastHub
@@ -140,7 +141,7 @@ def create_app(
     app = FastAPI(
         title="Lookout",
         description="Lightweight smart camera intelligence viewer and setup suite",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -177,7 +178,7 @@ def create_app(
         return {
             "status": "ok",
             "configured": app.state.is_configured,
-            "version": "0.1.0",
+            "version": __version__,
         }
 
     @app.post("/api/v1/events/trigger")
