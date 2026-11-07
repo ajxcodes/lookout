@@ -141,6 +141,7 @@ class NtfyDispatcher(NotificationPort):
         self.topic_url = resolved_topic_url
         self.server_url = str(server_candidate).rstrip("/")
         self._client = client
+        self._owned_client: httpx.AsyncClient | None = None
 
         deep_base = (
             camera_base_url
@@ -162,6 +163,13 @@ class NtfyDispatcher(NotificationPort):
         self.topic = topic if topic is not None else (channel or name or target or destination)
         self.server = self.server_url
         self.client = self._client
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is not None:
+            return self._client
+        if self._owned_client is None:
+            self._owned_client = httpx.AsyncClient()
+        return self._owned_client
 
     async def send_notification(
         self, event: CameraEvent, target: str | None = None, message: str | None = None
@@ -204,11 +212,8 @@ class NtfyDispatcher(NotificationPort):
         headers["Actions"] = actions
 
         try:
-            if self._client is not None:
-                resp = await self._client.post(url, content=body, headers=headers)
-            else:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(url, content=body, headers=headers)
+            client = self._get_client()
+            resp = await client.post(url, content=body, headers=headers)
             return bool(resp.status_code < 400)
         except Exception as exc:  # pragma: no cover - network failures
             logger.warning("ntfy dispatch failed: %s", exc)

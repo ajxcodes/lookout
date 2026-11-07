@@ -111,6 +111,7 @@ class HomeAssistantEgressAdapter(NotificationPort):
 
         self.token = token or api_key or access_token or auth_token or password
         self._client = client
+        self._owned_client: Any = None
         self.event_type = event_type
         self.event_types = event_types
         self.logbook_enabled = bool(logbook)
@@ -120,6 +121,13 @@ class HomeAssistantEgressAdapter(NotificationPort):
         self.event_called = False
         self.logbook_called = False
         self.last_status: bool = False
+
+    def _get_client(self) -> Any:
+        if self._client is not None:
+            return self._client
+        if self._owned_client is None:
+            self._owned_client = httpx.AsyncClient()
+        return self._owned_client
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -166,11 +174,8 @@ class HomeAssistantEgressAdapter(NotificationPort):
         for et in candidates:
             url = f"{self.base_url}/api/events/{et}"
             try:
-                if self._client is not None:
-                    resp = await self._client.post(url, json=body, headers=self._headers())
-                else:
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.post(url, json=body, headers=self._headers())
+                client = self._get_client()
+                resp = await client.post(url, json=body, headers=self._headers())
                 if resp.status_code < 400:
                     event_ok = True
                     break
@@ -191,13 +196,8 @@ class HomeAssistantEgressAdapter(NotificationPort):
                 "domain": "lookout",
             }
             try:
-                if self._client is not None:
-                    resp = await self._client.post(
-                        log_url, json=log_payload, headers=self._headers()
-                    )
-                else:
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.post(log_url, json=log_payload, headers=self._headers())
+                client = self._get_client()
+                resp = await client.post(log_url, json=log_payload, headers=self._headers())
                 if resp.status_code < 400:
                     self.logbook_called = True
             except Exception as exc:  # pragma: no cover

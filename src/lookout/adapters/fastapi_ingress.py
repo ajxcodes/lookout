@@ -49,7 +49,7 @@ def create_app(
     async def trigger_event(request: Request) -> JSONResponse:
         try:
             payload = await request.json()
-        except Exception:
+        except (ValueError, UnicodeDecodeError):
             payload = {}
         if not isinstance(payload, dict):
             payload = {"data": payload}
