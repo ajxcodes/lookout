@@ -1,6 +1,8 @@
 /**
  * Recorded event video player with playback controls.
  */
+import { resolveUrl } from "../utils/url.js";
+
 export class EventPlayer {
   constructor({ videoElement, controlsContainer, onTimeUpdate, onEnded }) {
     this.video = videoElement;
@@ -35,7 +37,8 @@ export class EventPlayer {
     if (!this.video) return;
 
     // Use normalized MP4 media_uri or snapshot
-    const videoUrl = eventItem.media_uri || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
+    const rawUrl = eventItem.media_uri || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
+    const videoUrl = resolveUrl(rawUrl);
     this.video.src = videoUrl;
     this.video.playbackRate = this.currentSpeed;
     this.video.loop = this.isLooping;

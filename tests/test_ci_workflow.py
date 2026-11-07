@@ -130,3 +130,18 @@ def test_ci_workflow_container_and_ha_job(workflow_data: dict[str, Any]) -> None
     assert any("check_config" in step.get("run", "") for step in steps)
     assert any("docker network create" in step.get("run", "") for step in steps)
     assert any("/api/v1/events/trigger" in step.get("run", "") for step in steps)
+
+
+def test_ci_workflow_playwright_e2e_job(workflow_data: dict[str, Any]) -> None:
+    """Verify playwright-e2e job configuration, steps, and artifact upload (TR-1)."""
+    assert "playwright-e2e" in workflow_data["jobs"]
+    e2e_job = workflow_data["jobs"]["playwright-e2e"]
+    assert e2e_job.get("runs-on") == "ubuntu-latest"
+
+    steps = e2e_job.get("steps", [])
+    assert any("playwright install" in s.get("run", "") for s in steps)
+    assert any("pytest tests/e2e" in s.get("run", "") for s in steps)
+
+    upload_step = next((s for s in steps if "upload-artifact" in s.get("uses", "")), None)
+    assert upload_step is not None
+    assert upload_step.get("with", {}).get("name") == "playwright-test-results"

@@ -36,6 +36,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# Mode flags: check if --e2e or --act was requested
+RUN_E2E=false
+RUN_ACT=false
+for arg in "$@"; do
+    if [[ "$arg" == "--act" ]]; then
+        RUN_ACT=true
+    elif [[ "$arg" == "--e2e" ]]; then
+        RUN_E2E=true
+    fi
+done
+
+if [[ "${RUN_E2E}" == "true" ]]; then
+    log_info "Running quality gates and Playwright E2E browser automation suite..."
+    log_info "Step 1: Running Ruff lint..."
+    uv run ruff check .
+    log_info "Step 2: Checking Ruff format..."
+    uv run ruff format --check .
+    log_info "Step 3: Running Mypy type check..."
+    uv run mypy src
+    log_info "Step 4: Running Playwright E2E tests..."
+    uv run pytest tests/e2e
+    log_success "Playwright E2E test suite and quality gates completed successfully!"
+    exit 0
+fi
+
 # Detect and verify container engine: check candidate runtimes and daemon health
 CANDIDATE_RUNTIMES=()
 if command -v docker >/dev/null 2>&1; then

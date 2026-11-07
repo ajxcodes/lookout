@@ -1,6 +1,8 @@
 /**
  * 5-Step First-Run Onboarding Setup Wizard Controller.
  */
+import { resolveUrl } from "./utils/url.js";
+
 export class SetupWizard {
   constructor() {
     this.currentStep = 1;
@@ -156,7 +158,7 @@ export class SetupWizard {
 
       this.setStatus(this.aiStatusPill, "loading", "Testing connection...");
       try {
-        const res = await fetch("/api/setup/test-ai", {
+        const res = await fetch(resolveUrl("/api/setup/test-ai"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider, host, api_key: apiKey, model }),
@@ -179,7 +181,7 @@ export class SetupWizard {
 
       this.setStatus(this.camStatusPill, "loading", "Probing stream...");
       try {
-        const res = await fetch("/api/setup/test-camera", {
+        const res = await fetch(resolveUrl("/api/setup/test-camera"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ stream_url: streamUrl }),
@@ -236,7 +238,7 @@ export class SetupWizard {
 
       this.setStatus(this.notifStatusPill, "loading", "Dispatching ping...");
       try {
-        const res = await fetch("/api/setup/test-notification", {
+        const res = await fetch(resolveUrl("/api/setup/test-notification"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target_type: targetType, destination }),
@@ -261,7 +263,7 @@ export class SetupWizard {
 
     try {
       this.faceUploadStatus.textContent = "Uploading face...";
-      const res = await fetch("/api/setup/upload-face", {
+      const res = await fetch(resolveUrl("/api/setup/upload-face"), {
         method: "POST",
         body: formData,
       });
@@ -410,7 +412,7 @@ export class SetupWizard {
     this.btnFinalize.textContent = "Writing Configuration...";
 
     try {
-      const res = await fetch("/api/setup/finalize", {
+      const res = await fetch(resolveUrl("/api/setup/finalize"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(this.configData),
@@ -422,7 +424,7 @@ export class SetupWizard {
       }
 
       // Success - Redirect to root viewer
-      window.location.href = "/";
+      window.location.href = resolveUrl("/");
     } catch (err) {
       alert(`Error finalizing setup: ${err.message}`);
       this.btnFinalize.disabled = false;
