@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import inspect
 import logging
 import os
 from typing import Any
@@ -170,6 +173,88 @@ class NtfyDispatcher(NotificationPort):
         if self._owned_client is None:
             self._owned_client = httpx.AsyncClient()
         return self._owned_client
+
+    async def aclose(self) -> None:
+        """Close the owned HTTP client, if any.
+
+        Injected clients (``self._client``) are left untouched.
+        """
+        client = self._owned_client
+        self._owned_client = None
+        if client is None:
+            return
+        aclose_method = getattr(client, "aclose", None)
+        if callable(aclose_method):
+            result = aclose_method()
+            if inspect.isawaitable(result):
+                await result
+            return
+        close_method = getattr(client, "close", None)
+        if callable(close_method):
+            result = close_method()
+            if inspect.isawaitable(result):
+                await result
+
+    def close(self) -> None:
+        """Synchronously close the owned HTTP client when possible."""
+        client = self._owned_client
+        self._owned_client = None
+        if client is None:
+            return
+        close_method = getattr(client, "close", None)
+        if callable(close_method):
+            try:
+                result = close_method()
+                if inspect.isawaitable(result):
+                    self._schedule_close(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+            return
+        aclose_method = getattr(client, "aclose", None)
+        if callable(aclose_method):
+            try:
+                result = aclose_method()
+                if inspect.isawaitable(result):
+                    self._schedule_close(result)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _schedule_close(self, awaitable: Any) -> None:
+        try:
+            asyncio.run(awaitable)
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                return
+            if loop.is_running():
+                loop.create_task(awaitable)
+
+    async def __aenter__(self) -> NtfyDispatcher:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()
+
+    def __enter__(self) -> NtfyDispatcher:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
 
     async def send_notification(
         self, event: CameraEvent, target: str | None = None, message: str | None = None
