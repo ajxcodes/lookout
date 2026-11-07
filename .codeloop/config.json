@@ -1,0 +1,100 @@
+{
+  "runner": "auto",
+  "opencode": {
+    "model": "ollama/ornith:9b-128k"
+  },
+  "models": {
+    "planner": "pro",
+    "implementer": "inherit",
+    "gate": "flash_lite",
+    "reviewer": "flash"
+  },
+  "options": {
+    "commitAfter": false,
+    "gateTimeoutSeconds": 300,
+    "autoApproveInYolo": true,
+    "enableMcpInPlanner": true,
+    "containerGates": true
+  },
+  "circuitBreakers": {
+    "maxTurnsPerSubagent": 15,
+    "maxGateRetries": 3,
+    "maxConcurrentSubagents": 4,
+    "maxWallClockDurationSeconds": 900,
+    "tokenBudgetThreshold": 150000,
+    "actionOnTrip": "pause_for_human"
+  },
+  "git": {
+    "remote": "origin",
+    "baseBranch": "main",
+    "forge": "github"
+  },
+  "verification": {
+    "ecosystem": "python",
+    "monorepo": false,
+    "markers": {
+      "dockerCompose": true,
+      "migrationTool": null,
+      "e2eTool": null
+    },
+    "fastCheck": [
+      {
+        "id": "lint",
+        "label": "Ruff Linter",
+        "command": "uv run ruff check ."
+      },
+      {
+        "id": "format",
+        "label": "Ruff Format Check",
+        "command": "uv run ruff format --check ."
+      },
+      {
+        "id": "typecheck",
+        "label": "Mypy Static Typing",
+        "command": "uv run mypy src"
+      }
+    ],
+    "smoke": {
+      "timeoutSeconds": 300,
+      "steps": [
+        {
+          "id": "test",
+          "label": "Automated Test Suite",
+          "command": "uv run pytest"
+        },
+        {
+          "id": "ci-smoke",
+          "label": "Container & CI Smoke Tests",
+          "command": "bash scripts/smoke_ci.sh"
+        }
+      ]
+    },
+    "gates": [
+      {
+        "id": "lint",
+        "label": "Ruff Linter",
+        "command": "uv run ruff check ."
+      },
+      {
+        "id": "format",
+        "label": "Ruff Format Check",
+        "command": "uv run ruff format --check ."
+      },
+      {
+        "id": "typecheck",
+        "label": "Mypy Static Typing",
+        "command": "uv run mypy src"
+      },
+      {
+        "id": "test",
+        "label": "Automated Test Suite",
+        "command": "uv run pytest"
+      },
+      {
+        "id": "ci-smoke",
+        "label": "Container & CI Smoke Tests",
+        "command": "bash scripts/smoke_ci.sh"
+      }
+    ]
+  }
+}

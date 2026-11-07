@@ -2,6 +2,7 @@
  * Chronological timeline cards component.
  */
 import { TelemetryRenderer } from "./telemetry.js";
+import { resolveUrl } from "../utils/url.js";
 
 export class TimelineList {
   constructor({ container, onSelectEvent, onDeleteEvent }) {
@@ -83,12 +84,14 @@ export class TimelineList {
       card.className = `event-card ${evt.id === this.selectedEventId ? "selected" : ""}`;
       card.dataset.eventId = evt.id;
 
-      const thumbUrl = evt.snapshot_uri || `/media/${evt.camera_id}/${evt.id}.jpg`;
+      const rawThumb = evt.snapshot_uri || `/media/${evt.camera_id}/${evt.id}.jpg`;
+      const thumbUrl = resolveUrl(rawThumb);
+      const placeholderUrl = resolveUrl("/static/placeholder.jpg");
       const provBadge = TelemetryRenderer.getProvenanceBadge(evt.provenance);
       const latencyChips = TelemetryRenderer.getLatencyChips(evt);
 
       card.innerHTML = `
-        <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='/static/placeholder.jpg'" />
+        <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
         <div class="event-info">
           <div class="event-header-row">
             ${this.getCategoryPill(evt.category)}

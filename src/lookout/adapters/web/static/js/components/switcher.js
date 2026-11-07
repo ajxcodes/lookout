@@ -43,7 +43,7 @@ export class CameraSwitcher {
 
     this.cameras.forEach((cam) => {
       const tab = document.createElement("button");
-      tab.className = `cam-tab ${cam.id === this.activeCameraId ? "active" : ""}`;
+      tab.className = `cam-tab camera-chip ${cam.id === this.activeCameraId ? "active" : ""}`;
       tab.dataset.cameraId = cam.id;
 
       const nameSpan = document.createElement("span");

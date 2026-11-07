@@ -1,0 +1,17 @@
+.git
+.venv
+artifacts
+__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+tests
+docs
+data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.coverage
+htmlcov
+.DS_Store

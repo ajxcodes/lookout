@@ -1,0 +1,68 @@
+services:
+  lookout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lookout:latest
+    container_name: lookout
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - LOOKOUT_CONFIG=/data/config.yaml
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/data
+      - ./media:/media:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - home_net
+
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    container_name: go2rtc
+    restart: unless-stopped
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+    networks:
+      - home_net
+
+  wyze-bridge:
+    image: idisposable/docker-wyze-bridge:latest
+    container_name: wyze-bridge
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - WYZE_EMAIL=${WYZE_EMAIL:-}
+      - WYZE_PASSWORD=${WYZE_PASSWORD:-}
+      - ON_DEMAND=True
+      - WB_IP=0.0.0.0
+    networks:
+      - home_net
+
+  ring-mqtt:
+    image: tsightler/ring-mqtt:latest
+    container_name: ring-mqtt
+    restart: unless-stopped
+    environment:
+      - MQTTHOST=localhost
+      - MQTTPORT=1883
+      - RINGTOKEN=${RING_TOKEN:-}
+    networks:
+      - home_net
+
+networks:
+  home_net:
+    driver: bridge

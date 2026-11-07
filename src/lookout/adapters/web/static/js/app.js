@@ -8,6 +8,7 @@ import { AcousticVisualizer } from "./components/acoustic-canvas.js";
 import { CategoryFilter } from "./components/filters.js";
 import { TimelineList } from "./components/timeline.js";
 import { SettingsModal } from "./components/settings-modal.js";
+import { resolveUrl } from "./utils/url.js";
 
 class LookoutApp {
   constructor() {
@@ -169,7 +170,7 @@ class LookoutApp {
 
   async deleteEvent(eventId) {
     try {
-      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
+      const res = await fetch(resolveUrl(`/api/events/${encodeURIComponent(eventId)}`), {
         method: "DELETE",
       });
       if (res.ok) {
@@ -182,7 +183,7 @@ class LookoutApp {
 
   async fetchCameras() {
     try {
-      const res = await fetch("/api/cameras");
+      const res = await fetch(resolveUrl("/api/cameras"));
       if (!res.ok) return;
       const data = await res.json();
       this.cameras = data.cameras || [];
@@ -207,7 +208,7 @@ class LookoutApp {
         params.append("category", this.activeCategory);
       }
 
-      const res = await fetch(`/api/events?${params.toString()}`);
+      const res = await fetch(resolveUrl(`/api/events?${params.toString()}`));
       if (!res.ok) return;
       const data = await res.json();
       this.events = data.events || [];
@@ -229,7 +230,7 @@ class LookoutApp {
       this.sseEventSource.close();
     }
 
-    this.sseEventSource = new EventSource("/api/events/stream");
+    this.sseEventSource = new EventSource(resolveUrl("/api/events/stream"));
 
     this.sseEventSource.addEventListener("camera_event", (e) => {
       try {

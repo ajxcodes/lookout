@@ -1,0 +1,7 @@
+# Embed Lookout in the Home Assistant sidebar via panel_iframe
+panel_iframe:
+  lookout:
+    title: "Lookout"
+    icon: "mdi:cctv"
+    url: "http://localhost:8000"
+    require_admin: false

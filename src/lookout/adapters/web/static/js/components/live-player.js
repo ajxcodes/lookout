@@ -1,6 +1,8 @@
 /**
  * Dual-mode Live WebRTC and Snapshot player component.
  */
+import { resolveUrl } from "../utils/url.js";
+
 export class LivePlayer {
   constructor({ videoElement, overlayElement, onLiveStateChange }) {
     this.video = videoElement;
@@ -25,7 +27,7 @@ export class LivePlayer {
     }
     if (this.overlay && this.activeCamera) {
       this.overlay.style.display = "flex";
-      const snapUrl = `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`;
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`);
       this.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
     if (this.onLiveStateChange) {
@@ -63,7 +65,7 @@ export class LivePlayer {
       await pc.setLocalDescription(offer);
 
       // Fetch WebRTC metadata from backend
-      const metaRes = await fetch(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/webrtc`);
+      const metaRes = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/webrtc`));
       if (!metaRes.ok) throw new Error("Failed to get WebRTC metadata");
       const meta = await metaRes.json();
 
