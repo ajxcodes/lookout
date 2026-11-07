@@ -555,6 +555,33 @@ class CascadeVisionAdapter(VisionInferencePort):
                 "local_edge": LocalEdgeVisionProvider(),
                 "offline": OfflineVisionFallbackProvider(self.cascade_config.fallback_category),
             }
+        self._runtime_mode: str = "auto"
+
+    def get_runtime_mode(self) -> str:
+        """Return the current runtime AI cascade mode."""
+        return self._runtime_mode
+
+    def set_runtime_mode(self, mode: str) -> None:
+        """Set the runtime AI cascade mode and dynamically configure active tiers."""
+        mode_lower = mode.lower()
+        if mode_lower == "auto":
+            self.cascade_config.tiers = [
+                "ollama",
+                "opencode_go",
+                "gemini",
+                "opencode_free",
+                "local_edge",
+                "offline",
+            ]
+        elif mode_lower == "local_only":
+            self.cascade_config.tiers = ["ollama", "local_edge", "offline"]
+        elif mode_lower == "gemini_only":
+            self.cascade_config.tiers = ["gemini", "offline"]
+        elif mode_lower == "off":
+            self.cascade_config.tiers = ["offline"]
+        else:
+            raise ValueError(f"Unknown runtime AI mode: {mode}")
+        self._runtime_mode = mode_lower
 
     async def analyze_scene(
         self, image_bytes: bytes, prompt: str | None = None

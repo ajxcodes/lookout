@@ -189,3 +189,38 @@ def test_phase3_adapters_implement_egress_ports() -> None:
     assert isinstance(CascadeVisionAdapter(), VisionInferencePort)
     assert isinstance(FaceRecognitionAdapter(), FaceRecognitionPort)
     assert isinstance(YamnetAudioClassifierAdapter(), AudioClassifierPort)
+
+
+def test_domain_has_no_web_framework_imports() -> None:
+    """TR-16: Verify lookout.domain has zero imports from web frameworks."""
+    domain_dir = LOOKOUT_ROOT / "domain"
+    forbidden_prefixes = (
+        "fastapi",
+        "starlette",
+        "uvicorn",
+        "jinja2",
+        "multipart",
+        "lookout.adapters.web",
+    )
+
+    forbidden_imports: list[str] = []
+    for py_file in domain_dir.glob("*.py"):
+        imported_modules = _extract_imported_modules(py_file)
+        for mod in imported_modules:
+            if any(mod == prefix or mod.startswith(f"{prefix}.") for prefix in forbidden_prefixes):
+                forbidden_imports.append(f"{py_file.name} -> {mod}")
+
+    assert forbidden_imports == []
+
+
+def test_web_adapter_boundary_isolation() -> None:
+    """TR-17: Verify lookout.adapters.web adheres to hexagonal boundaries."""
+    web_dir = LOOKOUT_ROOT / "adapters" / "web"
+    violations: list[str] = []
+    for py_file in web_dir.rglob("*.py"):
+        imported_modules = _extract_imported_modules(py_file)
+        for mod in imported_modules:
+            if mod.startswith("lookout.adapters.sqlite.schema"):
+                violations.append(f"{py_file.name} -> {mod}")
+
+    assert violations == []

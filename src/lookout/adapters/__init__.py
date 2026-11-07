@@ -14,7 +14,9 @@ from lookout.adapters.face_recognition import FaceRecognitionAdapter
 from lookout.adapters.fastapi_ingress import (
     FastAPIIngressAdapter,
     app,
-    create_app,
+)
+from lookout.adapters.fastapi_ingress import (
+    create_app as create_ingress_app,
 )
 from lookout.adapters.ffmpeg import FFmpegNotFoundError, FFmpegTranscoderAdapter, TranscodeError
 from lookout.adapters.go2rtc import Go2RtcAdapter
@@ -51,6 +53,7 @@ from lookout.adapters.sqlite import (
     import_legacy_events,
 )
 from lookout.adapters.tempfile import TempMediaContext, TempMediaManager
+from lookout.adapters.web import SSEBroadcastHub, create_app
 
 __all__ = [
     "AuditLogger",
@@ -85,6 +88,7 @@ __all__ = [
     "OpenCodeVisionProvider",
     "RetentionResult",
     "RingAdapter",
+    "SSEBroadcastHub",
     "SqliteConnectionManager",
     "SqliteEventRepository",
     "StructuredOutputParser",
@@ -94,5 +98,6 @@ __all__ = [
     "YamnetAudioClassifierAdapter",
     "app",
     "create_app",
+    "create_ingress_app",
     "import_legacy_events",
 ]
