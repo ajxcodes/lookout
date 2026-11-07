@@ -42,8 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -g 1000 lookout && \
     useradd -u 1000 -g lookout -m -s /bin/bash lookout
 
-# Create persistent storage directories with proper ownership
-RUN mkdir -p /data/faces && chown -R lookout:lookout /data
+# Create persistent storage directories and application root with proper ownership
+RUN mkdir -p /data/faces /data/media && chown -R lookout:lookout /data && mkdir -p /app && chown -R lookout:lookout /app
 
 WORKDIR /app
 

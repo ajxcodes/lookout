@@ -141,7 +141,8 @@ ${CONTAINER_BIN} run -d --name "${CONTAINER_NAME}" --network "${NETWORK_NAME}" -
     -e LOOKOUT_CONFIG=/data/config.yaml lookout:smoke-test
 
 log_info "Waiting for service startup..."
-sleep 3
+sleep 5
+${CONTAINER_BIN} logs "${CONTAINER_NAME}"
 
 # Probe health endpoint
 if command -v curl >/dev/null 2>&1; then

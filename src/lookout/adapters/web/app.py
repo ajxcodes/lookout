@@ -74,9 +74,14 @@ def create_app(
     media_dir = (
         Path(active_config.storage.base_path)
         if (active_config and hasattr(active_config, "storage"))
+        else Path("/data/media")
+        if Path("/data").is_dir()
         else Path("./data")
     )
-    media_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        media_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        logger.warning("Could not create media directory at %s due to permissions", media_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -131,9 +136,14 @@ def create_app(
         """Ingest event trigger request from Home Assistant or external webhook."""
         try:
             payload = await request.json()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to parse trigger event JSON payload: %s", exc)
             payload = {}
         if not isinstance(payload, dict):
+            logger.warning(
+                "Trigger event payload must be a JSON dictionary; received %s",
+                type(payload).__name__,
+            )
             payload = {"data": payload}
         camera_id = str(
             payload.get("camera_id")
