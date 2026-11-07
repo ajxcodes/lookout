@@ -28,6 +28,8 @@ def test_ha_addon_config_ingress_enabled() -> None:
     with config_path.open("r", encoding="utf-8") as f:
         addon_config: dict[str, Any] = yaml.safe_load(f)
     assert addon_config["ingress"] is True and addon_config["ingress_port"] == 8000
+    assert "boot" not in addon_config
+    assert "homeassistant_config:rw" in addon_config.get("map", [])
 
 
 def test_ha_addon_repository_metadata() -> None:

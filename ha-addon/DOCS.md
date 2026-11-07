@@ -16,14 +16,14 @@ Lookout is a lightweight, multi-modal, privacy-first smart home camera intellige
 5. Once installed, start the add-on and enable **Show in sidebar**.
 
 ## Configuration
-Lookout reads its configuration from `/config/lookout/config.yaml`.
+Lookout reads its configuration from `/homeassistant/lookout/config.yaml`.
 If no configuration file is present on initial launch, Lookout opens its built-in interactive setup wizard at the root Ingress screen.
 
 ```yaml
 system_name: "Lookout Home"
 storage:
   base_path: "/media/lookout"
-  database_path: "/config/lookout/events.db"
+  database_path: "/homeassistant/lookout/events.db"
 
 cameras:
   - id: "front_door"

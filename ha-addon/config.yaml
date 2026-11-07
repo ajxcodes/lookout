@@ -7,16 +7,15 @@ arch:
   - amd64
   - aarch64
 startup: services
-boot: auto
 ingress: true
 ingress_port: 8000
 panel_icon: "mdi:cctv"
 panel_title: "Lookout"
 map:
-  - "config:rw"
+  - "homeassistant_config:rw"
   - "share:rw"
   - "media:rw"
 options:
-  config_path: "/config/lookout/config.yaml"
+  config_path: "/homeassistant/lookout/config.yaml"
 schema:
   config_path: str
