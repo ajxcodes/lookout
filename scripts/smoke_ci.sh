@@ -143,9 +143,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 4. End-to-End Container Health & Trigger Test
+# 4. End-to-End Container Health, Native Stack & Functional Lifecycle
 # ------------------------------------------------------------------------------
-log_info "Step 4: Testing runtime health and event trigger endpoints..."
+log_info "Step 4: Testing container runtime, native libraries, and functional API lifecycle..."
 NETWORK_NAME="lookout-smoke-net-$RANDOM"
 CONTAINER_NAME="lookout-smoke-test-$RANDOM"
 
@@ -165,8 +165,42 @@ log_info "Waiting for service startup..."
 sleep 5
 ${CONTAINER_BIN} logs "${CONTAINER_NAME}"
 
-# Probe health endpoint
+# 4a. Verify container native binaries and permissions
+log_info "Step 4a: Validating native runtime dependencies inside container..."
+if ${CONTAINER_BIN} exec "${CONTAINER_NAME}" ffmpeg -version >/dev/null 2>&1; then
+    log_success "FFmpeg binary is functional inside container."
+else
+    log_error "FFmpeg binary failed execution inside container."
+    exit 1
+fi
+
+if ${CONTAINER_BIN} exec "${CONTAINER_NAME}" python -c "import lookout; print('Lookout version:', lookout.__name__)" >/dev/null 2>&1; then
+    log_success "Lookout application package and runtime environment loaded successfully."
+else
+    log_error "Lookout application failed to import inside container."
+    exit 1
+fi
+
+USER_ID=$(${CONTAINER_BIN} exec "${CONTAINER_NAME}" id -u)
+if [[ "${USER_ID}" == "1000" ]]; then
+    log_success "Container is running as non-root user lookout (UID 1000)."
+else
+    log_error "Container running as unexpected UID: ${USER_ID} (expected 1000)."
+    exit 1
+fi
+
+if ${CONTAINER_BIN} exec "${CONTAINER_NAME}" touch /data/faces/.smoke_probe /data/media/.smoke_probe; then
+    log_success "Non-root write permissions verified on /data/faces and /data/media."
+    ${CONTAINER_BIN} exec "${CONTAINER_NAME}" rm -f /data/faces/.smoke_probe /data/media/.smoke_probe
+else
+    log_error "Non-root user lacks write permissions on /data directories."
+    exit 1
+fi
+
+# 4b. Verify HTTP endpoints, UI routing, and Event Lifecycle
+log_info "Step 4b: Validating HTTP endpoints, web viewer UI, and Event Lifecycle..."
 if command -v curl >/dev/null 2>&1; then
+    # Health endpoint
     HEALTH_RESP=$(curl -s -f http://localhost:8000/health || true)
     if [[ "${HEALTH_RESP}" == *"\"status\":\"ok\""* || "${HEALTH_RESP}" == *"\"status\": \"ok\""* ]]; then
         log_success "Health endpoint verified: ${HEALTH_RESP}"
@@ -175,17 +209,62 @@ if command -v curl >/dev/null 2>&1; then
         exit 1
     fi
 
-    # Trigger event
+    # Web viewer / setup root endpoint
+    ROOT_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ || true)
+    if [[ "${ROOT_HTTP_CODE}" == "200" || "${ROOT_HTTP_CODE}" == "307" ]]; then
+        log_success "Web viewer UI / setup wizard route verified (HTTP ${ROOT_HTTP_CODE})."
+    else
+        log_error "Web viewer UI returned unexpected HTTP status: ${ROOT_HTTP_CODE}"
+        exit 1
+    fi
+
+    # Ingest event trigger
     TRIGGER_RESP=$(curl -s -f -X POST -H "Content-Type: application/json" \
-        -d '{"camera_id": "smoke_camera"}' http://localhost:8000/api/v1/events/trigger || true)
+        -d '{"camera_id": "smoke_camera", "summary": "Functional smoke test courier motion", "confidence": 0.95}' \
+        http://localhost:8000/api/v1/events/trigger || true)
     if [[ "${TRIGGER_RESP}" == *"\"status\":\"ok\""* || "${TRIGGER_RESP}" == *"\"status\": \"ok\""* ]]; then
         log_success "Event trigger endpoint verified: ${TRIGGER_RESP}"
     else
         log_error "Event trigger endpoint failed: ${TRIGGER_RESP}"
         exit 1
     fi
+
+    # Extract event ID
+    EVENT_ID=$(echo "${TRIGGER_RESP}" | sed -n 's/.*"event_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [[ -z "${EVENT_ID}" ]]; then
+        EVENT_ID=$(echo "${TRIGGER_RESP}" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    fi
+
+    # Verify event query and persistence in database
+    EVENTS_LIST=$(curl -s -f http://localhost:8000/api/events || true)
+    if [[ "${EVENTS_LIST}" == *"smoke_camera"* ]]; then
+        log_success "Event persistence verified: queried event list contains 'smoke_camera'."
+    else
+        log_error "Event persistence check failed: 'smoke_camera' not found in /api/events response: ${EVENTS_LIST}"
+        exit 1
+    fi
+
+    # Verify single event retrieval by ID if resolved
+    if [[ -n "${EVENT_ID}" ]]; then
+        SINGLE_EVENT=$(curl -s -f "http://localhost:8000/api/events/${EVENT_ID}" || true)
+        if [[ "${SINGLE_EVENT}" == *"smoke_camera"* ]]; then
+            log_success "Single event retrieval by ID verified (/api/events/${EVENT_ID})."
+        else
+            log_error "Failed to retrieve single event by ID ${EVENT_ID}: ${SINGLE_EVENT}"
+            exit 1
+        fi
+
+        # Verify event deletion
+        DELETE_RESP=$(curl -s -f -X DELETE "http://localhost:8000/api/events/${EVENT_ID}" || true)
+        if [[ "${DELETE_RESP}" == *"\"deleted\":true"* || "${DELETE_RESP}" == *"\"deleted\": true"* ]]; then
+            log_success "Event deletion verified (/api/events/${EVENT_ID}): ${DELETE_RESP}"
+        else
+            log_error "Event deletion failed: ${DELETE_RESP}"
+            exit 1
+        fi
+    fi
 else
-    log_warn "Host curl not found; probe skipped."
+    log_warn "Host curl not found; HTTP functional probes skipped."
 fi
 
-log_success "All local container and Home Assistant smoke tests passed!"
+log_success "All local container, native runtime, and functional smoke tests passed!"
