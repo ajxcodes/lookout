@@ -36,32 +36,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# Detect container engine: prefer docker if available, fallback to podman
+# Detect and verify container engine: check candidate runtimes and daemon health
+CANDIDATE_RUNTIMES=()
+if command -v docker >/dev/null 2>&1; then
+    CANDIDATE_RUNTIMES+=("docker")
+fi
+if command -v podman >/dev/null 2>&1; then
+    CANDIDATE_RUNTIMES+=("podman")
+fi
+
+if [[ ${#CANDIDATE_RUNTIMES[@]} -eq 0 ]]; then
+    log_error "Neither docker nor podman was found on PATH. Container smoke tests require a container runtime."
+    exit 1
+fi
+
 CONTAINER_BIN=""
 COMPOSE_CMD=""
 
-if command -v docker >/dev/null 2>&1; then
-    CONTAINER_BIN="docker"
+for runtime in "${CANDIDATE_RUNTIMES[@]}"; do
+    if "${runtime}" info >/dev/null 2>&1; then
+        CONTAINER_BIN="${runtime}"
+        break
+    fi
+done
+
+if [[ -z "${CONTAINER_BIN}" ]]; then
+    log_error "Container runtime binaries found (${CANDIDATE_RUNTIMES[*]}), but the daemon/socket is inactive or unreachable."
+    log_error "Please start Docker/Podman (e.g., 'sudo systemctl start docker' or 'systemctl --user start podman.socket') before running CI smoke tests."
+    exit 1
+fi
+
+if [[ "${CONTAINER_BIN}" == "docker" ]]; then
     if docker compose version >/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"
     elif command -v docker-compose >/dev/null 2>&1; then
         COMPOSE_CMD="docker-compose"
     fi
-elif command -v podman >/dev/null 2>&1; then
-    CONTAINER_BIN="podman"
+elif [[ "${CONTAINER_BIN}" == "podman" ]]; then
     if podman compose version >/dev/null 2>&1; then
         COMPOSE_CMD="podman compose"
+    elif command -v podman-compose >/dev/null 2>&1; then
+        COMPOSE_CMD="podman-compose"
     elif command -v docker-compose >/dev/null 2>&1; then
         COMPOSE_CMD="docker-compose"
     fi
 fi
 
-if [[ -z "${CONTAINER_BIN}" ]]; then
-    log_error "Neither docker nor podman was found on PATH. Container smoke tests require a container runtime."
-    exit 1
-fi
-
-log_info "Detected container engine: ${CONTAINER_BIN}"
+log_info "Detected active container engine: ${CONTAINER_BIN}"
 
 # Mode flag: check if --act was requested
 RUN_ACT=false
