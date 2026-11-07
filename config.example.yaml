@@ -40,3 +40,87 @@ storage:
   busy_timeout_ms: 5000
   retention_days: 30
   max_storage_gb: 100.0
+
+go2rtc:
+  api_url: "http://localhost:1984"
+  timeout_seconds: 10.0
+
+ring:
+  auth_token: null
+  api_url: "https://api.ring.com"
+  timeout_seconds: 15.0
+
+transcode:
+  ffmpeg_path: "ffmpeg"
+  ffprobe_path: "ffprobe"
+  use_stream_copy: true
+  max_threads: 2
+  nice_level: 10
+  temp_dir: "/dev/shm"
+  gif_fps: 6
+  gif_width: 320
+  gif_duration: 2.5
+  thumbnail_count: 5
+
+cascade:
+  tiers:
+    - "ollama"
+    - "opencode_go"
+    - "gemini"
+    - "opencode_free"
+    - "local_edge"
+    - "offline"
+  total_timeout_seconds: 25.0
+  fallback_category: "unknown_visitor"
+
+ollama:
+  host: "http://localhost:11434"
+  model: "moondream"
+  timeout_seconds: 5.0
+  enabled: true
+
+opencode:
+  api_key: "sk-opencode-mock-key"
+  api_url: "https://api.opencode.ai/v1"
+  model_go: "deepseek-v4.1-flash"
+  model_free: "deepseek-v4.1-flash-free"
+  timeout_seconds: 8.0
+  enabled: true
+
+gemini:
+  api_key: "AIzaSyMockKey"
+  api_url: "https://generativelanguage.googleapis.com/v1beta"
+  model: "gemini-3.5-flash-lite"
+  timeout_seconds: 8.0
+  enabled: true
+
+face_recognition:
+  similarity_threshold: 0.6
+  model_name: "facenet-light"
+  gallery_dir: "./data/faces"
+  enabled: true
+
+immich:
+  url: "http://localhost:2283"
+  api_key: "immich-api-token"
+  sync_interval_hours: 24
+  include_persons:
+    - "Alice"
+  enabled: true
+
+audio_classifier:
+  model_path: "models/yamnet.tflite"
+  confidence_threshold: 0.5
+  sample_rate: 16000
+  emergency_labels:
+    - "glass_break"
+    - "alarm"
+    - "smoke_alarm"
+    - "gunshot"
+    - "scream"
+  pet_labels:
+    - "dog_bark"
+    - "dog_whimper"
+    - "cat_meow"
+  enabled: true
+

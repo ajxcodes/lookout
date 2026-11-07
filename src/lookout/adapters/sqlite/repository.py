@@ -384,3 +384,22 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
     async def search(self, query: str, limit: int = 50, offset: int = 0) -> list[CameraEvent]:
         """Full-text search query across event summaries, categories, and tags."""
         return await self.find(query=query, limit=limit, offset=offset)
+
+    def close(self) -> None:
+        """Close underlying database connection manager."""
+        self._manager.close()
+
+    async def aclose(self) -> None:
+        """Close underlying database connection manager asynchronously."""
+        await self._manager.aclose()
+
+    async def __aenter__(self) -> "SqliteEventRepository":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()

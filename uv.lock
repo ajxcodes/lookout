@@ -478,7 +478,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29.0" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.27.0" },
 ]
 provides-extras = ["dev"]
 
