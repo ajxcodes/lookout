@@ -3,6 +3,7 @@ slug: "lookout"
 version: "0.1.0"
 description: "Lightweight, multi-modal, privacy-first smart home camera intelligence platform"
 url: "https://github.com/ajxcodes/lookout"
+image: "ghcr.io/ajxcodes/lookout-ha-addon"
 arch:
   - amd64
   - aarch64

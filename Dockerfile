@@ -14,7 +14,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Install project dependencies with layer caching
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock package.json ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Copy application source and build/install project wheel
@@ -26,6 +26,10 @@ RUN uv sync --frozen --no-dev
 # Stage 2: Runtime
 # ------------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
+
+ARG RELEASE_VERSION=""
+LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
 
 # Install system dependencies (FFmpeg, OpenCV/graphics runtime, curl, ca-certificates)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -50,6 +54,7 @@ WORKDIR /app
 # Copy virtual environment and application from builder
 COPY --from=builder --chown=lookout:lookout /app/.venv /app/.venv
 COPY --from=builder --chown=lookout:lookout /app/src /app/src
+COPY --from=builder --chown=lookout:lookout /app/package.json /app/package.json
 
 # Set environment paths and configuration
 ENV PATH="/app/.venv/bin:$PATH" \

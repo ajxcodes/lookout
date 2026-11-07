@@ -11,6 +11,7 @@
 ## Table of Contents
 - [Architecture Overview](#architecture-overview)
 - [5-Minute Quickstart](#5-minute-quickstart)
+- [Container Images & Registries](#container-images--registries)
 - [Docker Compose Deployments](#docker-compose-deployments)
   - [Standalone Deployment](#standalone-deployment)
   - [Sidecar Camera Ecosystem](#sidecar-camera-ecosystem)
@@ -83,6 +84,36 @@ uv run python -m lookout
 ```
 
 If no configuration file exists at startup, Lookout automatically redirects you to the interactive Setup Wizard at `http://localhost:8000/setup` to configure your cameras, AI models, and storage directories.
+
+---
+
+## Container Images & Registries
+
+Lookout publishes official multi-architecture (`linux/amd64`, `linux/arm64`) OCI container images to both **GitHub Container Registry (GHCR)** and **Docker Hub**:
+
+| Distribution | GHCR Image | Docker Hub Image | Architectures |
+|---|---|---|---|
+| **Standalone Lookout** | `ghcr.io/ajxcodes/lookout` | `ajxcodes/lookout` | `linux/amd64`, `linux/arm64` |
+| **Home Assistant Add-On** | `ghcr.io/ajxcodes/lookout-ha-addon` | `ajxcodes/lookout-ha-addon` | `linux/amd64`, `linux/arm64` |
+
+### Supported Version Tags
+- `:latest` — Latest stable release from `main`
+- `:vX.Y.Z` — Exact semantic release tag (e.g., `:v0.1.0`)
+- `:X.Y.Z` — Bare SemVer release tag matching Home Assistant Supervisor lookup (e.g., `:0.1.0`)
+- `:X.Y` — Floating minor version tag (e.g., `:0.1`)
+- `:sha-<short>` — Immutable commit digest from `main`
+
+### Quick Pull & Run
+```bash
+# Pull from GitHub Container Registry (GHCR)
+docker pull ghcr.io/ajxcodes/lookout:latest
+
+# Or pull from Docker Hub
+docker pull ajxcodes/lookout:latest
+
+# Run Standalone Lookout container
+docker run -d --name lookout -p 8000:8000 -v $(pwd)/data:/data ghcr.io/ajxcodes/lookout:latest
+```
 
 ---
 
@@ -237,6 +268,12 @@ You can run automated local smoke tests using Docker or Podman:
 ```bash
 # Run local container and Home Assistant schema smoke tests
 ./scripts/smoke_ci.sh
+
+# Validate local multi-architecture (linux/amd64, linux/arm64) Buildx / Podman manifest builds
+./scripts/smoke_ci.sh --multiarch
+
+# Run quality gates (Ruff, Mypy) and Playwright E2E browser suite
+./scripts/smoke_ci.sh --e2e
 
 # Simulate GitHub Actions workflow locally with nektos/act
 ./scripts/smoke_ci.sh --act

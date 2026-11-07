@@ -3,6 +3,7 @@ name: CI
 'on':
   push:
     branches: [main, 'phase/**']
+    tags: ['v*.*.*']
   pull_request:
     branches: [main, 'phase/**']
   workflow_dispatch:
@@ -134,3 +135,170 @@ jobs:
           post_inline_comments: "true"
           post_summary_comment: "true"
           fail_on_severity: "none"
+
+  auto-tag:
+    name: Automated Semantic Release Tagging
+    runs-on: ubuntu-latest
+    needs: [quality, playwright-e2e, container-and-ha]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    outputs:
+      new_tag: ${{ steps.autotag.outputs.new-tag }}
+      release_url: ${{ steps.autotag.outputs.release-url }}
+      bumped: ${{ steps.autotag.outputs.bumped }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate semantic version tag and release
+        id: autotag
+        uses: ajxcodes/auto-tag@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          default-bump: patch
+          tag-prefix: v
+          version-format: standard
+          create-release: true
+          package-json: "true"
+
+  container-publish:
+    name: Multi-Arch Container Build & Publish
+    runs-on: ubuntu-latest
+    needs: [quality, playwright-e2e, container-and-ha, auto-tag]
+    if: >-
+      always() &&
+      needs.quality.result == 'success' &&
+      needs.playwright-e2e.result == 'success' &&
+      needs.container-and-ha.result == 'success' &&
+      (needs.auto-tag.result == 'success' || needs.auto-tag.result == 'skipped')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: standalone
+            context: .
+            file: Dockerfile
+            ghcr_image: ghcr.io/ajxcodes/lookout
+            dockerhub_image: ajxcodes/lookout
+            build_args: ""
+          - target: ha-addon
+            context: .
+            file: ha-addon/Dockerfile
+            ghcr_image: ghcr.io/ajxcodes/lookout-ha-addon
+            dockerhub_image: ajxcodes/lookout-ha-addon
+            build_args: BUILD_FROM=python:3.12-slim-bookworm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU multi-architecture emulation
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check Docker Hub credentials availability
+        id: dockerhub-check
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.dockerhub-check.outputs.enabled == 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve package version from package.json
+        id: pkg-version
+        run: |
+          echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Extract container OCI metadata and tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ matrix.ghcr_image }}
+            name=${{ matrix.dockerhub_image }},enable=${{ steps.dockerhub-check.outputs.enabled == 'true' }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{raw}},value=${{ needs.auto-tag.outputs.new_tag }},enable=${{ needs.auto-tag.outputs.new_tag != '' }}
+            type=semver,pattern={{version}},value=${{ needs.auto-tag.outputs.new_tag }},enable=${{ needs.auto-tag.outputs.new_tag != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.auto-tag.outputs.new_tag }},enable=${{ needs.auto-tag.outputs.new_tag != '' }}
+            type=semver,pattern={{major}},value=${{ needs.auto-tag.outputs.new_tag }},enable=${{ needs.auto-tag.outputs.new_tag != '' && !startsWith(needs.auto-tag.outputs.new_tag, 'v0.') }}
+            type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v0.') }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ajxcodes/lookout
+
+      - name: Build and push multi-arch container image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            RELEASE_VERSION=${{ needs.auto-tag.outputs.new_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || steps.pkg-version.outputs.version }}
+            ${{ matrix.build_args }}
+          push: "${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}"
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  link-release-packages:
+    name: Link Container Packages to Release Notes
+    runs-on: ubuntu-latest
+    needs: [auto-tag, container-publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.auto-tag.outputs.bumped == 'true' && needs.auto-tag.outputs.new_tag != ''
+    permissions:
+      contents: write
+    steps:
+      - name: Append container registry package summary to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.auto-tag.outputs.new_tag }}
+        run: |
+          BARE_VERSION="${RELEASE_TAG#v}"
+          gh release view "${RELEASE_TAG}" --json body -q .body > /tmp/release_notes.md
+          cat << EOF >> /tmp/release_notes.md
+
+          ### Container Images (GHCR & Docker Hub)
+          | Distribution | Registry | Image / Tag | Pull Command |
+          |---|---|---|---|
+          | Standalone | GHCR | \`ghcr.io/ajxcodes/lookout:${RELEASE_TAG}\` | \`docker pull ghcr.io/ajxcodes/lookout:${RELEASE_TAG}\` |
+          | Standalone | GHCR | \`ghcr.io/ajxcodes/lookout:${BARE_VERSION}\` | \`docker pull ghcr.io/ajxcodes/lookout:${BARE_VERSION}\` |
+          | Standalone | Docker Hub | \`ajxcodes/lookout:${RELEASE_TAG}\` | \`docker pull ajxcodes/lookout:${RELEASE_TAG}\` |
+          | HA Add-On | GHCR | \`ghcr.io/ajxcodes/lookout-ha-addon:${RELEASE_TAG}\` | \`docker pull ghcr.io/ajxcodes/lookout-ha-addon:${RELEASE_TAG}\` |
+          | HA Add-On | GHCR | \`ghcr.io/ajxcodes/lookout-ha-addon:${BARE_VERSION}\` | \`docker pull ghcr.io/ajxcodes/lookout-ha-addon:${BARE_VERSION}\` |
+          | HA Add-On | Docker Hub | \`ajxcodes/lookout-ha-addon:${RELEASE_TAG}\` | \`docker pull ajxcodes/lookout-ha-addon:${RELEASE_TAG}\` |
+          EOF
+          gh release edit "${RELEASE_TAG}" --notes-file /tmp/release_notes.md

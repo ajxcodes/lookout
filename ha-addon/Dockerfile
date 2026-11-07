@@ -1,5 +1,9 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=python:3.12-slim-bookworm
 FROM ${BUILD_FROM}
+
+ARG RELEASE_VERSION=""
+LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
 
 # Install Astral uv and system dependencies
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
