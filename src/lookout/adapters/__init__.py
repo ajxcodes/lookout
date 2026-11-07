@@ -36,6 +36,7 @@ from lookout.adapters.sqlite import (
     import_legacy_events,
 )
 from lookout.adapters.tempfile import TempMediaContext, TempMediaManager
+from lookout.adapters.web import SSEBroadcastHub, create_app
 
 __all__ = [
     "AuditLogger",
@@ -63,6 +64,7 @@ __all__ = [
     "OpenCodeVisionProvider",
     "RetentionResult",
     "RingAdapter",
+    "SSEBroadcastHub",
     "SqliteConnectionManager",
     "SqliteEventRepository",
     "StructuredOutputParser",
@@ -70,5 +72,6 @@ __all__ = [
     "TempMediaManager",
     "TranscodeError",
     "YamnetAudioClassifierAdapter",
+    "create_app",
     "import_legacy_events",
 ]

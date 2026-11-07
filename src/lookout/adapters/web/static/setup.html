@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lookout - Onboarding Setup Wizard</title>
+  <link rel="stylesheet" href="/static/css/setup.css">
+  <script type="module" src="/static/js/setup-wizard.js"></script>
+</head>
+<body>
+  <div class="setup-container">
+    <header class="setup-header">
+      <h1 class="setup-title">Lookout Setup Wizard</h1>
+      <p class="setup-subtitle">Configure your privacy-first smart home camera intelligence platform in under 3 minutes.</p>
+    </header>
+
+    <nav class="stepper-nav">
+      <div class="step-indicator active" data-step="1">
+        <span class="step-num">1</span>
+        <span>AI Inference</span>
+      </div>
+      <div class="step-indicator" data-step="2">
+        <span class="step-num">2</span>
+        <span>Cameras</span>
+      </div>
+      <div class="step-indicator" data-step="3">
+        <span class="step-num">3</span>
+        <span>Household</span>
+      </div>
+      <div class="step-indicator" data-step="4">
+        <span class="step-num">4</span>
+        <span>Alerts</span>
+      </div>
+      <div class="step-indicator" data-step="5">
+        <span class="step-num">5</span>
+        <span>Finalize</span>
+      </div>
+    </nav>
+
+    <!-- Step 1: AI Provider -->
+    <section class="step-panel active" id="step-1">
+      <div>
+        <h2 class="panel-title">Step 1: AI Inference Provider</h2>
+        <p class="panel-desc">Select your preferred vision model tier. Lookout defaults to a local Ollama instance for complete privacy.</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="ai-provider">Inference Provider</label>
+        <select class="form-select" id="ai-provider">
+          <option value="ollama">Ollama (Local Private LAN)</option>
+          <option value="gemini">Google Gemini Cloud (gemini-3.5-flash-lite)</option>
+          <option value="opencode">OpenCode Cloud (deepseek-v4.1-flash)</option>
+          <option value="local_edge">Tier 3 (Edge CPU Heuristic)</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="host-group">
+        <label class="form-label" for="ai-host">Server Endpoint / Host URL</label>
+        <input class="form-input" id="ai-host" type="text" placeholder="http://localhost:11434" value="http://localhost:11434">
+      </div>
+
+      <div class="form-group" id="key-group">
+        <label class="form-label" for="ai-key">API Key (if using Cloud tier)</label>
+        <input class="form-input" id="ai-key" type="password" placeholder="Optional for Ollama">
+      </div>
+
+      <div class="form-group" id="model-group">
+        <label class="form-label" for="ai-model">Model Name / Tag</label>
+        <input class="form-input" id="ai-model" type="text" value="moondream">
+      </div>
+
+      <div class="test-row">
+        <button class="btn" id="btn-test-ai" type="button">Test AI Connection</button>
+        <span id="ai-status-pill"></span>
+      </div>
+    </section>
+
+    <!-- Step 2: Cameras -->
+    <section class="step-panel" id="step-2">
+      <div>
+        <h2 class="panel-title">Step 2: Camera Feed Ingestion</h2>
+        <p class="panel-desc">Add camera RTSP/HTTP stream URLs and validate stream reachability.</p>
+      </div>
+
+      <div id="cameras-list" style="display:flex;flex-direction:column;gap:var(--space-xs);"></div>
+
+      <div style="background:var(--bg-subtle);padding:var(--space-md);border-radius:var(--radius-md);display:flex;flex-direction:column;gap:var(--space-xs);">
+        <h3 style="font-size:0.875rem;font-weight:600;">Add Camera Feed</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-xs);">
+          <div class="form-group">
+            <label class="form-label" for="cam-id">Camera ID</label>
+            <input class="form-input" id="cam-id" type="text" placeholder="front-porch">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cam-name">Display Name</label>
+            <input class="form-input" id="cam-name" type="text" placeholder="Front Porch">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cam-url">Stream URL (RTSP / HTTP / Ring)</label>
+          <input class="form-input" id="cam-url" type="text" placeholder="rtsp://localhost:8554/front_porch">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cam-type">Camera Type</label>
+          <select class="form-select" id="cam-type">
+            <option value="generic">Generic RTSP / ONVIF</option>
+            <option value="go2rtc">go2rtc WebRTC</option>
+            <option value="ring">Ring Cloud SIP</option>
+          </select>
+        </div>
+        <div class="test-row">
+          <button class="btn" id="btn-test-cam" type="button">Probe Stream</button>
+          <button class="btn btn-primary" id="btn-add-cam" type="button">Add to List</button>
+          <span id="cam-status-pill"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: Household -->
+    <section class="step-panel" id="step-3">
+      <div>
+        <h2 class="panel-title">Step 3: Household & Face Gallery</h2>
+        <p class="panel-desc">Enroll residents and pets so Lookout distinguishes family members from unknown visitors.</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="resident-name">Primary Resident Name</label>
+        <input class="form-input" id="resident-name" type="text" placeholder="Alice Smith">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="resident-id">Resident ID</label>
+        <input class="form-input" id="resident-id" type="text" placeholder="alice">
+      </div>
+
+      <div class="dropzone" id="setup-face-dropzone">
+        <div class="dropzone-icon">📷</div>
+        <div class="dropzone-text">Click or drag & drop reference photo for face recognition</div>
+        <div class="dropzone-hint">Supports JPEG, PNG, WebP (under 5MB)</div>
+        <input type="file" id="setup-face-file" accept="image/*" style="display:none;">
+      </div>
+      <div id="face-upload-status" style="font-size:0.75rem;font-weight:600;"></div>
+
+      <hr style="border:none;border-top:1px solid var(--border-subtle);margin:var(--space-sm) 0;">
+
+      <div class="form-group">
+        <label class="form-label" for="pet-name">Household Pet Name (Optional)</label>
+        <input class="form-input" id="pet-name" type="text" placeholder="Mochi">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="pet-species">Pet Species</label>
+        <select class="form-select" id="pet-species">
+          <option value="dog">Dog</option>
+          <option value="cat">Cat</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Step 4: Alerts -->
+    <section class="step-panel" id="step-4">
+      <div>
+        <h2 class="panel-title">Step 4: Notifications & Webhooks</h2>
+        <p class="panel-desc">Configure where actionable security threat alerts and delivery pings are sent.</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="notif-name">Target Name</label>
+        <input class="form-input" id="notif-name" type="text" value="home-assistant-webhook">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="notif-type">Destination Type</label>
+        <select class="form-select" id="notif-type">
+          <option value="webhook">HTTP Webhook (Home Assistant / Node-RED)</option>
+          <option value="ntfy">ntfy.sh Push Notifications</option>
+          <option value="mobile">Pushover / Mobile Push</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="notif-dest">Endpoint URL or Topic Name</label>
+        <input class="form-input" id="notif-dest" type="text" placeholder="http://homeassistant.local:8123/api/webhook/lookout_alert" value="http://localhost:8080/webhook">
+      </div>
+
+      <div class="test-row">
+        <button class="btn" id="btn-test-notif" type="button">Send Test Ping</button>
+        <span id="notif-status-pill"></span>
+      </div>
+    </section>
+
+    <!-- Step 5: Finalize -->
+    <section class="step-panel" id="step-5">
+      <div>
+        <h2 class="panel-title">Step 5: Review & Finalize</h2>
+        <p class="panel-desc">Your configuration is ready to be committed to <code>config.yaml</code>.</p>
+      </div>
+
+      <div class="yaml-preview" id="yaml-preview"></div>
+    </section>
+
+    <footer class="setup-footer">
+      <button class="btn" id="btn-prev" type="button">Previous</button>
+      <div style="flex:1;"></div>
+      <button class="btn btn-primary" id="btn-next" type="button">Next Step</button>
+      <button class="btn btn-primary" id="btn-finalize" type="button" style="display:none;">Finalize & Launch</button>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lookout - Smart Camera Intelligence</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/viewer.css">
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-logo">
+        <span class="live-pulse"></span>
+        <span>Lookout</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
+    </div>
+  </header>
+
+  <!-- Camera Switcher Toolbar -->
+  <nav class="switcher-bar" id="switcher-container" aria-label="Camera selection"></nav>
+
+  <!-- Main Viewer Grid -->
+  <main class="viewer-main">
+    <!-- Left Stage: Video & Acoustic Visualizer -->
+    <section class="stage-section">
+      <div class="video-container">
+        <!-- Live WebRTC Video -->
+        <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
+
+        <!-- Recorded Event Video -->
+        <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
+
+        <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
+        <div class="snapshot-overlay" id="snapshot-overlay">
+          <button class="start-live-btn" id="start-live-btn" type="button">
+            ▶ Start Live Stream
+          </button>
+        </div>
+      </div>
+
+      <!-- Playback Controls Bar -->
+      <div class="player-controls-bar" id="player-controls">
+        <div class="playback-toggles">
+          <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
+          <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
+          <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
+          <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
+          <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
+        </div>
+
+        <div>
+          <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
+        </div>
+      </div>
+
+      <!-- Interactive Acoustic Visualizer -->
+      <div class="acoustic-panel">
+        <div class="acoustic-header">
+          <span>Acoustic Frequency Waveform</span>
+          <span>Acoustic Decibel Level</span>
+        </div>
+        <div class="acoustic-canvas-wrap">
+          <canvas id="acoustic-canvas"></canvas>
+        </div>
+        <div class="vu-meter-wrap">
+          <div class="vu-meter">
+            <div class="vu-bar" id="vu-bar"></div>
+          </div>
+          <span class="vu-db-text" id="vu-db-text">-36 dB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Drawer: Taxonomy Filters & Chronological Timeline -->
+    <aside class="timeline-section">
+      <div class="filter-bar" id="filter-bar"></div>
+      <div class="timeline-list" id="timeline-list"></div>
+    </aside>
+  </main>
+
+  <!-- Admin / Settings Modal Dialog -->
+  <div class="modal-backdrop" id="settings-modal" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 style="font-size:1.125rem;font-weight:600;">System Administration</h2>
+        <button class="btn" id="modal-close-btn" type="button" style="padding:2px 8px;">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Runtime AI Mode Toggle -->
+        <div class="setting-group">
+          <label class="setting-label" for="setting-ai-mode">Runtime AI Inference Mode</label>
+          <p class="setting-desc">Switch active model cascade dynamically without restarting background services.</p>
+          <select class="select-control" id="setting-ai-mode">
+            <option value="auto">Auto (Tiered Cascade: Ollama → Cloud → Edge)</option>
+            <option value="local_only">Local Only (Private LAN Ollama + Edge CPU)</option>
+            <option value="gemini_only">Google Gemini Only (Direct Cloud Vision)</option>
+            <option value="off">Off (Zero-compute Fallback)</option>
+          </select>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Face Gallery Manager -->
+        <div class="setting-group">
+          <label class="setting-label">Face Recognition Gallery</label>
+          <p class="setting-desc">Enrolled reference photos for household resident recognition.</p>
+
+          <div class="dropzone" id="face-dropzone" style="padding:var(--space-md);">
+            <div style="font-size:1.25rem;">📷</div>
+            <div style="font-size:0.8125rem;font-weight:600;">Click or drag & drop to enroll a face photo</div>
+            <input type="file" id="face-file-input" accept="image/*" style="display:none;">
+          </div>
+
+          <div class="faces-grid" id="faces-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
