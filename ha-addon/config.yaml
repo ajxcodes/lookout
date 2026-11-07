@@ -1,0 +1,21 @@
+name: "Lookout"
+slug: "lookout"
+version: "0.1.0"
+description: "Lightweight, multi-modal, privacy-first smart home camera intelligence platform"
+url: "https://github.com/ajxcodes/lookout"
+arch:
+  - amd64
+  - aarch64
+startup: services
+ingress: true
+ingress_port: 8000
+panel_icon: "mdi:cctv"
+panel_title: "Lookout"
+map:
+  - "homeassistant_config:rw"
+  - "share:rw"
+  - "media:rw"
+options:
+  config_path: "/homeassistant/lookout/config.yaml"
+schema:
+  config_path: str

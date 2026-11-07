@@ -1,0 +1,12 @@
+type: iframe
+url: "http://lookout.local:8000"
+title: "Lookout Camera Viewer"
+aspect_ratio: "16:9"
+cards:
+  - type: custom:webrtc-camera
+    url: "rtsp://localhost:8554/front_porch"
+    title: "Front Porch (via go2rtc)"
+  - type: iframe
+    url: "http://lookout.local:8000"
+    title: "Lookout Events"
+    aspect_ratio: "16:9"

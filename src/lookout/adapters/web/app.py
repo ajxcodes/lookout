@@ -5,6 +5,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -73,9 +74,14 @@ def create_app(
     media_dir = (
         Path(active_config.storage.base_path)
         if (active_config and hasattr(active_config, "storage"))
+        else Path("/data/media")
+        if Path("/data").is_dir()
         else Path("./data")
     )
-    media_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        media_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        logger.warning("Could not create media directory at %s due to permissions", media_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -90,12 +96,18 @@ def create_app(
         lifespan=lifespan,
     )
 
+    active_event_service: EventProcessingService = (
+        event_service
+        if event_service is not None
+        else EventProcessingService(repository=active_repo)
+    )
+
     # Attach application state
     app.state.config = active_config
     app.state.config_path = resolved_config_path
     app.state.is_configured = is_configured
     app.state.repository = active_repo
-    app.state.event_service = event_service
+    app.state.event_service = active_event_service
     app.state.vision_adapter = active_vision
     app.state.broadcast_hub = SSEBroadcastHub()
 
@@ -108,6 +120,42 @@ def create_app(
     # Static assets and media files
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+
+    @app.get("/health")
+    async def health_check() -> dict[str, Any]:
+        """Health check endpoint for container probes and ingress verification."""
+        return {
+            "status": "ok",
+            "configured": app.state.is_configured,
+            "version": "0.1.0",
+        }
+
+    @app.post("/api/v1/events/trigger")
+    @app.post("/api/events/trigger")
+    async def trigger_event(request: Request) -> dict[str, Any]:
+        """Ingest event trigger request from Home Assistant or external webhook."""
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            logger.warning("Failed to parse trigger event JSON payload: %s", exc)
+            payload = {}
+        if not isinstance(payload, dict):
+            logger.warning(
+                "Trigger event payload must be a JSON dictionary; received %s",
+                type(payload).__name__,
+            )
+            payload = {"data": payload}
+        camera_id = str(
+            payload.get("camera_id")
+            or payload.get("camera")
+            or payload.get("cameraId")
+            or "default"
+        )
+        svc: EventProcessingService = app.state.event_service
+        event = await svc.ingest_raw_event(camera_id, payload)
+        hub: SSEBroadcastHub = app.state.broadcast_hub
+        await hub.broadcast_event(event)
+        return {"status": "ok", "event_id": event.id, "id": event.id}
 
     # Root viewer entrypoint with setup redirection guardrail
     @app.get("/", include_in_schema=False)
