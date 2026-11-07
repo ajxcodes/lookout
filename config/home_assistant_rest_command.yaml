@@ -1,0 +1,15 @@
+# Home Assistant rest_command to trigger Lookout event analysis over HTTP.
+rest_command:
+  lookout_trigger_event:
+    url: "http://lookout.local:8000/api/v1/events/trigger"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload: >
+      {
+        "camera_id": "{{ camera_id }}",
+        "metadata": {
+          "source": "home_assistant",
+          "trigger": "{{ trigger }}"
+        }
+      }
