@@ -145,3 +145,64 @@ def test_ci_workflow_playwright_e2e_job(workflow_data: dict[str, Any]) -> None:
     upload_step = next((s for s in steps if "upload-artifact" in s.get("uses", "")), None)
     assert upload_step is not None
     assert upload_step.get("with", {}).get("name") == "playwright-test-results"
+
+
+def test_ci_workflow_publish_job_defined(workflow_data: dict[str, Any]) -> None:
+    """TR-1: Verify container-publish job is defined with packages: write permission."""
+    assert "container-publish" in workflow_data["jobs"]
+    publish_job = workflow_data["jobs"]["container-publish"]
+    assert publish_job.get("permissions", {}).get("packages") == "write"
+    assert "v*.*.*" in workflow_data["on"]["push"]["tags"]
+
+
+def test_ci_workflow_publish_matrix_targets(workflow_data: dict[str, Any]) -> None:
+    """TR-2: Verify container-publish matrix includes standalone and ha-addon targets."""
+    assert {"standalone", "ha-addon"}.issubset(
+        {
+            t["target"]
+            for t in workflow_data["jobs"]["container-publish"]["strategy"]["matrix"]["include"]
+        }
+    )
+
+
+def test_ci_workflow_qemu_and_buildx_steps(workflow_data: dict[str, Any]) -> None:
+    """TR-3: Verify QEMU and Buildx setup actions are configured."""
+    steps = workflow_data["jobs"]["container-publish"]["steps"]
+    assert any("docker/setup-qemu-action" in s.get("uses", "") for s in steps) and any(
+        "docker/setup-buildx-action" in s.get("uses", "") for s in steps
+    )
+
+
+def test_ci_workflow_multiarch_platforms(workflow_data: dict[str, Any]) -> None:
+    """TR-4: Verify multi-architecture platforms linux/amd64,linux/arm64 are declared."""
+    steps = workflow_data["jobs"]["container-publish"]["steps"]
+    assert any("linux/amd64,linux/arm64" in s.get("with", {}).get("platforms", "") for s in steps)
+
+
+def test_ci_workflow_gha_cache_configuration(workflow_data: dict[str, Any]) -> None:
+    """TR-5: Verify GitHub Actions BuildKit cache backend (type=gha) is configured."""
+    steps = workflow_data["jobs"]["container-publish"]["steps"]
+    assert any("type=gha" in s.get("with", {}).get("cache-from", "") for s in steps)
+
+
+def test_ci_workflow_ghcr_and_dockerhub_logins(workflow_data: dict[str, Any]) -> None:
+    """TR-6: Verify GHCR and conditional Docker Hub registry login steps."""
+    steps = workflow_data["jobs"]["container-publish"]["steps"]
+    assert any("ghcr.io" in s.get("with", {}).get("registry", "") for s in steps) and any(
+        "DOCKERHUB_USERNAME" in s.get("with", {}).get("username", "") for s in steps
+    )
+
+
+def test_ci_workflow_conditional_push_logic(workflow_data: dict[str, Any]) -> None:
+    """TR-7: Verify PR and phase branch builds keep push disabled."""
+    steps = workflow_data["jobs"]["container-publish"]["steps"]
+    assert any(
+        "github.ref == 'refs/heads/main'" in s.get("with", {}).get("push", "") for s in steps
+    )
+
+
+def test_ci_workflow_auto_tag_job(workflow_data: dict[str, Any]) -> None:
+    """TR-8: Verify auto-tag job runs ajxcodes/auto-tag on push to main."""
+    assert "auto-tag" in workflow_data["jobs"] and any(
+        "ajxcodes/auto-tag" in s.get("uses", "") for s in workflow_data["jobs"]["auto-tag"]["steps"]
+    )

@@ -36,14 +36,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# Mode flags: check if --e2e or --act was requested
+# Mode flags: check if --e2e, --act, or --multiarch was requested
 RUN_E2E=false
 RUN_ACT=false
+RUN_MULTIARCH=false
 for arg in "$@"; do
     if [[ "$arg" == "--act" ]]; then
         RUN_ACT=true
     elif [[ "$arg" == "--e2e" ]]; then
         RUN_E2E=true
+    elif [[ "$arg" == "--multiarch" ]]; then
+        RUN_MULTIARCH=true
     fi
 done
 
@@ -109,14 +112,6 @@ fi
 
 log_info "Detected active container engine: ${CONTAINER_BIN}"
 
-# Mode flag: check if --act was requested
-RUN_ACT=false
-for arg in "$@"; do
-    if [[ "$arg" == "--act" ]]; then
-        RUN_ACT=true
-    fi
-done
-
 if [[ "${RUN_ACT}" == "true" ]]; then
     if ! command -v act >/dev/null 2>&1; then
         log_error "nektos/act is not installed. Install act to simulate GitHub Actions workflows locally."
@@ -129,6 +124,61 @@ if [[ "${RUN_ACT}" == "true" ]]; then
         act -j quality
     fi
     log_success "act CI workflow completed successfully!"
+    exit 0
+fi
+
+if [[ "${RUN_MULTIARCH}" == "true" ]]; then
+    log_info "Validating local multi-architecture build capability (linux/amd64,linux/arm64) using ${CONTAINER_BIN}..."
+    HAS_QEMU_BINFMT=false
+    if ls /proc/sys/fs/binfmt_misc/*aarch64* >/dev/null 2>&1; then
+        HAS_QEMU_BINFMT=true
+    fi
+
+    if [[ "${CONTAINER_BIN}" == "docker" ]]; then
+        if ! docker buildx version >/dev/null 2>&1; then
+            log_error "docker buildx plugin is not installed or unavailable."
+            exit 1
+        fi
+        BUILDER_INFO=$(docker buildx inspect --bootstrap 2>&1 || true)
+        PLATFORMS="linux/amd64,linux/arm64"
+        if [[ "${BUILDER_INFO}" != *"linux/amd64"* || "${BUILDER_INFO}" != *"linux/arm64"* || "${HAS_QEMU_BINFMT}" != "true" ]]; then
+            NATIVE_PLATFORM=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null || echo "linux/amd64")
+            log_warn "QEMU binfmt_misc (aarch64) not registered on host kernel; validating Buildx workflow on native platform (${NATIVE_PLATFORM})."
+            PLATFORMS="${NATIVE_PLATFORM}"
+        fi
+        log_info "Running multi-arch build check for Standalone Lookout (Dockerfile) [${PLATFORMS}]..."
+        docker buildx build --platform "${PLATFORMS}" -f Dockerfile .
+        log_info "Running multi-arch build check for Home Assistant Add-On (ha-addon/Dockerfile) [${PLATFORMS}]..."
+        docker buildx build --platform "${PLATFORMS}" --build-arg BUILD_FROM=python:3.12-slim-bookworm -f ha-addon/Dockerfile .
+    elif [[ "${CONTAINER_BIN}" == "podman" ]]; then
+        if ! podman buildx version >/dev/null 2>&1; then
+            log_error "podman buildx / buildah support is not available."
+            exit 1
+        fi
+        PLATFORMS="linux/amd64,linux/arm64"
+        if [[ "${HAS_QEMU_BINFMT}" != "true" ]]; then
+            NATIVE_PLATFORM=$(podman info --format '{{.Version.OsArch}}' 2>/dev/null || echo "linux/amd64")
+            log_warn "QEMU binfmt_misc (aarch64) not registered on host kernel; validating multi-arch manifest build on native platform (${NATIVE_PLATFORM})."
+            PLATFORMS="${NATIVE_PLATFORM}"
+        fi
+        STANDALONE_MANIFEST="lookout-multiarch-smoke-$$"
+        ADDON_MANIFEST="lookout-ha-addon-multiarch-smoke-$$"
+        cleanup_multiarch() {
+            podman manifest rm "${STANDALONE_MANIFEST}" >/dev/null 2>&1 || true
+            podman manifest rm "${ADDON_MANIFEST}" >/dev/null 2>&1 || true
+        }
+        trap cleanup_multiarch EXIT
+        log_info "Running multi-arch build check for Standalone Lookout (Dockerfile) [${PLATFORMS}]..."
+        podman build --platform "${PLATFORMS}" --manifest "${STANDALONE_MANIFEST}" -f Dockerfile .
+        podman manifest inspect "${STANDALONE_MANIFEST}" >/dev/null
+        log_info "Running multi-arch build check for Home Assistant Add-On (ha-addon/Dockerfile) [${PLATFORMS}]..."
+        podman build --platform "${PLATFORMS}" --manifest "${ADDON_MANIFEST}" --build-arg BUILD_FROM=python:3.12-slim-bookworm -f ha-addon/Dockerfile .
+        podman manifest inspect "${ADDON_MANIFEST}" >/dev/null
+    else
+        log_error "Unsupported container runtime for --multiarch: ${CONTAINER_BIN}"
+        exit 1
+    fi
+    log_success "Multi-architecture build and manifest checks succeeded!"
     exit 0
 fi
 

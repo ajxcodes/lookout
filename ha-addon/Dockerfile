@@ -1,4 +1,4 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=python:3.12-slim-bookworm
 FROM ${BUILD_FROM}
 
 # Install Astral uv and system dependencies
