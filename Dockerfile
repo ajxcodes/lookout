@@ -27,6 +27,10 @@ RUN uv sync --frozen --no-dev
 # ------------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
 
+ARG RELEASE_VERSION=0.1.0
+LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
+
 # Install system dependencies (FFmpeg, OpenCV/graphics runtime, curl, ca-certificates)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \

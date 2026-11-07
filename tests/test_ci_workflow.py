@@ -206,3 +206,27 @@ def test_ci_workflow_auto_tag_job(workflow_data: dict[str, Any]) -> None:
     assert "auto-tag" in workflow_data["jobs"] and any(
         "ajxcodes/auto-tag" in s.get("uses", "") for s in workflow_data["jobs"]["auto-tag"]["steps"]
     )
+
+
+def test_ci_workflow_auto_tag_outputs_and_token(workflow_data: dict[str, Any]) -> None:
+    """TR-14: Verify auto-tag exports new_tag output and passes GITHUB_TOKEN and package-json."""
+    assert "new_tag" in workflow_data["jobs"]["auto-tag"]["outputs"] and any(
+        "GITHUB_TOKEN" in s.get("with", {}).get("github-token", "")
+        for s in workflow_data["jobs"]["auto-tag"]["steps"]
+    )
+    assert "release_url" in workflow_data["jobs"]["auto-tag"]["outputs"]
+    assert "bumped" in workflow_data["jobs"]["auto-tag"]["outputs"]
+    assert any(
+        str(s.get("with", {}).get("package-json", "")).lower() == "true"
+        for s in workflow_data["jobs"]["auto-tag"]["steps"]
+    )
+
+
+def test_ci_workflow_link_release_packages_job(workflow_data: dict[str, Any]) -> None:
+    """TR-15: Verify link-release-packages job depends on auto-tag and container-publish."""
+    assert "link-release-packages" in workflow_data["jobs"] and set(
+        workflow_data["jobs"]["link-release-packages"]["needs"]
+    ) == {"auto-tag", "container-publish"}
+    link_job = workflow_data["jobs"]["link-release-packages"]
+    assert link_job.get("permissions", {}).get("contents") == "write"
+    assert any("gh release edit" in s.get("run", "") for s in link_job.get("steps", []))
