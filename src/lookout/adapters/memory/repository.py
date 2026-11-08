@@ -30,6 +30,8 @@ class InMemoryEventRepository(EventRepositoryPort):
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
         """Find matching events with filtering and pagination."""
         results: list[CameraEvent] = []
@@ -44,6 +46,18 @@ class InMemoryEventRepository(EventRepositoryPort):
                 continue
             if end_time is not None and event.timestamp > end_time:
                 continue
+            if zone_id is not None and event.zone_id != zone_id:
+                continue
+            if entity is not None:
+                e_lower = entity.lower()
+                matched = [m.lower() for m in event.matched_entities]
+                if (
+                    e_lower not in matched
+                    and (event.resident_id or "").lower() != e_lower
+                    and (event.pet_id or "").lower() != e_lower
+                    and (event.vehicle_id or "").lower() != e_lower
+                ):
+                    continue
             if query is not None:
                 q = query.lower()
                 tags_str = ""
@@ -52,10 +66,12 @@ class InMemoryEventRepository(EventRepositoryPort):
                     tags_str = " ".join(str(t) for t in raw_tags).lower()
                 elif isinstance(raw_tags, str):
                     tags_str = raw_tags.lower()
+                matched_str = " ".join(m.lower() for m in event.matched_entities)
                 if (
                     q not in event.summary.lower()
                     and q not in event.category.value.lower()
                     and q not in tags_str
+                    and q not in matched_str
                 ):
                     continue
             results.append(event)

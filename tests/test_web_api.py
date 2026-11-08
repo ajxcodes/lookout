@@ -185,3 +185,28 @@ def test_face_gallery_upload_and_list(client: TestClient) -> None:
     assert list_res.status_code == 200
     data = list_res.json()
     assert "alice_test.jpg" in [f["filename"] for f in data["faces"]]
+
+
+def test_entities_api_endpoints_crud(client: TestClient) -> None:
+    """TR-23: Verify entities CRUD endpoints."""
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "civic-test-1",
+            "name": "Silver Honda Civic",
+            "entity_type": "vehicle",
+            "attributes": {"color": "silver", "make": "Honda", "model": "Civic"},
+        },
+    )
+    assert create_res.status_code == 200
+
+    response = client.get("/api/entities")
+    assert response.status_code == 200 and len(response.json()["entities"]) >= 1
+    assert any(e["id"] == "civic-test-1" for e in response.json()["entities"])
+
+    get_res = client.get("/api/entities/civic-test-1")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Silver Honda Civic"
+
+    del_res = client.delete("/api/entities/civic-test-1")
+    assert del_res.status_code == 200

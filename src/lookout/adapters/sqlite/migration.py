@@ -73,6 +73,10 @@ def _parse_category(val: Any) -> EventCategory:
             "acoustic": EventCategory.ACOUSTIC_ANOMALY,
             "audio": EventCategory.ACOUSTIC_ANOMALY,
             "false_positive": EventCategory.FALSE_POSITIVE,
+            "pet_elimination": EventCategory.PET_ELIMINATION,
+            "elimination": EventCategory.PET_ELIMINATION,
+            "poop": EventCategory.PET_ELIMINATION,
+            "squatting": EventCategory.PET_ELIMINATION,
         }
         if val_lower in alias_map:
             return alias_map[val_lower]

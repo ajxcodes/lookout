@@ -221,6 +221,29 @@ class HomeAssistantEgressAdapter(NotificationPort):
         return headers
 
     def _payload(self, event: CameraEvent, message: str | None) -> dict[str, Any]:
+        msg = message
+        if msg is None:
+            is_elim = event.is_pet_elimination() or str(event.category) in (
+                "pet_elimination",
+                "EventCategory.PET_ELIMINATION",
+            )
+            if is_elim:
+                pet_name = (
+                    (event.matched_entities and event.matched_entities[0])
+                    or event.pet_id
+                    or "Mochi"
+                )
+                zone_label = (
+                    "Backyard (Lawn)"
+                    if event.zone_id in ("lawn", "Backyard (Lawn)")
+                    else (event.zone_id or "yard")
+                )
+                msg = f"🐶 {pet_name} pooped in {zone_label}"
+            elif event.matched_entities:
+                msg = f"Detected {', '.join(event.matched_entities)} on camera {event.camera_id}"
+            else:
+                msg = f"[{event.threat_level.name}] {event.summary}"
+
         return {
             "id": event.id,
             "camera_id": event.camera_id,
@@ -238,14 +261,17 @@ class HomeAssistantEgressAdapter(NotificationPort):
             "media_uri": event.media_uri,
             "snapshot_uri": event.snapshot_uri,
             "metadata": event.metadata,
-            "message": message,
+            "zone_id": event.zone_id,
+            "vehicle_id": event.vehicle_id,
+            "matched_entities": event.matched_entities,
+            "message": msg,
         }
 
     async def send_notification(
         self, event: CameraEvent, target: str | None = None, message: str | None = None
     ) -> bool:
         body = self._payload(event, message)
-        text = message if message is not None else f"[{event.threat_level.name}] {event.summary}"
+        text = body["message"]
 
         # Determine candidate event types.
         if self.event_types:

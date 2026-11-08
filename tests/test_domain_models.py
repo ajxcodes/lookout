@@ -179,3 +179,19 @@ def test_inference_provenance() -> None:
     assert prov.tokens_used is None
     assert prov.raw_output == '{"detections": 1}'
     assert prov.timestamp is not None
+
+
+def test_pet_elimination_category_and_vehicle_predicates() -> None:
+    """TR-21: Verify EventCategory.PET_ELIMINATION and vehicle/pet predicates."""
+    assert EventCategory.PET_ELIMINATION.value == "pet_elimination"
+
+    event = CameraEvent(
+        id=str(uuid4()),
+        camera_id="backyard",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.PET_ELIMINATION,
+        threat_level=ThreatLevel.INFO,
+        summary="Dog elimination on lawn",
+        vehicle_id="civic-1",
+    )
+    assert event.is_pet_elimination() is True and event.has_vehicle() is True

@@ -12,6 +12,7 @@ export class SettingsModal {
     this.aiSelect = this.modal ? this.modal.querySelector("#setting-ai-mode") : null;
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
     this.facesContainer = this.modal ? this.modal.querySelector("#faces-grid") : null;
+    this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
 
     this.bindEvents();
@@ -82,6 +83,7 @@ export class SettingsModal {
     this.modal.classList.add("open");
     await this.loadSettings();
     await this.loadFaces();
+    await this.loadEntities();
   }
 
   close() {
@@ -89,6 +91,57 @@ export class SettingsModal {
     this.modal.classList.remove("open");
     if (this.onClose) {
       this.onClose();
+    }
+  }
+
+  async loadEntities() {
+    if (!this.entitiesContainer) return;
+    try {
+      const res = await fetch(resolveUrl("/api/entities"));
+      if (!res.ok) return;
+      const data = await res.json();
+      this.entitiesContainer.innerHTML = "";
+
+      const entities = data.entities || [];
+      if (entities.length === 0) {
+        this.entitiesContainer.innerHTML =
+          '<span class="text-muted" style="font-size:0.75rem;">No catalog entities enrolled yet</span>';
+        return;
+      }
+
+      entities.forEach((ent) => {
+        const row = document.createElement("div");
+        row.className = "entity-row";
+
+        let icon = "👤";
+        if (ent.entity_type === "vehicle") icon = "🚗";
+        else if (ent.entity_type === "pet") icon = "🐶";
+
+        row.innerHTML = `
+          <div class="entity-meta">
+            <span>${icon}</span>
+            <div>
+              <div style="font-size:0.8125rem;font-weight:600;">${ent.name}</div>
+              <div class="text-muted" style="font-size:0.6875rem;">${ent.entity_type} ${ent.species ? `(${ent.species})` : ""}</div>
+            </div>
+          </div>
+          <div class="entity-actions">
+            <button class="btn" style="padding:2px 6px;font-size:0.6875rem;" title="Delete entity">✕</button>
+          </div>
+        `;
+
+        const delBtn = row.querySelector("button");
+        delBtn.addEventListener("click", async () => {
+          await fetch(resolveUrl(`/api/entities/${encodeURIComponent(ent.id)}`), {
+            method: "DELETE",
+          });
+          await this.loadEntities();
+        });
+
+        this.entitiesContainer.appendChild(row);
+      });
+    } catch (err) {
+      console.warn("Failed to load entities:", err);
     }
   }
 

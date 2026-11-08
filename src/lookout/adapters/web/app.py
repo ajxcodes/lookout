@@ -18,6 +18,7 @@ from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.broadcast import SSEBroadcastHub
 from lookout.adapters.web.routes import (
     cameras_router,
+    entities_router,
     events_router,
     settings_router,
     setup_router,
@@ -161,10 +162,19 @@ def create_app(
     app.state.event_service = active_event_service
     app.state.vision_adapter = active_vision
     app.state.broadcast_hub = SSEBroadcastHub()
+    app.state.custom_entities = {}
+
+    from lookout.adapters.sqlite.members import HouseholdMembersRepository
+
+    db_path = ":memory:"
+    if active_config and hasattr(active_config, "storage") and active_config.storage.database_path:
+        db_path = active_config.storage.database_path
+    app.state.members_repo = HouseholdMembersRepository(db_path=db_path)
 
     # Mount REST API routers
     app.include_router(events_router, prefix="/api")
     app.include_router(cameras_router, prefix="/api")
+    app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
     app.include_router(setup_router, prefix="/api")
 

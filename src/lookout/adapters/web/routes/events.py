@@ -29,6 +29,8 @@ async def list_events(
     start_time: str | None = Query(None, description="ISO format start datetime"),
     end_time: str | None = Query(None, description="ISO format end datetime"),
     query: str | None = Query(None, description="Full text search query"),
+    zone_id: str | None = Query(None, description="Spatial zone identifier"),
+    entity: str | None = Query(None, description="Entity name or identifier"),
     limit: int = Query(50, ge=1, le=500, description="Page size limit"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ) -> dict[str, Any]:
@@ -68,6 +70,8 @@ async def list_events(
         query=query,
         limit=limit,
         offset=offset,
+        zone_id=zone_id,
+        entity=entity,
     )
     total = await repo.count()
     return {

@@ -31,6 +31,68 @@ class PetConfig(BaseModel):
     id: str = Field(..., description="Unique pet identifier")
     name: str = Field(..., description="Pet name")
     species: str = Field(default="dog", description="Animal species (e.g., dog, cat)")
+    breed: str | None = Field(default=None, description="Animal breed")
+    color: str | None = Field(default=None, description="Coat color")
+    enrolled_photos: list[str] = Field(default_factory=list, description="List of reference photos")
+
+
+class VehicleConfig(BaseModel):
+    """Configuration for an enrolled household vehicle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="Unique vehicle identifier")
+    name: str = Field(..., description="Vehicle name or label (e.g. Silver Honda Civic)")
+    make: str | None = Field(default=None, description="Vehicle make (e.g. Honda)")
+    model: str | None = Field(default=None, description="Vehicle model (e.g. Civic)")
+    color: str | None = Field(default=None, description="Vehicle color (e.g. silver)")
+    license_plate: str | None = Field(default=None, description="License plate number")
+    enrolled_photos: list[str] = Field(
+        default_factory=list, description="List of reference photo paths or filenames"
+    )
+
+
+class PolygonZoneConfig(BaseModel):
+    """Configuration for an interactive spatial camera polygon zone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="Unique zone identifier")
+    name: str = Field(..., description="Human-readable zone name (e.g. Backyard (Lawn))")
+    camera_id: str | None = Field(
+        default=None, description="Associated camera identifier if camera-specific"
+    )
+    polygon: list[tuple[float, float]] = Field(
+        ..., description="Normalized (x, y) coordinates defining polygon perimeter"
+    )
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.name == other or self.id == other
+        return super().__eq__(other)
+
+
+class LightMLConfig(BaseModel):
+    """Configuration for micro-footprint Light ML object and posture detector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether Light ML detection is active")
+    model_path: str = Field(
+        default="models/yolov8n.onnx", description="Micro-footprint ONNX model path"
+    )
+    confidence_threshold: float = Field(
+        default=0.45, ge=0.0, le=1.0, description="Detection confidence threshold"
+    )
+    glare_rejection: bool = Field(
+        default=True, description="Reject non-physical glare and headlight sweeps"
+    )
+    posture_detection: bool = Field(
+        default=True, description="Enable pet elimination posture detection"
+    )
+    max_entities: int = Field(
+        default=20, ge=1, description="Maximum concurrent bounding box detections"
+    )
 
 
 class CameraConfig(BaseModel):
@@ -313,6 +375,9 @@ class LookoutConfig(BaseModel):
     face_recognition: FaceRecognitionConfig = Field(default_factory=FaceRecognitionConfig)
     immich: ImmichConfig = Field(default_factory=ImmichConfig)
     audio_classifier: AudioClassifierConfig = Field(default_factory=AudioClassifierConfig)
+    vehicles: list[VehicleConfig] = Field(default_factory=list)
+    zones: list[PolygonZoneConfig] = Field(default_factory=list)
+    light_ml: LightMLConfig = Field(default_factory=LightMLConfig)
 
     @model_validator(mode="after")
     def validate_cross_field_invariants(self) -> "LookoutConfig":
@@ -333,6 +398,18 @@ class LookoutConfig(BaseModel):
         if len(pet_ids) != len(set(pet_ids)):
             duplicates = [pid for pid in pet_ids if pet_ids.count(pid) > 1]
             raise ValueError(f"Duplicate pet ID(s) found: {set(duplicates)}")
+
+        # 3b. Unique vehicle IDs
+        vehicle_ids = [v.id for v in self.vehicles]
+        if len(vehicle_ids) != len(set(vehicle_ids)):
+            duplicates = [vid for vid in vehicle_ids if vehicle_ids.count(vid) > 1]
+            raise ValueError(f"Duplicate vehicle ID(s) found: {set(duplicates)}")
+
+        # 3c. Unique zone IDs
+        zone_ids = [z.id for z in self.zones]
+        if len(zone_ids) != len(set(zone_ids)):
+            duplicates = [zid for zid in zone_ids if zone_ids.count(zid) > 1]
+            raise ValueError(f"Duplicate zone ID(s) found: {set(duplicates)}")
 
         # 4. Unique notification target names
         target_names = [t.name for t in self.notification_targets]

@@ -268,3 +268,37 @@ async def test_sqlite_repository_json_roundtrip_metrics_and_provenance(tmp_path:
     assert retrieved.provenance[0].provider == "local_yolo"
     assert retrieved.provenance[0].model_name == "yolov8n"
     assert retrieved.provenance[0].confidence == 0.94
+
+
+@pytest.mark.asyncio
+async def test_sqlite_multi_object_query_and_zone_indexing(tmp_path: Path) -> None:
+    """TR-22: Verify multi-object co-occurrence query and spatial zone indexing."""
+    db_file = tmp_path / "test.db"
+    repo = SqliteEventRepository(db_path=db_file)
+    now = datetime.now(UTC)
+
+    e1 = CameraEvent(
+        id="pet-lawn-1",
+        camera_id="cam-backyard",
+        timestamp=now,
+        category=EventCategory.PET_ELIMINATION,
+        threat_level=ThreatLevel.INFO,
+        summary="Dog elimination on lawn",
+        zone_id="lawn",
+        matched_entities=["Mochi", "Silver Honda Civic"],
+    )
+    e2 = CameraEvent(
+        id="pet-deck-1",
+        camera_id="cam-backyard",
+        timestamp=now - timedelta(minutes=5),
+        category=EventCategory.KNOWN_PET,
+        threat_level=ThreatLevel.INFO,
+        summary="Mochi on deck",
+        zone_id="deck",
+        matched_entities=["Mochi"],
+    )
+    await repo.save(e1)
+    await repo.save(e2)
+
+    results = await repo.find(zone_id="lawn")
+    assert len(results) == 1 and results[0].zone_id == "lawn"
