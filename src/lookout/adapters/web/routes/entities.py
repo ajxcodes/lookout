@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -13,6 +12,10 @@ from pydantic import BaseModel, Field
 from lookout.adapters.sqlite.members import HouseholdMember, HouseholdMembersRepository
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+MAX_PHOTO_SIZE: int = 15 * 1024 * 1024  # 15MB
+CHUNK_SIZE: int = 64 * 1024  # 64KB
 
 router = APIRouter(tags=["entities"])
 
@@ -241,12 +244,45 @@ async def upload_entity_photo(
     file: Annotated[UploadFile, File(...)],
 ) -> dict[str, Any]:
     """Upload a reference photo for an entity."""
+    filename = Path(file.filename or "photo.jpg").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension '{suffix}'. Allowed extensions: {allowed}",
+        )
+
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_PHOTO_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="File too large. Max size is 15MB.",
+        )
+    if file.size is not None and file.size > MAX_PHOTO_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="File too large. Max size is 15MB.",
+        )
+
     target_dir = _get_entity_photos_dir(request, entity_id)
-    filename = file.filename or "photo.jpg"
     dest_path = target_dir / filename
 
-    with dest_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    total_size = 0
+    try:
+        with dest_path.open("wb") as buffer:
+            while chunk := await file.read(CHUNK_SIZE):
+                total_size += len(chunk)
+                if total_size > MAX_PHOTO_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="File too large. Max size is 15MB.",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        if dest_path.exists():
+            dest_path.unlink(missing_ok=True)
+        raise
 
     return {
         "status": "ok",
@@ -262,11 +298,12 @@ async def delete_entity_photo(
     request: Request,
 ) -> dict[str, Any]:
     """Delete a reference photo for an entity."""
+    safe_filename = Path(filename).name
     target_dir = _get_entity_photos_dir(request, entity_id)
-    target_file = target_dir / filename
+    target_file = target_dir / safe_filename
     if target_file.exists():
         target_file.unlink()
-        return {"status": "ok", "deleted": True, "filename": filename}
+        return {"status": "ok", "deleted": True, "filename": safe_filename}
     raise HTTPException(
-        status_code=404, detail=f"Photo '{filename}' not found for entity '{entity_id}'"
+        status_code=404, detail=f"Photo '{safe_filename}' not found for entity '{entity_id}'"
     )

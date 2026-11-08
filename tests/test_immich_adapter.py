@@ -6,7 +6,7 @@ import respx
 from httpx import Response
 
 from lookout.adapters.face_recognition import FaceRecognitionAdapter
-from lookout.adapters.immich import ImmichGalleryAdapter, ImmichSyncResult
+from lookout.adapters.immich import ImmichGalleryAdapter, ImmichSyncResult, _join_url
 from lookout.config.schema import ImmichConfig
 
 
@@ -241,3 +241,55 @@ async def test_immich_modern_people_with_legacy_thumbnail_fallback() -> None:
     assert result.count == 1
     assert "elena" in result.synced_names
     assert "elena" in face_adapter.gallery
+
+
+def test_immich_join_url_helper() -> None:
+    """Verify _join_url cleanly handles trailing slashes, leading slashes, and subpaths."""
+    assert _join_url("http://localhost:2283", "/api/people") == "http://localhost:2283/api/people"
+    assert _join_url("http://localhost:2283/", "/api/people") == "http://localhost:2283/api/people"
+    assert _join_url("http://localhost:2283", "api/people") == "http://localhost:2283/api/people"
+    assert _join_url("http://localhost:2283/", "api/people") == "http://localhost:2283/api/people"
+    assert (
+        _join_url("http://localhost:2283/subpath", "/api/people")
+        == "http://localhost:2283/subpath/api/people"
+    )
+    assert (
+        _join_url("http://localhost:2283/subpath/", "/api/people")
+        == "http://localhost:2283/subpath/api/people"
+    )
+    assert (
+        _join_url("http://localhost:2283/subpath/", f"/api/people/{'p123'}/thumbnail")
+        == "http://localhost:2283/subpath/api/people/p123/thumbnail"
+    )
+    assert _join_url("http://localhost:2283", "") == "http://localhost:2283"
+    assert _join_url("http://localhost:2283/", "") == "http://localhost:2283"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_immich_gallery_sync_with_subpath_base_url() -> None:
+    """Verify Immich synchronization respects base URLs with subpaths and trailing slashes."""
+    respx.get("http://localhost:2283/immich/api/people").mock(
+        return_value=Response(
+            200,
+            json=[{"id": "sub-1", "name": "Sam"}],
+        )
+    )
+    respx.get("http://localhost:2283/immich/api/people/sub-1/thumbnail").mock(
+        return_value=Response(200, content=b"sam-bytes")
+    )
+    respx.get("http://localhost:2283/immich/api/tags").mock(
+        return_value=Response(200, json=[{"name": "Rex"}])
+    )
+    respx.get("http://localhost:2283/immich/api/tag").mock(return_value=Response(404))
+    respx.get("http://localhost:2283/immich/api/albums").mock(return_value=Response(200, json=[]))
+    respx.get("http://localhost:2283/immich/api/album").mock(return_value=Response(404))
+
+    face_adapter = FaceRecognitionAdapter()
+    adapter = ImmichGalleryAdapter(ImmichConfig(url="http://localhost:2283/immich/"))
+    result = await adapter.sync_gallery(face_adapter)
+
+    assert result.success is True
+    assert result.count == 1
+    assert "sam" in result.synced_names
+    assert "rex" in result.synced_pets

@@ -32,6 +32,15 @@ def _generate_pseudo_embedding(seed: bytes, dim: int = 128) -> list[float]:
     return vec
 
 
+def _join_url(base: str, path: str) -> str:
+    """Safely join a base URL and relative API path preserving subpaths and slashes."""
+    base_clean = base.rstrip("/")
+    path_clean = path.lstrip("/")
+    if not path_clean:
+        return base_clean
+    return f"{base_clean}/{path_clean}"
+
+
 @runtime_checkable
 class FaceGalleryTarget(Protocol):
     """Protocol for a face gallery receiver that can be updated with embeddings."""
@@ -87,6 +96,10 @@ class ImmichGalleryAdapter:
         self.synced_names: list[str] = []
         self.synced_pets: list[str] = []
 
+    def _join_url(self, path: str) -> str:
+        """Safely join configured base URL with an API endpoint path."""
+        return _join_url(self.config.url, path)
+
     async def sync_gallery(self, face_target: FaceGalleryTarget) -> ImmichSyncResult:
         """Fetch named persons and pet tags/albums from Immich and register into gallery."""
         self.synced_names = []
@@ -98,7 +111,7 @@ class ImmichGalleryAdapter:
             self.sync_success = True
             return ImmichSyncResult(success=True, count=0, synced_names=[], synced_pets=[])
 
-        base_url = self.config.url.rstrip("/")
+        base_url = self.config.url
         headers: dict[str, str] = {}
         if self.config.api_key:
             headers["x-api-key"] = self.config.api_key
@@ -110,11 +123,11 @@ class ImmichGalleryAdapter:
             owns_client = True
 
         try:
-            url = f"{base_url}/api/people"
+            url = _join_url(base_url, "/api/people")
             try:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code == 404:
-                    url = f"{base_url}/api/person"
+                    url = _join_url(base_url, "/api/person")
                     resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
@@ -149,13 +162,13 @@ class ImmichGalleryAdapter:
                     continue
 
                 person_id = str(person.get("id", ""))
-                thumb_url = f"{base_url}/api/people/{person_id}/thumbnail"
+                thumb_url = _join_url(base_url, f"/api/people/{person_id}/thumbnail")
 
                 thumb_bytes = b""
                 try:
                     thumb_resp = await client.get(thumb_url, headers=headers)
                     if thumb_resp.status_code == 404:
-                        thumb_url = f"{base_url}/api/person/{person_id}/thumbnail"
+                        thumb_url = _join_url(base_url, f"/api/person/{person_id}/thumbnail")
                         thumb_resp = await client.get(thumb_url, headers=headers)
                     if thumb_resp.status_code == 200:
                         thumb_bytes = thumb_resp.content
@@ -179,10 +192,10 @@ class ImmichGalleryAdapter:
             # Pet album and tag ingress
             synced_pets: list[str] = []
             pet_endpoints = [
-                f"{base_url}/api/tags",
-                f"{base_url}/api/tag",
-                f"{base_url}/api/albums",
-                f"{base_url}/api/album",
+                _join_url(base_url, "/api/tags"),
+                _join_url(base_url, "/api/tag"),
+                _join_url(base_url, "/api/albums"),
+                _join_url(base_url, "/api/album"),
             ]
             for ep in pet_endpoints:
                 try:
