@@ -76,6 +76,8 @@ class EventRepositoryPort(Protocol):
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
         """Find events matching search criteria."""
         ...

@@ -12,8 +12,10 @@ export class CategoryFilter {
       { id: "doorbell", label: "Doorbell" },
       { id: "person", label: "Person" },
       { id: "resident", label: "Residents" },
+      { id: "vehicle", label: "Vehicles" },
       { id: "courier", label: "Couriers" },
       { id: "pet", label: "Pets" },
+      { id: "pet_elimination", label: "Pet Elimination" },
       { id: "threat", label: "Threats" },
       { id: "audio", label: "Audio" },
     ];

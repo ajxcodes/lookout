@@ -2,6 +2,7 @@
 and ingress routes.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -89,3 +90,23 @@ def test_documentation_and_architecture_guide_exist() -> None:
     readme_path = Path("README.md")
     arch_path = Path("docs/ARCHITECTURE.md")
     assert readme_path.is_file() and arch_path.is_file()
+
+
+def test_targeted_notifications_with_entity_names() -> None:
+    """TR-24: Verify targeted notification message incorporates entity names and zone."""
+    from lookout.adapters.home_assistant import HomeAssistantEgressAdapter
+    from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
+
+    adapter = HomeAssistantEgressAdapter(base_url="http://localhost:8123")
+    event = CameraEvent(
+        id="evt-pet-1",
+        camera_id="backyard",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.PET_ELIMINATION,
+        threat_level=ThreatLevel.INFO,
+        summary="Dog elimination",
+        zone_id="lawn",
+        matched_entities=["Mochi"],
+    )
+    payload = adapter._payload(event, message=None)
+    assert "Mochi pooped in Backyard (Lawn)" in payload["message"]

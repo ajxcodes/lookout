@@ -22,7 +22,8 @@ from lookout.ports.ingress import ViewerApiPort
 
 def _sanitize_fts_query(raw_query: str) -> str:
     """Sanitize raw user query into safe FTS5 query tokens with prefix and boolean support."""
-    raw_tokens = re.findall(r"[\w*]+", raw_query)
+    cleaned = re.sub(r"\b(has|resident|vehicle|zone):", "", raw_query)
+    raw_tokens = re.findall(r"[\w*]+", cleaned)
     if not raw_tokens:
         return ""
 
@@ -55,12 +56,17 @@ def _serialize_metrics(metrics: DetectionMetrics) -> str:
                     "y_min": b.y_min,
                     "x_max": b.x_max,
                     "y_max": b.y_max,
+                    "entity_id": b.entity_id,
+                    "entity_name": b.entity_name,
                 }
                 for b in metrics.bounding_boxes
             ],
             "audio_decibels": metrics.audio_decibels,
             "duration_seconds": metrics.duration_seconds,
             "total_latency_ms": metrics.total_latency_ms,
+            "tracked_entities": metrics.tracked_entities,
+            "posture_telemetry": metrics.posture_telemetry,
+            "zone_id": metrics.zone_id,
         }
     )
 
@@ -76,6 +82,8 @@ def _deserialize_metrics(raw_json: str) -> DetectionMetrics:
             y_min=float(bb["y_min"]),
             x_max=float(bb["x_max"]),
             y_max=float(bb["y_max"]),
+            entity_id=bb.get("entity_id"),
+            entity_name=bb.get("entity_name"),
         )
         for bb in data.get("bounding_boxes", [])
     ]
@@ -85,6 +93,9 @@ def _deserialize_metrics(raw_json: str) -> DetectionMetrics:
         audio_decibels=data.get("audio_decibels"),
         duration_seconds=float(data.get("duration_seconds", 0.0)),
         total_latency_ms=float(data.get("total_latency_ms", 0.0)),
+        tracked_entities=data.get("tracked_entities", []),
+        posture_telemetry=data.get("posture_telemetry"),
+        zone_id=data.get("zone_id"),
     )
 
 
@@ -134,6 +145,15 @@ def _row_to_event(row: sqlite3.Row) -> CameraEvent:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
 
+    keys = row.keys()
+    zone_id = row["zone_id"] if "zone_id" in keys else None
+    vehicle_id = row["vehicle_id"] if "vehicle_id" in keys else None
+    matched_entities = (
+        json.loads(row["matched_entities_json"])
+        if "matched_entities_json" in keys and row["matched_entities_json"]
+        else []
+    )
+
     return CameraEvent(
         id=row["id"],
         camera_id=row["camera_id"],
@@ -148,6 +168,9 @@ def _row_to_event(row: sqlite3.Row) -> CameraEvent:
         media_uri=row["media_uri"],
         snapshot_uri=row["snapshot_uri"],
         metadata=json.loads(row["metadata_json"]),
+        zone_id=zone_id,
+        vehicle_id=vehicle_id,
+        matched_entities=matched_entities,
     )
 
 
@@ -182,8 +205,9 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
                 INSERT INTO camera_events (
                     id, camera_id, timestamp, category, threat_level, summary,
                     metrics_json, provenance_json, resident_id, pet_id,
-                    media_uri, snapshot_uri, metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    media_uri, snapshot_uri, metadata_json, zone_id, vehicle_id,
+                    matched_entities_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     camera_id = excluded.camera_id,
                     timestamp = excluded.timestamp,
@@ -196,7 +220,10 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
                     pet_id = excluded.pet_id,
                     media_uri = excluded.media_uri,
                     snapshot_uri = excluded.snapshot_uri,
-                    metadata_json = excluded.metadata_json;
+                    metadata_json = excluded.metadata_json,
+                    zone_id = excluded.zone_id,
+                    vehicle_id = excluded.vehicle_id,
+                    matched_entities_json = excluded.matched_entities_json;
                 """,
                 (
                     event.id,
@@ -212,6 +239,9 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
                     event.media_uri,
                     event.snapshot_uri,
                     json.dumps(event.metadata),
+                    event.zone_id,
+                    event.vehicle_id,
+                    json.dumps(event.matched_entities),
                     datetime.now(UTC).isoformat(),
                 ),
             )
@@ -283,6 +313,8 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
         """Find events matching search criteria with pagination and optional FTS search."""
         sanitized_query: str | None = None
@@ -320,6 +352,15 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
             if end_time is not None:
                 conditions.append("c.timestamp <= ?")
                 params.append(end_time.isoformat())
+            if zone_id is not None:
+                conditions.append("c.zone_id = ?")
+                params.append(zone_id)
+            if entity is not None:
+                conditions.append(
+                    "(c.resident_id = ? OR c.pet_id = ? OR c.vehicle_id = ?"
+                    " OR c.matched_entities_json LIKE ?)"
+                )
+                params.extend([entity, entity, entity, f"%{entity}%"])
 
             where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             sql = (
@@ -367,14 +408,18 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
         min_threat: ThreatLevel | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
-        """List events filtered by camera, category, or threat level."""
+        """List events filtered by camera, category, threat level, zone, or entity."""
         return await self.find(
             camera_id=camera_id,
             category=category,
             min_threat=min_threat,
             limit=limit,
             offset=offset,
+            zone_id=zone_id,
+            entity=entity,
         )
 
     async def get_timeline(self, start_time: datetime, end_time: datetime) -> list[CameraEvent]:

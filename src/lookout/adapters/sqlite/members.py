@@ -5,20 +5,22 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from lookout.adapters.sqlite.connection import SqliteConnectionManager
 
 
 @dataclass
 class HouseholdMember:
-    """Enrolled household resident or pet entity."""
+    """Enrolled household resident, pet, vehicle, or thing entity."""
 
     id: str
     name: str
-    member_type: str = "resident"  # "resident" or "pet"
+    member_type: str = "resident"  # "resident", "pet", "vehicle", "thing"
     species: str | None = None
     enrolled_faces: list[str] = field(default_factory=list)
     notification_targets: list[str] = field(default_factory=list)
+    attributes: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -32,6 +34,13 @@ def _row_to_member(row: sqlite3.Row) -> HouseholdMember:
     if updated.tzinfo is None:
         updated = updated.replace(tzinfo=UTC)
 
+    attributes: dict[str, Any] = {}
+    if "attributes_json" in row and row["attributes_json"]:
+        try:
+            attributes = json.loads(row["attributes_json"])
+        except Exception:
+            attributes = {}
+
     return HouseholdMember(
         id=row["id"],
         name=row["name"],
@@ -39,13 +48,14 @@ def _row_to_member(row: sqlite3.Row) -> HouseholdMember:
         species=row["species"],
         enrolled_faces=json.loads(row["enrolled_faces_json"]),
         notification_targets=json.loads(row["notification_targets_json"]),
+        attributes=attributes,
         created_at=created,
         updated_at=updated,
     )
 
 
 class HouseholdMembersRepository:
-    """Repository for household members (residents and pets) persistence."""
+    """Repository for household members (residents, pets, vehicles, things) persistence."""
 
     def __init__(
         self,
@@ -63,14 +73,15 @@ class HouseholdMembersRepository:
                 """
                 INSERT INTO household_members (
                     id, member_type, name, species, enrolled_faces_json,
-                    notification_targets_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    notification_targets_json, attributes_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     member_type = excluded.member_type,
                     name = excluded.name,
                     species = excluded.species,
                     enrolled_faces_json = excluded.enrolled_faces_json,
                     notification_targets_json = excluded.notification_targets_json,
+                    attributes_json = excluded.attributes_json,
                     updated_at = excluded.updated_at;
                 """,
                 (
@@ -80,6 +91,7 @@ class HouseholdMembersRepository:
                     member.species,
                     json.dumps(member.enrolled_faces),
                     json.dumps(member.notification_targets),
+                    json.dumps(member.attributes),
                     member.created_at.isoformat(),
                     member.updated_at.isoformat(),
                 ),

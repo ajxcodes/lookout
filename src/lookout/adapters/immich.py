@@ -32,6 +32,15 @@ def _generate_pseudo_embedding(seed: bytes, dim: int = 128) -> list[float]:
     return vec
 
 
+def _join_url(base: str, path: str) -> str:
+    """Safely join a base URL and relative API path preserving subpaths and slashes."""
+    base_clean = base.rstrip("/")
+    path_clean = path.lstrip("/")
+    if not path_clean:
+        return base_clean
+    return f"{base_clean}/{path_clean}"
+
+
 @runtime_checkable
 class FaceGalleryTarget(Protocol):
     """Protocol for a face gallery receiver that can be updated with embeddings."""
@@ -45,62 +54,35 @@ class FaceGalleryTarget(Protocol):
 
 @dataclass
 class ImmichSyncResult:
-    """Result summary of an Immich gallery synchronization cycle.
-
-    This class serves a dual purpose:
-    1. A structured dataclass preserving synchronization telemetry (success status,
-       count of synced faces, names of synced individuals, and error details).
-    2. A convenient comparison and control-flow wrapper supporting truthiness testing
-       via `__bool__`, numeric conversion via `__int__`, threshold evaluation via `__ge__`,
-       and tuple unpacking via `__iter__`.
-    """
+    """Result summary of an Immich gallery synchronization cycle."""
 
     success: bool
     count: int
     synced_names: list[str] = field(default_factory=list)
+    synced_pets: list[str] = field(default_factory=list)
     error: str | None = None
 
     def __bool__(self) -> bool:
-        """Evaluate truthiness based on sync success.
-
-        Allows idiomatic status checks such as:
-            if sync_result:
-                ...
-        """
+        """Evaluate truthiness based on sync success."""
         return self.success
 
     def __int__(self) -> int:
-        """Convert the result to an integer representing the count of synced identities.
-
-        Allows ergonomic numeric usage such as:
-            total_faces = int(sync_result)
-        """
+        """Convert the result to an integer representing the count of synced identities."""
         return self.count
 
     def __ge__(self, other: Any) -> bool:
-        """Compare the count of synced identities against a numeric threshold.
-
-        Supports expressions such as:
-            if sync_result >= 1:
-                ...
-
-        Returns NotImplemented if compared against non-numeric types.
-        """
+        """Compare the count of synced identities against a numeric threshold."""
         if isinstance(other, (int, float)):
             return self.count >= other
         return NotImplemented
 
     def __iter__(self) -> Iterator[Any]:
-        """Iterate over core fields to support tuple unpacking.
-
-        Enables unpacking syntax such as:
-            success, count, synced_names = sync_result
-        """
+        """Iterate over core fields to support tuple unpacking."""
         return iter((self.success, self.count, self.synced_names))
 
 
 class ImmichGalleryAdapter:
-    """Asynchronous adapter syncing enrolled resident faces from self-hosted Immich API."""
+    """Asynchronous adapter syncing enrolled resident faces and pet albums from Immich API."""
 
     def __init__(
         self,
@@ -112,93 +94,132 @@ class ImmichGalleryAdapter:
         self.sync_success: bool = False
         self.sync_count: int = 0
         self.synced_names: list[str] = []
+        self.synced_pets: list[str] = []
+
+    def _join_url(self, path: str) -> str:
+        """Safely join configured base URL with an API endpoint path."""
+        return _join_url(self.config.url, path)
 
     async def sync_gallery(self, face_target: FaceGalleryTarget) -> ImmichSyncResult:
-        """Fetch named persons and face thumbnails from Immich and register into gallery."""
+        """Fetch named persons and pet tags/albums from Immich and register into gallery."""
         self.synced_names = []
+        self.synced_pets = []
         self.sync_count = 0
         self.sync_success = False
 
         if not self.config.enabled:
             self.sync_success = True
-            return ImmichSyncResult(success=True, count=0, synced_names=[])
+            return ImmichSyncResult(success=True, count=0, synced_names=[], synced_pets=[])
 
-        url = f"{self.config.url.rstrip('/')}/api/person"
+        base_url = self.config.url
         headers: dict[str, str] = {}
         if self.config.api_key:
             headers["x-api-key"] = self.config.api_key
 
+        client = self._client
+        owns_client = False
+        if client is None:
+            client = httpx.AsyncClient()
+            owns_client = True
+
         try:
-            if self._client is not None:
-                resp = await self._client.get(url, headers=headers)
+            url = _join_url(base_url, "/api/people")
+            try:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 404:
+                    url = _join_url(base_url, "/api/person")
+                    resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
-            else:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(url, headers=headers)
-                    resp.raise_for_status()
-                    data = resp.json()
+            except Exception as exc:
+                logger.warning("Failed to synchronize with Immich endpoint %s: %s", url, exc)
+                self.sync_success = False
+                return ImmichSyncResult(
+                    success=False, count=0, synced_names=[], synced_pets=[], error=str(exc)
+                )
 
-        except Exception as exc:
-            logger.warning("Failed to synchronize with Immich endpoint %s: %s", url, exc)
-            self.sync_success = False
-            return ImmichSyncResult(success=False, count=0, synced_names=[], error=str(exc))
+            persons: list[dict[str, Any]] = []
+            if isinstance(data, list):
+                persons = data
+            elif isinstance(data, dict):
+                raw_people = data.get("people", data.get("persons", []))
+                if isinstance(raw_people, list):
+                    persons = raw_people
 
-        persons: list[dict[str, Any]] = []
-        if isinstance(data, list):
-            persons = data
-        elif isinstance(data, dict):
-            raw_people = data.get("people", data.get("persons", []))
-            if isinstance(raw_people, list):
-                persons = raw_people
+            synced: list[str] = []
+            for person in persons:
+                if not isinstance(person, dict):
+                    continue
 
-        synced: list[str] = []
-        for person in persons:
-            if not isinstance(person, dict):
-                continue
+                name = str(person.get("name", "")).strip()
+                if not name:
+                    continue
 
-            name = str(person.get("name", "")).strip()
-            if not name:
-                continue
+                # Case-insensitive inclusion filter
+                if self.config.include_persons and not any(
+                    name.lower() == p.lower() for p in self.config.include_persons
+                ):
+                    continue
 
-            # Case-insensitive inclusion filter
-            if self.config.include_persons and not any(
-                name.lower() == p.lower() for p in self.config.include_persons
-            ):
-                continue
+                person_id = str(person.get("id", ""))
+                thumb_url = _join_url(base_url, f"/api/people/{person_id}/thumbnail")
 
-            person_id = str(person.get("id", ""))
-            thumb_url = f"{self.config.url.rstrip('/')}/api/person/{person_id}/thumbnail"
-
-            thumb_bytes = b""
-            try:
-                if self._client is not None:
-                    thumb_resp = await self._client.get(thumb_url, headers=headers)
+                thumb_bytes = b""
+                try:
+                    thumb_resp = await client.get(thumb_url, headers=headers)
+                    if thumb_resp.status_code == 404:
+                        thumb_url = _join_url(base_url, f"/api/person/{person_id}/thumbnail")
+                        thumb_resp = await client.get(thumb_url, headers=headers)
                     if thumb_resp.status_code == 200:
                         thumb_bytes = thumb_resp.content
+                except Exception as exc:
+                    logger.warning("Could not download thumbnail for person '%s': %s", name, exc)
+
+                if not thumb_bytes:
+                    thumb_bytes = name.encode("utf-8")
+
+                # Extract embedding from thumbnail bytes
+                extract_fn = getattr(face_target, "extract_embeddings", None)
+                if callable(extract_fn):
+                    embeddings = extract_fn(thumb_bytes)
                 else:
-                    async with httpx.AsyncClient() as client:
-                        thumb_resp = await client.get(thumb_url, headers=headers)
-                        if thumb_resp.status_code == 200:
-                            thumb_bytes = thumb_resp.content
-            except Exception as exc:
-                logger.warning("Could not download thumbnail for person '%s': %s", name, exc)
+                    embeddings = [_generate_pseudo_embedding(thumb_bytes)]
 
-            if not thumb_bytes:
-                thumb_bytes = name.encode("utf-8")
+                res_key = name.lower()
+                face_target.update_resident_embeddings(res_key, embeddings)
+                synced.append(res_key)
 
-            # Extract embedding from thumbnail bytes
-            extract_fn = getattr(face_target, "extract_embeddings", None)
-            if callable(extract_fn):
-                embeddings = extract_fn(thumb_bytes)
-            else:
-                embeddings = [_generate_pseudo_embedding(thumb_bytes)]
+            # Pet album and tag ingress
+            synced_pets: list[str] = []
+            pet_endpoints = [
+                _join_url(base_url, "/api/tags"),
+                _join_url(base_url, "/api/tag"),
+                _join_url(base_url, "/api/albums"),
+                _join_url(base_url, "/api/album"),
+            ]
+            for ep in pet_endpoints:
+                try:
+                    p_resp = await client.get(ep, headers=headers)
+                    if p_resp.status_code == 200:
+                        pet_data = p_resp.json()
+                        items = (
+                            pet_data if isinstance(pet_data, list) else pet_data.get("items", [])
+                        )
+                        for item in items:
+                            if isinstance(item, dict):
+                                item_name = str(item.get("name", item.get("albumName", ""))).strip()
+                                if item_name and item_name.lower() not in synced_pets:
+                                    synced_pets.append(item_name.lower())
+                except Exception:
+                    pass
 
-            res_key = name.lower()
-            face_target.update_resident_embeddings(res_key, embeddings)
-            synced.append(res_key)
-
-        self.synced_names = synced
-        self.sync_count = len(synced)
-        self.sync_success = True
-        return ImmichSyncResult(success=True, count=len(synced), synced_names=synced)
+            self.synced_names = synced
+            self.synced_pets = synced_pets
+            self.sync_count = len(synced)
+            self.sync_success = True
+            return ImmichSyncResult(
+                success=True, count=len(synced), synced_names=synced, synced_pets=synced_pets
+            )
+        finally:
+            if owns_client:
+                await client.aclose()

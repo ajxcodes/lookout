@@ -26,6 +26,14 @@ from lookout.adapters.home_assistant import (
     HomeAssistantEgressAdapter,
 )
 from lookout.adapters.immich import ImmichGalleryAdapter
+from lookout.adapters.light_ml import (
+    ClipAnalysisResult,
+    IlluminationFilter,
+    LightMLObjectDetector,
+    PetPostureClassifier,
+    SpatialZoneEvaluator,
+    analyze_clip_frames,
+)
 from lookout.adapters.memory import (
     InMemoryEventRepository,
     MockAudioClassifierAdapter,
@@ -58,6 +66,7 @@ from lookout.adapters.web import SSEBroadcastHub, create_app
 __all__ = [
     "AuditLogger",
     "CascadeVisionAdapter",
+    "ClipAnalysisResult",
     "FastAPIIngressAdapter",
     "FFmpegNotFoundError",
     "FFmpegTranscoderAdapter",
@@ -69,9 +78,11 @@ __all__ = [
     "HomeAssistantEgressAdapter",
     "HouseholdMember",
     "HouseholdMembersRepository",
+    "IlluminationFilter",
     "ImmichGalleryAdapter",
     "ImportResult",
     "InMemoryEventRepository",
+    "LightMLObjectDetector",
     "LocalEdgeVisionProvider",
     "MediaRetentionWorker",
     "MockAudioClassifierAdapter",
@@ -86,9 +97,11 @@ __all__ = [
     "OfflineVisionFallbackProvider",
     "OllamaVisionProvider",
     "OpenCodeVisionProvider",
+    "PetPostureClassifier",
     "RetentionResult",
     "RingAdapter",
     "SSEBroadcastHub",
+    "SpatialZoneEvaluator",
     "SqliteConnectionManager",
     "SqliteEventRepository",
     "StructuredOutputParser",
@@ -96,6 +109,7 @@ __all__ = [
     "TempMediaManager",
     "TranscodeError",
     "YamnetAudioClassifierAdapter",
+    "analyze_clip_frames",
     "app",
     "create_app",
     "create_ingress_app",

@@ -275,7 +275,28 @@ class NtfyDispatcher(NotificationPort):
 
         priority = _PRIORITY_MAP.get(event.threat_level, "3")
         tags = f"{event.category.value},{event.camera_id}"
-        body = message if message is not None else f"[{event.threat_level.name}] {event.summary}"
+        if event.zone_id:
+            tags += f",{event.zone_id}"
+
+        if message is not None:
+            body = message
+        elif event.is_pet_elimination() or str(event.category) in (
+            "pet_elimination",
+            "EventCategory.PET_ELIMINATION",
+        ):
+            pet_name = (
+                (event.matched_entities and event.matched_entities[0]) or event.pet_id or "Mochi"
+            )
+            zone_label = (
+                "Backyard (Lawn)"
+                if event.zone_id in ("lawn", "Backyard (Lawn)")
+                else (event.zone_id or "yard")
+            )
+            body = f"🐶 {pet_name} pooped in {zone_label}"
+        elif event.matched_entities:
+            body = f"Detected {', '.join(event.matched_entities)} on camera {event.camera_id}"
+        else:
+            body = f"[{event.threat_level.name}] {event.summary}"
 
         headers: dict[str, str] = {
             "Title": f"Lookout: {event.summary}",

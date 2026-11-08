@@ -86,6 +86,9 @@
     </aside>
   </main>
 
+  <!-- 24-Hour Continuous Scrubber Timeline Bar -->
+  <footer id="scrubber-container"></footer>
+
   <!-- Admin / Settings Modal Dialog -->
   <div class="modal-backdrop" id="settings-modal" role="dialog" aria-modal="true">
     <div class="modal-box">
@@ -105,6 +108,15 @@
             <option value="gemini_only">Google Gemini Only (Direct Cloud Vision)</option>
             <option value="off">Off (Zero-compute Fallback)</option>
           </select>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Unified Entity Reference Catalog Manager -->
+        <div class="setting-group">
+          <label class="setting-label">Entity Reference Catalog (People, Pets & Vehicles)</label>
+          <p class="setting-desc">Manage enrolled household people, pets (Mochi), and vehicles (Civic) for visual matching.</p>
+          <div id="entity-catalog-list" class="entity-catalog-list"></div>
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border-subtle);">

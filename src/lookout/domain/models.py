@@ -20,6 +20,7 @@ class EventCategory(StrEnum):
     SECURITY_INTRUSION = "security_intrusion"
     ACOUSTIC_ANOMALY = "acoustic_anomaly"
     FALSE_POSITIVE = "false_positive"
+    PET_ELIMINATION = "pet_elimination"
 
 
 class ThreatLevel(IntEnum):
@@ -42,6 +43,8 @@ class BoundingBox:
     y_min: float
     x_max: float
     y_max: float
+    entity_id: str | None = None
+    entity_name: str | None = None
 
 
 @dataclass
@@ -53,6 +56,9 @@ class DetectionMetrics:
     audio_decibels: float | None = None
     duration_seconds: float = 0.0
     total_latency_ms: float = 0.0
+    tracked_entities: list[str] = field(default_factory=list)
+    posture_telemetry: dict[str, Any] | None = None
+    zone_id: str | None = None
 
 
 @dataclass
@@ -85,6 +91,9 @@ class CameraEvent:
     media_uri: str | None = None
     snapshot_uri: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    zone_id: str | None = None
+    vehicle_id: str | None = None
+    matched_entities: list[str] = field(default_factory=list)
 
     def is_threat(self) -> bool:
         """Evaluate if the event represents an actionable threat."""
@@ -97,3 +106,18 @@ class CameraEvent:
     def has_pet(self) -> bool:
         """Check if a known household pet is associated with the event."""
         return self.pet_id is not None or self.category == EventCategory.KNOWN_PET
+
+    def has_vehicle(self) -> bool:
+        """Check if a household or detected vehicle is associated with the event."""
+        return (
+            self.vehicle_id is not None
+            or self.category == EventCategory.VEHICLE
+            or any(
+                any(c in e.lower() for c in ("vehicle", "car", "civic"))
+                for e in self.matched_entities
+            )
+        )
+
+    def is_pet_elimination(self) -> bool:
+        """Check if the event represents pet elimination posture."""
+        return self.category == EventCategory.PET_ELIMINATION
