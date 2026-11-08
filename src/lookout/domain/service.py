@@ -137,6 +137,7 @@ class EventProcessingService(EventIngressPort):
                 metrics.total_latency_ms = latency_ms
 
                 # Pet elimination posture classifier
+                has_pet_box = any(b.label in ("dog", "cat", "pet") for b in boxes)
                 if self.pet_classifier is not None:
                     for b in boxes:
                         if b.label in ("dog", "cat", "pet"):
@@ -145,6 +146,10 @@ class EventProcessingService(EventIngressPort):
                                 category = EventCategory.PET_ELIMINATION
                                 metrics.posture_telemetry = getattr(posture_res, "telemetry", None)
                                 break
+                            elif category == EventCategory.UNKNOWN_VISITOR:
+                                category = EventCategory.KNOWN_PET
+                elif has_pet_box and category == EventCategory.UNKNOWN_VISITOR:
+                    category = EventCategory.KNOWN_PET
 
                 # Spatial zone evaluator
                 if self.zone_evaluator is not None and boxes:
@@ -250,4 +255,85 @@ class EventProcessingService(EventIngressPort):
                 message=f"[{event.threat_level.name}] {event.summary}",
             )
 
+        return event
+
+    async def enrich_event_from_media(
+        self, event_id: str, frame_samples: list[bytes]
+    ) -> CameraEvent | None:
+        """Enrich existing event with asynchronous multi-frame video clip analysis."""
+        event = await self.repository.get_by_id(event_id)
+        if event is None:
+            return None
+
+        detector = self.light_ml_detector
+        if detector is None:
+            return event
+
+        analysis = detector.analyze_clip_frames(
+            frame_samples,
+            camera_id=event.camera_id,
+            pet_classifier=self.pet_classifier,
+            zone_evaluator=self.zone_evaluator,
+            entity_matcher=self.entity_matcher,
+        )
+
+        # Update matched entities
+        if analysis.tracked_entities:
+            for entity in analysis.tracked_entities:
+                if entity not in event.matched_entities:
+                    event.matched_entities.append(entity)
+            if event.metrics is not None:
+                event.metrics.tracked_entities = list(event.matched_entities)
+
+        # Update zone
+        if analysis.traversed_zones:
+            event.zone_id = analysis.traversed_zones[-1]
+            if event.metrics is not None:
+                event.metrics.zone_id = event.zone_id
+
+        # Update metadata
+        event.metadata["trajectory"] = list(analysis.traversed_zones)
+        event.metadata["sustained_elimination"] = analysis.sustained_elimination
+        event.metadata["clip_enrichment"] = analysis.telemetry
+        if analysis.best_confidence > 0.0:
+            event.metadata["best_confidence"] = analysis.best_confidence
+            if event.metrics is not None and analysis.best_confidence > event.metrics.confidence:
+                event.metrics.confidence = analysis.best_confidence
+
+        # If sustained_elimination is confirmed and category is PET_ELIMINATION or KNOWN_PET,
+        # confirms EventCategory.PET_ELIMINATION.
+        # If pet posture was only brief/transient (<2 frames) and not sustained,
+        # downgrades category to EventCategory.KNOWN_PET.
+        if event.category in (EventCategory.PET_ELIMINATION, EventCategory.KNOWN_PET):
+            if analysis.sustained_elimination:
+                event.category = EventCategory.PET_ELIMINATION
+                event.threat_level = self._evaluate_threat_level(event.category)
+                pet_name = (
+                    next(
+                        (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name), None
+                    )
+                    if event.metrics
+                    else None
+                ) or (
+                    event.pet_id or (event.matched_entities[0] if event.matched_entities else "Pet")
+                )
+                zone_label = (
+                    "Backyard (Lawn)" if event.zone_id == "lawn" else (event.zone_id or "yard")
+                )
+                event.summary = f"{pet_name} pooped in {zone_label}"
+            else:
+                event.category = EventCategory.KNOWN_PET
+                event.threat_level = self._evaluate_threat_level(event.category)
+                pet_name = (
+                    next(
+                        (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name), None
+                    )
+                    if event.metrics
+                    else None
+                ) or (
+                    event.pet_id or (event.matched_entities[0] if event.matched_entities else "Pet")
+                )
+                event.summary = f"Detected {pet_name} on camera {event.camera_id}"
+
+        await self.repository.save(event)
         return event

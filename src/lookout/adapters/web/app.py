@@ -14,6 +14,12 @@ from fastapi.staticfiles import StaticFiles
 
 from lookout import __version__
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
+from lookout.adapters.entity_matcher import EntityCatalogMatcher
+from lookout.adapters.light_ml import (
+    LightMLObjectDetector,
+    PetPostureClassifier,
+    SpatialZoneEvaluator,
+)
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.broadcast import SSEBroadcastHub
 from lookout.adapters.web.routes import (
@@ -151,7 +157,19 @@ def create_app(
     active_event_service: EventProcessingService = (
         event_service
         if event_service is not None
-        else EventProcessingService(repository=active_repo)
+        else EventProcessingService(
+            repository=active_repo,
+            light_ml_detector=LightMLObjectDetector(),
+            pet_classifier=PetPostureClassifier(),
+            zone_evaluator=SpatialZoneEvaluator(zones=active_config.zones if active_config else []),
+            entity_matcher=EntityCatalogMatcher(
+                residents=active_config.residents if active_config else [],
+                pets=active_config.pets if active_config else [],
+                vehicles=active_config.vehicles if active_config else [],
+            )
+            if active_config
+            else None,
+        )
     )
 
     # Attach application state

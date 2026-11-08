@@ -67,3 +67,54 @@ async def test_spatial_polygon_zone_resolution() -> None:
     )
 
     assert resolved_zone == "Lawn/Grass" and event.zone_id == "lawn"
+
+
+@pytest.mark.asyncio
+async def test_sustained_pet_elimination_vs_transient_squat() -> None:
+    """Verify Pass 2 downgrades transient squats to KNOWN_PET and confirms sustained elimination."""
+    from lookout.domain.models import EventCategory
+
+    repo = InMemoryEventRepository()
+    detector = LightMLObjectDetector()
+    classifier = PetPostureClassifier()
+    service = EventProcessingService(
+        repository=repo,
+        light_ml_detector=detector,
+        pet_classifier=classifier,
+    )
+
+    # 1. Ingest event that gatekeeper initially marks as PET_ELIMINATION due to a keyframe squat
+    event1 = await service.ingest_raw_event(
+        camera_id="cam-backyard",
+        payload=b"dog pet squatting elimination posture",
+    )
+    assert event1.category == EventCategory.PET_ELIMINATION
+
+    # Multi-frame clip has only 1 transient squat out of 3 frames (e.g. brief stretch)
+    transient_frames = [
+        b"dog pet standing",
+        b"dog pet squatting elimination posture",
+        b"dog pet standing",
+    ]
+    enriched_transient = await service.enrich_event_from_media(event1.id, transient_frames)
+    assert enriched_transient is not None
+    assert enriched_transient.category == EventCategory.KNOWN_PET
+    assert enriched_transient.metadata["sustained_elimination"] is False
+
+    # 2. Ingest event that gatekeeper initially marks as KNOWN_PET
+    event2 = await service.ingest_raw_event(
+        camera_id="cam-backyard",
+        payload=b"dog pet standing",
+    )
+    assert event2.category == EventCategory.KNOWN_PET
+
+    # Multi-frame clip reveals sustained elimination posture across >= 2 frames
+    sustained_frames = [
+        b"dog pet squatting elimination posture",
+        b"dog pet squatting elimination posture",
+        b"dog pet standing",
+    ]
+    enriched_sustained = await service.enrich_event_from_media(event2.id, sustained_frames)
+    assert enriched_sustained is not None
+    assert enriched_sustained.category == EventCategory.PET_ELIMINATION
+    assert enriched_sustained.metadata["sustained_elimination"] is True

@@ -210,3 +210,23 @@ def test_entities_api_endpoints_crud(client: TestClient) -> None:
 
     del_res = client.delete("/api/entities/civic-test-1")
     assert del_res.status_code == 200
+
+
+def test_enrich_event_endpoint(client: TestClient) -> None:
+    """Verify POST /api/events/{event_id}/enrich runs Pass 2 clip enrichment."""
+    sample_frames = [
+        "dog pet squatting elimination lawn",
+        "dog pet squatting elimination lawn",
+    ]
+    response = client.post(
+        "/api/events/event-2/enrich",
+        json={"frames": sample_frames},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "event-2"
+    assert data["category"] == "pet_elimination"
+    assert data["metadata"]["sustained_elimination"] is True
+
+    res_404 = client.post("/api/events/non-existent-event/enrich", json={"frames": []})
+    assert res_404.status_code == 404
