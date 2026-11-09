@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,98 @@ class FFmpegTranscoderAdapter(MediaTranscoderPort):
             pass
         return 10.0
 
+    def detect_hardware_acceleration(self) -> str:
+        """Detect available host hardware acceleration method."""
+        if sys.platform == "darwin":
+            return "videotoolbox"
+
+        device = self.config.hwaccel_device or "/dev/dri/renderD128"
+        if os.path.exists(device) or os.path.exists("/dev/dri"):
+            return "vaapi"
+
+        # Check NVIDIA
+        if os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia"):
+            return "nvenc"
+
+        # Check Raspberry Pi V4L2 M2M
+        if os.path.exists("/dev/video11") or os.path.exists("/dev/video10"):
+            return "v4l2m2m"
+
+        return "none"
+
+    def _build_hwaccel_transcode_command(
+        self, method: str, input_path: str, output_path: str
+    ) -> list[str]:
+        """Build hardware-accelerated transcoding command."""
+        cmd = [self.config.ffmpeg_path, "-y"]
+        if method == "vaapi":
+            device = self.config.hwaccel_device or "/dev/dri/renderD128"
+            cmd.extend(
+                [
+                    "-vaapi_device",
+                    device,
+                    "-i",
+                    input_path,
+                    "-vf",
+                    "format=nv12,hwupload",
+                    "-c:v",
+                    "h264_vaapi",
+                ]
+            )
+        elif method == "qsv":
+            cmd.extend(
+                [
+                    "-i",
+                    input_path,
+                    "-c:v",
+                    "h264_qsv",
+                ]
+            )
+        elif method == "videotoolbox":
+            cmd.extend(
+                [
+                    "-i",
+                    input_path,
+                    "-c:v",
+                    "h264_videotoolbox",
+                ]
+            )
+        elif method == "nvenc":
+            cmd.extend(
+                [
+                    "-i",
+                    input_path,
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p1",
+                ]
+            )
+        elif method == "v4l2m2m":
+            cmd.extend(
+                [
+                    "-i",
+                    input_path,
+                    "-c:v",
+                    "h264_v4l2m2m",
+                ]
+            )
+        else:
+            raise ValueError(f"Unsupported hwaccel method: {method}")
+
+        cmd.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-movflags",
+                "+faststart",
+                output_path,
+            ]
+        )
+        return cmd
+
     async def normalize_mp4(self, input_path: str, output_path: str | None = None) -> str:
         """Normalize or remux video into faststart MP4 container."""
         if output_path is None:
@@ -103,12 +196,39 @@ class FFmpegTranscoderAdapter(MediaTranscoderPort):
                     Path(output_path).touch()
                 return output_path
             logger.warning(
-                "Stream copy remux failed (code %d); falling back to ultrafast transcode: %s",
+                "Stream copy remux failed (code %d); falling back to transcode: %s",
                 code,
                 stderr.decode(errors="replace"),
             )
 
-        # 2. Fallback ultrafast transcode path
+        # 2. Hardware acceleration transcode path
+        method = self.config.hwaccel
+        if method == "auto":
+            method = self.detect_hardware_acceleration()
+
+        if method != "none":
+            try:
+                hw_cmd = self._build_hwaccel_transcode_command(method, input_path, output_path)
+                code, _, stderr = await self._run_command(hw_cmd)
+                if code == 0:
+                    if not Path(output_path).exists():
+                        Path(output_path).touch()
+                    return output_path
+                logger.warning(
+                    "Hardware acceleration '%s' failed (code %d); "
+                    "falling back to software libx264: %s",
+                    method,
+                    code,
+                    stderr.decode(errors="replace"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Hardware acceleration '%s' error (%s); falling back to software libx264",
+                    method,
+                    e,
+                )
+
+        # 3. Fallback ultrafast CPU software transcode path
         fallback_cmd = [
             self.config.ffmpeg_path,
             "-y",

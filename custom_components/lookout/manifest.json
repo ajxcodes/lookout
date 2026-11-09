@@ -1,0 +1,15 @@
+{
+  "domain": "lookout",
+  "name": "Lookout Camera Intelligence",
+  "codeowners": ["@ajxcodes"],
+  "config_flow": true,
+  "documentation": "https://github.com/ajxcodes/lookout",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/ajxcodes/lookout/issues",
+  "requirements": [
+    "httpx>=0.27.0",
+    "voluptuous>=0.11.7"
+  ],
+  "version": "0.3.0"
+}

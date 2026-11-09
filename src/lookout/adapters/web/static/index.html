@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <base href="/">
   <title>Lookout - Smart Camera Intelligence</title>
-  <link rel="stylesheet" href="static/css/tokens.css">
-  <link rel="stylesheet" href="static/css/viewer.css">
-  <script type="module" src="static/js/app.js"></script>
+  <link rel="stylesheet" href="static/css/tokens.css?v=0.3.0">
+  <link rel="stylesheet" href="static/css/viewer.css?v=0.3.0">
+  <script type="module" src="static/js/app.js?v=0.3.0"></script>
 </head>
 <body>
   <!-- Header Bar -->
@@ -20,6 +20,20 @@
     </div>
 
     <div class="header-actions">
+      <div class="view-mode-toggles" style="display:flex;gap:4px;margin-right:8px;">
+        <button class="btn btn-sm active" id="view-grid-btn" type="button" style="font-size:0.75rem;padding:2px 8px;">▦ Grid</button>
+        <button class="btn btn-sm" id="view-focus-btn" type="button" style="font-size:0.75rem;padding:2px 8px;">🔍 Focus</button>
+      </div>
+      <div class="grid-density-controls" id="grid-density-controls" style="display:flex;align-items:center;margin-right:8px;">
+        <label for="grid-density-select" style="font-size:0.75rem;margin-right:4px;">Grid:</label>
+        <select id="grid-density-select" class="select-density" style="padding:2px 6px;font-size:0.75rem;border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
+          <option value="auto">Auto-Fit</option>
+          <option value="1-col">1-Col</option>
+          <option value="2-col">2-Col</option>
+          <option value="3-col">3-Col</option>
+          <option value="4-col">4-Col</option>
+        </select>
+      </div>
       <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
     </div>
   </header>
@@ -34,54 +48,103 @@
   <!-- Camera Switcher Toolbar -->
   <nav class="switcher-bar" id="switcher-container" aria-label="Camera selection"></nav>
 
-  <!-- Main Viewer Grid -->
-  <main class="viewer-main">
-    <!-- Left Stage: Video & Acoustic Visualizer -->
-    <section class="stage-section">
-      <div class="video-container">
-        <!-- Live WebRTC Video -->
-        <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
+  <!-- Main Viewer Grid (Stage on Left, Timeline Drawer on Right) -->
+  <main class="viewer-main" id="viewer-main">
+    <!-- Left Stage: Live Grid or Single Camera Focus Video & Acoustic Visualizer -->
+    <section class="stage-section" id="stage-section">
+      <!-- Multi-Camera Live Grid View (Default Landing in Stage) -->
+      <section class="live-grid-section" id="live-grid-section">
+        <div class="live-grid-container density-auto" id="live-grid-container"></div>
+      </section>
 
-        <!-- Recorded Event Video -->
-        <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
-
-        <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
-        <div class="snapshot-overlay" id="snapshot-overlay">
-          <button class="start-live-btn" id="start-live-btn" type="button">
-            ▶ Start Live Stream
+      <!-- Single Camera Focus Stage -->
+      <div class="focus-stage" id="focus-stage" style="display:none;">
+        <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+          <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
+          <button class="btn btn-sm" id="return-to-live-btn" type="button" style="display:none;font-size:0.75rem;padding:3px 10px;font-weight:600;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);align-items:center;gap:6px;cursor:pointer;">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>
+            Return to Live
           </button>
         </div>
-      </div>
+        <div class="video-container">
+          <!-- Live WebRTC Video -->
+          <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
 
-      <!-- Playback Controls Bar -->
-      <div class="player-controls-bar" id="player-controls">
-        <div class="playback-toggles">
-          <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
-          <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
-          <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
-          <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
-          <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
-        </div>
+          <!-- Recorded Event Video -->
+          <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
 
-        <div>
-          <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
-        </div>
-      </div>
-
-      <!-- Interactive Acoustic Visualizer -->
-      <div class="acoustic-panel">
-        <div class="acoustic-header">
-          <span>Acoustic Frequency Waveform</span>
-          <span>Acoustic Decibel Level</span>
-        </div>
-        <div class="acoustic-canvas-wrap">
-          <canvas id="acoustic-canvas"></canvas>
-        </div>
-        <div class="vu-meter-wrap">
-          <div class="vu-meter">
-            <div class="vu-bar" id="vu-bar"></div>
+          <!-- Dedicated Snapshot Card Container -->
+          <div class="event-snapshot-card" id="event-snapshot-card" style="display:none;">
+            <span class="snapshot-badge">📸 Snapshot</span>
+            <img class="snapshot-card-img" id="snapshot-card-img" alt="Captured snapshot" />
+            <div class="snapshot-card-meta" id="snapshot-card-meta"></div>
           </div>
-          <span class="vu-db-text" id="vu-db-text">-36 dB</span>
+
+          <!-- Live Session Duration Overlay HUD (e.g. 🔴 LIVE 00:01:24) -->
+          <div class="live-duration-badge" id="live-duration-badge" style="display:none;">
+            <span class="live-indicator-dot">🔴</span> LIVE <span class="duration-timer" id="live-duration-timer">00:00:00</span>
+          </div>
+
+          <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
+          <div class="snapshot-overlay" id="snapshot-overlay">
+            <button class="start-live-btn" id="start-live-btn" type="button">
+              ▶ Start Live Stream
+            </button>
+          </div>
+        </div>
+
+        <!-- Playback Controls Bar -->
+        <div class="player-controls-bar" id="player-controls">
+          <div class="playback-toggles" id="video-playback-controls">
+            <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
+            <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
+            <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
+            <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
+            <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
+          </div>
+
+          <div class="snapshot-action-controls" id="snapshot-playback-controls" style="display:none;gap:6px;">
+            <button class="btn btn-primary" id="download-snapshot-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download Snapshot</button>
+            <button class="btn" id="inspect-frame-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">🔍 Inspect Frame</button>
+          </div>
+
+          <div id="video-download-wrap">
+            <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
+          </div>
+        </div>
+
+        <!-- Focus Mode AI Details & Telemetry Card -->
+        <div class="focus-ai-details-card" id="focus-ai-details-card" style="display:none;">
+          <div class="ai-details-header">
+            <div class="ai-badges-group">
+              <span class="ai-model-badge" id="ai-model-badge">Local (moondream)</span>
+              <span class="ai-threat-badge tier-none" id="ai-threat-badge">NONE</span>
+            </div>
+            <div class="ai-metrics-row" id="ai-metrics-row">
+              <span class="metric-item">⏱️ Inference: <span id="metric-inference-ms">--</span>ms</span>
+              <span class="metric-item">🎬 Media: <span id="metric-clip-ms">--</span>ms (Clip) • <span id="metric-gif-ms">--</span>ms (GIF)</span>
+              <span class="metric-item">⚡ Total: <span id="metric-total-ms">--</span>ms</span>
+            </div>
+          </div>
+          <div class="ai-details-chips" id="ai-details-chips"></div>
+          <div class="ai-summary-text" id="ai-summary-text">Select an event from the timeline to view intelligence details.</div>
+        </div>
+
+        <!-- Interactive Acoustic Visualizer -->
+        <div class="acoustic-panel">
+          <div class="acoustic-header">
+            <span>Acoustic Frequency Waveform</span>
+            <span>Acoustic Decibel Level</span>
+          </div>
+          <div class="acoustic-canvas-wrap">
+            <canvas id="acoustic-canvas"></canvas>
+          </div>
+          <div class="vu-meter-wrap">
+            <div class="vu-meter">
+              <div class="vu-bar" id="vu-bar"></div>
+            </div>
+            <span class="vu-db-text" id="vu-db-text">-36 dB</span>
+          </div>
         </div>
       </div>
     </section>
@@ -244,6 +307,50 @@
           </div>
           <div id="storage-action-feedback" style="font-size:0.75rem;margin-top:6px;display:none;"></div>
         </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Edge Hardware Sizing Profiles & Diagnostic Benchmark -->
+        <div class="setting-group" id="hardware-benchmark-group">
+          <label class="setting-label">Hardware Acceleration & Edge Sizing Profiles</label>
+          <p class="setting-desc">Declarative appliance presets for Intel N100, Raspberry Pi 5, HA Green/Yellow, and Apple Silicon with empirical diagnostics.</p>
+
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+            <select class="select-control" id="setting-hardware-profile" style="flex:1;">
+              <option value="intel-n100-mini-pc">Intel N100 / Alder Lake-N Mini PC (VA-API / QSV)</option>
+              <option value="raspberry-pi-5-4gb">Raspberry Pi 5 4GB (V4L2 M2M)</option>
+              <option value="raspberry-pi-5-8gb">Raspberry Pi 5 8GB / AI Kit (Hailo-8 / V4L2 M2M)</option>
+              <option value="ha-green-yellow">Home Assistant Green / Yellow (Low-Power SBC)</option>
+              <option value="apple-silicon-mac">Apple Silicon Mac (VideoToolbox)</option>
+            </select>
+            <button class="btn btn-primary" id="apply-hardware-profile-btn" type="button">Apply Preset</button>
+            <button class="btn" id="run-benchmark-btn" type="button">⚡ Run Benchmark</button>
+          </div>
+          <div id="benchmark-feedback" style="margin-top:10px;font-size:0.75rem;display:none;background:var(--bg-subtle);padding:var(--space-sm);border-radius:var(--radius-sm);border:1px solid var(--border-subtle);"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- High-Resolution Snapshot Lightbox Modal with Pinch & Wheel Zoom -->
+  <div class="modal-backdrop" id="snapshot-lightbox-modal" style="display:none;z-index:9999;" role="dialog" aria-modal="true">
+    <div style="position:relative;width:95vw;height:90vh;max-width:1200px;background:#020617;border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.1);">
+      <div style="padding:10px 16px;background:rgba(15,23,42,0.85);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.1);z-index:10;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-weight:600;font-size:0.875rem;color:#f8fafc;">📸 Snapshot Inspector</span>
+          <span id="lightbox-filename" style="font-size:0.75rem;color:#94a3b8;"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-sm" id="lightbox-zoom-out" type="button" style="padding:3px 8px;">➖</button>
+          <span id="lightbox-zoom-level" style="font-size:0.75rem;font-weight:600;color:#f8fafc;min-width:38px;text-align:center;">1.0x</span>
+          <button class="btn btn-sm" id="lightbox-zoom-in" type="button" style="padding:3px 8px;">➕</button>
+          <button class="btn btn-sm" id="lightbox-reset" type="button" style="padding:3px 8px;">↺ Reset</button>
+          <a class="btn btn-sm" id="lightbox-download" download style="padding:3px 8px;text-decoration:none;">⬇ Save</a>
+          <button class="btn btn-sm" id="lightbox-close-btn" type="button" style="padding:3px 10px;font-weight:700;">✕</button>
+        </div>
+      </div>
+      <div id="lightbox-viewport" style="flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:grab;background:#000;">
+        <img id="lightbox-img" alt="Inspected frame" style="max-width:100%;max-height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none;transform-origin:center center;touch-action:none;" />
       </div>
     </div>
   </div>

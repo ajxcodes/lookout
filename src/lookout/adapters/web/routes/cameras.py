@@ -6,41 +6,52 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
+from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_icon
+
+__all__ = ["TINY_JPEG", "build_camera_card_data", "infer_camera_icon", "router"]
+
 router = APIRouter(tags=["cameras"])
 
-# Minimal valid 1x1 pixel JPEG binary for placeholder/idle snapshot delivery
+# Valid 1x1 pixel baseline JPEG binary (633 bytes) for placeholder/idle snapshot delivery
 TINY_JPEG = (
-    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00"
-    b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
-    b"\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
-    b"\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342"
-    b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4"
-    b"\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00"
-    b"\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b"
-    b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
+    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    b"\xff\xdb\x00C\x00\x05\x03\x04\x04\x04\x03\x05\x04\x04\x04\x05\x05\x05\x06\x07\x0c"
+    b"\x08\x07\x07\x07\x07\x0f\x0b\x0b\t\x0c\x11\x0f\x12\x12\x11\x0f\x11\x11\x13\x16\x1c"
+    b'\x17\x13\x14\x1a\x15\x11\x11\x18!\x18\x1a\x1d\x1d\x1f\x1f\x1f\x13\x17"$"\x1e$\x1c'
+    b"\x1e\x1f\x1e\xff\xdb\x00C\x01\x05\x05\x05\x07\x06\x07\x0e\x08\x08\x0e\x1e\x14\x11\x14"
+    b"\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e"
+    b"\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e"
+    b'\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x03\x01"\x00'
+    b"\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01"
+    b"\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xc4"
+    b"\x00\xb5\x10\x00\x02\x01\x03\x03\x02\x04\x03\x05\x05\x04\x04\x00\x00\x01}\x01\x02"
+    b'\x03\x00\x04\x11\x05\x12!1A\x06\x13Qa\x07"q\x142\x81\x91\xa1\x08#B\xb1\xc1\x15R'
+    b"\xd1\xf0$3br\x82\t\n\x16\x17\x18\x19\x1a%&'()*456789:CDEFGHIJSTUVWXYZcdefghij"
+    b"stuvwxyz\x83\x84\x85\x86\x87\x88\x89\x8a\x92\x93\x94\x95\x96\x97\x98\x99\x9a\xa2"
+    b"\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xc2\xc3\xc4"
+    b"\xc5\xc6\xc7\xc8\xc9\xca\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xe1\xe2\xe3\xe4\xe5"
+    b"\xe6\xe7\xe8\xe9\xea\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xff\xc4\x00\x1f\x01"
+    b"\x00\x03\x01\x01\x01\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x01\x02\x03"
+    b"\x04\x05\x06\x07\x08\t\n\x0b\xff\xc4\x00\xb5\x11\x00\x02\x01\x02\x04\x04\x03\x04"
+    b'\x07\x05\x04\x04\x00\x01\x02w\x00\x01\x02\x03\x11\x04\x05!1\x06\x12AQ\x07aq\x13"'
+    b"2\x81\x08\x14B\x91\xa1\xb1\xc1\t#3R\xf0\x15br\xd1\n\x16$4\xe1%\xf1\x17\x18\x19\x1a"
+    b"&'()*56789:CDEFGHIJSTUVWXYZcdefghijstuvwxyz\x82\x83\x84\x85\x86\x87\x88\x89\x8a"
+    b"\x92\x93\x94\x95\x96\x97\x98\x99\x9a\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xb2\xb3"
+    b"\xb4\xb5\xb6\xb7\xb8\xb9\xba\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xd2\xd3\xd4\xd5"
+    b"\xd6\xd7\xd8\xd9\xda\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xf2\xf3\xf4\xf5\xf6\xf7"
+    b"\xf8\xf9\xfa\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00\xf9^\x8a(\xafH"
+    b"\xe5?\xff\xd9"
 )
 
 
 @router.get("/cameras")
 async def list_cameras(request: Request) -> dict[str, Any]:
-    """Retrieve all configured camera feeds with status and capabilities."""
+    """Retrieve all configured camera feeds with status, icons, and stream badges."""
     config = request.app.state.config
     if config is None or not hasattr(config, "cameras"):
         return {"cameras": []}
 
-    cameras = [
-        {
-            "id": cam.id,
-            "name": cam.name,
-            "stream_url": cam.stream_url,
-            "camera_type": cam.camera_type,
-            "enabled": cam.enabled,
-            "location": cam.location,
-            "sensitivity": cam.sensitivity,
-            "record_duration": cam.record_duration,
-        }
-        for cam in config.cameras
-    ]
+    cameras = [build_camera_card_data(cam) for cam in config.cameras]
     return {"cameras": cameras}
 
 
@@ -53,11 +64,55 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         if camera_id not in cam_ids:
             raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
 
-        # Check for cached motion snapshot on disk
+        # 1. Check for cached motion snapshot on disk
         base_path = Path(config.storage.base_path)
         snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
         if snapshot_file.exists():
             return FileResponse(snapshot_file, media_type="image/jpeg")
+
+        cam_obj = next((c for c in config.cameras if c.id == camera_id), None)
+        card_data = build_camera_card_data(cam_obj) if cam_obj is not None else {}
+        is_on_demand = card_data.get("stream_mode") == "on_demand"
+
+        # 2. Check for latest recorded event snapshot on disk before hitting live stream
+        event_snap_dirs = [
+            base_path / "snapshots" / "events",
+            Path("/snapshots/events"),
+            Path("/tmp/lookout_snapshots"),
+        ]
+        for snap_dir in event_snap_dirs:
+            if snap_dir.is_dir():
+                matches = sorted(snap_dir.glob(f"{camera_id}_*.jpg"))
+                if matches:
+                    return FileResponse(matches[-1], media_type="image/jpeg")
+
+        # 3. Dynamic live frame from go2rtc (only for continuous live_rtc streams)
+        if not is_on_demand:
+            go2rtc_api = "http://127.0.0.1:1984"
+            if hasattr(config, "go2rtc") and config.go2rtc.api_url:
+                go2rtc_api = config.go2rtc.api_url.rstrip("/")
+                if "lookout" in go2rtc_api:
+                    go2rtc_api = "http://127.0.0.1:1984"
+
+            frame_url = f"{go2rtc_api}/api/frame.jpeg?src={camera_id}"
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.get(frame_url)
+                    if (
+                        resp.status_code == 200
+                        and len(resp.content) > 150
+                        and resp.content.startswith(b"\xff\xd8")
+                        and resp.content.endswith(b"\xff\xd9")
+                    ):
+                        return Response(
+                            content=resp.content,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+            except Exception:
+                pass
 
     return Response(content=TINY_JPEG, media_type="image/jpeg")
 

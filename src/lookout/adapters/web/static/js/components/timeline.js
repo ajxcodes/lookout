@@ -2,6 +2,7 @@
  * Chronological timeline cards component.
  */
 import { TelemetryRenderer } from "./telemetry.js";
+import { infer_camera_icon } from "./switcher.js";
 import { resolveUrl } from "../utils/url.js";
 
 export class TimelineList {
@@ -11,6 +12,19 @@ export class TimelineList {
     this.onDeleteEvent = onDeleteEvent;
     this.events = [];
     this.selectedEventId = null;
+    this.cameras = [];
+    this.camerasMap = {};
+  }
+
+  setCameras(cameras) {
+    this.cameras = cameras;
+    this.camerasMap = {};
+    if (cameras && Array.isArray(cameras)) {
+      cameras.forEach((c) => {
+        this.camerasMap[c.id] = c;
+      });
+    }
+    this.render();
   }
 
   setEvents(events) {
@@ -19,8 +33,12 @@ export class TimelineList {
   }
 
   addEvent(eventItem) {
-    // Prepend new event to timeline
-    this.events.unshift(eventItem);
+    const existingIndex = this.events.findIndex((e) => e.id === eventItem.id);
+    if (existingIndex >= 0) {
+      this.events[existingIndex] = eventItem;
+    } else {
+      this.events.unshift(eventItem);
+    }
     this.render();
   }
 
@@ -162,8 +180,13 @@ export class TimelineList {
       const entityBadges = this.getEntityBadges(evt);
 
       const isBookmarked = Boolean(evt.bookmarked || (evt.metadata && evt.metadata.bookmarked));
+      const isSnapshotOnly = !evt.media_uri || (evt.metadata && evt.metadata.media_purged);
+      const mediaTypeBadge = isSnapshotOnly
+        ? '<span class="media-badge media-badge-snapshot">📸 Snapshot</span>'
+        : `<span class="media-badge media-badge-video">▶ ${evt.duration || 10}s</span>`;
+
       let tierBadge = '<span class="tier-badge local">Local</span>';
-      if ((evt.metadata && evt.metadata.media_purged) || !evt.media_uri) {
+      if (evt.metadata && evt.metadata.media_purged) {
         tierBadge = '<span class="tier-badge purged">Purged</span>';
       } else if (
         (evt.metadata && evt.metadata.storage_tier === "archive") ||
@@ -173,11 +196,20 @@ export class TimelineList {
         tierBadge = '<span class="tier-badge archive">Archive (ms)</span>';
       }
 
+      const cam = this.camerasMap ? this.camerasMap[evt.camera_id] : null;
+      const camName = cam ? (cam.name || cam.id) : (evt.camera_name || evt.camera_id || "Camera");
+      const camIcon = (cam && cam.icon) ? cam.icon : infer_camera_icon(camName);
+      const camBadge = `<span class="event-camera-tag">${camIcon} ${camName}</span>`;
+
       card.innerHTML = `
-        <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
+        <div class="thumb-wrap" style="position:relative;">
+          <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
+          ${mediaTypeBadge}
+        </div>
         <div class="event-info">
           <div class="event-header-row">
             ${this.getCategoryPill(evt.category)}
+            ${camBadge}
             ${tierBadge}
             <span class="event-time">${this.formatRelativeTime(evt.timestamp)}</span>
           </div>

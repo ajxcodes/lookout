@@ -120,6 +120,17 @@ async def get_event(event_id: str, request: Request) -> dict[str, Any]:
     repo: EventRepositoryPort = request.app.state.repository
     event = await repo.get_by_id(event_id)
     if event is None:
+        clean_id = event_id.rsplit(".", 1)[0] if "." in event_id else event_id
+        recent = await repo.find(limit=250)
+        for cand in recent:
+            if (
+                cand.id == clean_id
+                or (cand.snapshot_uri and clean_id in cand.snapshot_uri)
+                or (cand.media_uri and clean_id in cand.media_uri)
+            ):
+                event = cand
+                break
+    if event is None:
         raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
     return serialize_event(event)
 

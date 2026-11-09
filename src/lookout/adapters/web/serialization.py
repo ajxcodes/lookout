@@ -53,6 +53,9 @@ def serialize_provenance(prov: InferenceProvenance) -> dict[str, Any]:
 
 def serialize_event(event: CameraEvent) -> dict[str, Any]:
     """Serialize CameraEvent aggregate root to JSON-compatible dictionary."""
+    media_uri = event.media_uri
+    snapshot_uri = event.snapshot_uri or f"/media/{event.camera_id}/{event.id}.jpg"
+
     return {
         "id": event.id,
         "camera_id": event.camera_id,
@@ -64,8 +67,10 @@ def serialize_event(event: CameraEvent) -> dict[str, Any]:
         "provenance": [serialize_provenance(p) for p in event.provenance],
         "resident_id": event.resident_id,
         "pet_id": event.pet_id,
-        "media_uri": event.media_uri,
-        "snapshot_uri": event.snapshot_uri,
+        "media_uri": media_uri,
+        "clip_url": media_uri,
+        "snapshot_uri": snapshot_uri,
+        "snapshot_url": snapshot_uri,
         "metadata": event.metadata,
         "zone_id": event.zone_id,
         "vehicle_id": event.vehicle_id,

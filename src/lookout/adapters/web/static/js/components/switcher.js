@@ -1,13 +1,36 @@
 /**
- * Camera switcher toolbar component.
+ * Rich Camera Switcher component featuring provider and stream badges.
  */
+
+export function infer_camera_icon(nameOrLocation) {
+  if (!nameOrLocation) return "📹";
+  const s = nameOrLocation.toLowerCase();
+  if (s.includes("door") || s.includes("front") || s.includes("entry")) return "🚪";
+  if (s.includes("backyard") || s.includes("yard") || s.includes("garden")) return "🌲";
+  if (s.includes("crate") || s.includes("kennel") || s.includes("mochi crate")) return "🐾";
+  if (s.includes("pan") || s.includes("dog") || s.includes("cat")) return "🐶";
+  if (s.includes("office") || s.includes("desk") || s.includes("work")) return "💼";
+  if (s.includes("driveway") || s.includes("garage") || s.includes("car")) return "🚗";
+  if (s.includes("living") || s.includes("couch") || s.includes("lounge")) return "🛋️";
+  if (s.includes("porch") || s.includes("patio") || s.includes("deck")) return "🏡";
+  return "📹";
+}
+
 export class CameraSwitcher {
-  constructor({ container, onSelectCamera }) {
+  constructor({ container, onSelectCamera, onSelectionChange }) {
     this.container = container;
     this.onSelectCamera = onSelectCamera;
+    this.onSelectionChange = onSelectionChange;
     this.cameras = [];
     this.activeCameraId = null;
+    this.selectedCameraIds = new Set();
+    this.mode = "grid";
     this.eventCounts = {};
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+    this.render();
   }
 
   setCameras(cameras) {
@@ -15,7 +38,19 @@ export class CameraSwitcher {
     if (cameras.length > 0 && !this.activeCameraId) {
       this.activeCameraId = cameras[0].id;
     }
+    if (this.selectedCameraIds.size === 0) {
+      this.cameras.forEach((c) => this.selectedCameraIds.add(c.id));
+    }
     this.render();
+  }
+
+  setSelectedCameraIds(ids) {
+    this.selectedCameraIds = new Set(ids);
+    this.render();
+  }
+
+  getSelectedCameraIds() {
+    return Array.from(this.selectedCameraIds);
   }
 
   setEventCounts(counts) {
@@ -42,13 +77,40 @@ export class CameraSwitcher {
     }
 
     this.cameras.forEach((cam) => {
+      const isActive =
+        this.mode === "grid"
+          ? this.selectedCameraIds.has(cam.id)
+          : cam.id === this.activeCameraId;
+
       const tab = document.createElement("button");
-      tab.className = `cam-tab camera-chip ${cam.id === this.activeCameraId ? "active" : ""}`;
+      tab.className = `cam-tab camera-chip ${isActive ? "active" : ""}`;
       tab.dataset.cameraId = cam.id;
 
+      const icon = cam.icon || infer_camera_icon(cam.name || cam.location);
+      const provider = (cam.provider_badge || (cam.camera_type === "ring" ? "ring" : (cam.camera_type === "wyze" ? "wyze" : "generic"))).toLowerCase();
+      const streamMode = cam.stream_mode || (provider === "ring" ? "on_demand" : "live_rtc");
+
+      const iconSpan = document.createElement("span");
+      iconSpan.className = "cam-icon";
+      iconSpan.textContent = icon;
+      tab.appendChild(iconSpan);
+
       const nameSpan = document.createElement("span");
+      nameSpan.className = "cam-name";
       nameSpan.textContent = cam.name || cam.id;
       tab.appendChild(nameSpan);
+
+      // Provider badge (Ring cyan, Wyze emerald, Generic slate)
+      const provBadge = document.createElement("span");
+      provBadge.className = `badge-provider ${provider}`;
+      provBadge.textContent = provider.charAt(0).toUpperCase() + provider.slice(1);
+      tab.appendChild(provBadge);
+
+      // Stream delivery mode badge (On-Demand amber dot vs Live RTC green dot)
+      const streamBadge = document.createElement("span");
+      streamBadge.className = `badge-stream ${streamMode}`;
+      streamBadge.textContent = streamMode === "live_rtc" ? "● Live RTC" : "● On-Demand";
+      tab.appendChild(streamBadge);
 
       const count = this.eventCounts[cam.id] || 0;
       if (count > 0) {
@@ -66,10 +128,22 @@ export class CameraSwitcher {
       }
 
       tab.addEventListener("click", () => {
-        this.activeCameraId = cam.id;
-        this.render();
-        if (this.onSelectCamera) {
-          this.onSelectCamera(cam);
+        if (this.mode === "grid") {
+          if (this.selectedCameraIds.has(cam.id)) {
+            this.selectedCameraIds.delete(cam.id);
+          } else {
+            this.selectedCameraIds.add(cam.id);
+          }
+          this.render();
+          if (this.onSelectionChange) {
+            this.onSelectionChange(Array.from(this.selectedCameraIds));
+          }
+        } else {
+          this.activeCameraId = cam.id;
+          this.render();
+          if (this.onSelectCamera) {
+            this.onSelectCamera(cam);
+          }
         }
       });
 

@@ -115,3 +115,81 @@ async def test_event_bookmark_endpoint(app_and_client) -> None:
     saved = await repo.get_by_id("evt-bm-test")
     assert saved is not None
     assert saved.bookmarked is True
+
+
+def test_create_app_repository_defaults(tmp_path: Path) -> None:
+    """Verify create_app defaults to SqliteEventRepository when configured."""
+    from unittest.mock import patch
+
+    from lookout.adapters.memory import InMemoryEventRepository
+
+    # 1. Configured SQLite database
+    db_file = tmp_path / "lookout_test.db"
+    config = LookoutConfig(
+        system_name="Test Lookout",
+        storage=StorageConfig(
+            base_path=str(tmp_path / "media"),
+            database_path=str(db_file),
+        ),
+    )
+    app = create_app(config=config)
+    assert isinstance(app.state.repository, SqliteEventRepository)
+    assert app.state.repository.manager.db_path == str(db_file)
+
+    # 2. SQLite initialization failure gracefully falls back to InMemoryEventRepository
+    with patch(
+        "lookout.adapters.web.app.SqliteEventRepository",
+        side_effect=RuntimeError("Simulated DB init error"),
+    ):
+        fallback_app = create_app(config=config)
+        assert isinstance(fallback_app.state.repository, InMemoryEventRepository)
+
+    # 3. Unconfigured / no storage database path falls back to InMemoryEventRepository
+    no_db_config = LookoutConfig(
+        system_name="Test Lookout",
+        storage=StorageConfig(
+            base_path=str(tmp_path / "media"),
+            database_path="",
+        ),
+    )
+    inmem_app = create_app(config=no_db_config)
+    assert isinstance(inmem_app.state.repository, InMemoryEventRepository)
+
+
+def test_serve_media_multi_directory_fallback_resolution(tmp_path: Path) -> None:
+    """Verify serve_media resolves clips via media_dir/events/clean_path and clean_path.name."""
+    local_media = tmp_path / "media"
+    (local_media / "events").mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "test.db"
+
+    config = LookoutConfig(
+        system_name="Test Fallback",
+        storage=StorageConfig(
+            base_path=str(local_media),
+            database_path=str(db_path),
+        ),
+    )
+    app = create_app(config=config)
+    client = TestClient(app)
+
+    # Place event clip inside media_dir / "events" / "event-123.mp4"
+    clip_path = local_media / "events" / "event-123.mp4"
+    clip_path.write_bytes(b"event-123-video-bytes")
+
+    # Request via /media/events/event-123.mp4 (matches media_dir / events / clean_path.name)
+    res1 = client.get("/media/events/event-123.mp4")
+    assert res1.status_code == 200
+    assert res1.content == b"event-123-video-bytes"
+
+    # Request via /media/event-123.mp4 (matches media_dir / events / clean_path or clean_path.name)
+    res2 = client.get("/media/event-123.mp4")
+    assert res2.status_code == 200
+    assert res2.content == b"event-123-video-bytes"
+
+    # Request with invalid traversal path
+    bad_res = client.get("/media/%2e%2e/etc/passwd")
+    assert bad_res.status_code == 400
+
+    # Request for non-existent file
+    missing_res = client.get("/media/non_existent.mp4")
+    assert missing_res.status_code == 404
