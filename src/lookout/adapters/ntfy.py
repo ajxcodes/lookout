@@ -67,6 +67,7 @@ class NtfyDispatcher(NotificationPort):
         event_base_url: str | None = None,
         app_base_url: str | None = None,
         media_base_url: str | None = None,
+        use_companion_app: bool = False,
         client: httpx.AsyncClient | None = None,
         http_client: httpx.AsyncClient | None = None,
         async_client: httpx.AsyncClient | None = None,
@@ -166,6 +167,7 @@ class NtfyDispatcher(NotificationPort):
         self.media_base_url = str(
             media_base_url or os.environ.get("LOOKOUT_BASE_URL") or ""
         ).rstrip("/")
+        self.use_companion_app = bool(use_companion_app or kwargs.pop("use_companion_app", False))
         self.url = self.topic_url
         self.topic = topic if topic is not None else (channel or name or target or destination)
         self.server = self.server_url
@@ -323,23 +325,49 @@ class NtfyDispatcher(NotificationPort):
             if filename:
                 headers["Filename"] = filename
 
-        base_clean = self.deep_link_base_url.rstrip("/")
-        if "?" in self.deep_link_base_url:
-            sep = "&" if "?" in self.deep_link_base_url else "?"
-            event_url = (
-                f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&event_id={event.id}"
+        if self.use_companion_app:
+            ha_path = (
+                "cameras/events"
+                if "/cameras/events" in self.deep_link_base_url
+                else "lookout/viewer"
             )
-            stream_url = f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&live=true"
-        elif base_clean.endswith(("/lookout", "/lookout/viewer", "/cameras/events")):
-            # Home Assistant panel_iframe / Lovelace view path
-            event_url = f"{self.deep_link_base_url}?camera_id={event.camera_id}&event_id={event.id}"
-            stream_url = f"{self.deep_link_base_url}?camera_id={event.camera_id}&live=true"
+            ha_app_event = f"homeassistant://navigate/{ha_path}?camera_id={event.camera_id}&event_id={event.id}"
+            ha_app_live = (
+                f"homeassistant://navigate/{ha_path}?camera_id={event.camera_id}&live=true"
+            )
+            browser_base = self.media_base_url or self.deep_link_base_url.rstrip("/")
+            browser_url = (
+                f"{browser_base}/?camera_id={event.camera_id}&event_id={event.id}"
+                if self.media_base_url
+                else f"{self.deep_link_base_url}?camera_id={event.camera_id}&event_id={event.id}"
+            )
+            actions = (
+                f"view, View in App, {ha_app_event}; "
+                f"view, Live Stream, {ha_app_live}; "
+                f"view, Web Browser, {browser_url}"
+            )
+            headers["Actions"] = actions
+            headers["Click"] = ha_app_event
         else:
-            event_url = f"{self.deep_link_base_url}/events/{event.id}"
-            stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
-        actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
-        headers["Actions"] = actions
-        headers["Click"] = event_url
+            base_clean = self.deep_link_base_url.rstrip("/")
+            if "?" in self.deep_link_base_url:
+                sep = "&" if "?" in self.deep_link_base_url else "?"
+                event_url = (
+                    f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&event_id={event.id}"
+                )
+                stream_url = f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&live=true"
+            elif base_clean.endswith(("/lookout", "/lookout/viewer", "/cameras/events")):
+                # Home Assistant panel_iframe / Lovelace view path
+                event_url = (
+                    f"{self.deep_link_base_url}?camera_id={event.camera_id}&event_id={event.id}"
+                )
+                stream_url = f"{self.deep_link_base_url}?camera_id={event.camera_id}&live=true"
+            else:
+                event_url = f"{self.deep_link_base_url}/events/{event.id}"
+                stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
+            actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
+            headers["Actions"] = actions
+            headers["Click"] = event_url
 
         try:
             client = self._get_client()

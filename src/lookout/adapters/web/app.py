@@ -190,6 +190,7 @@ def _build_notification(
         destination=target.destination,
         deep_link_base_url=deep_base,
         media_base_url=public_url or None,
+        use_companion_app=bool(ha_url),
     )
     return dispatcher, target.min_threat_level, "default"
 

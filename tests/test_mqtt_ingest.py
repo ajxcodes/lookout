@@ -135,6 +135,31 @@ async def test_ntfy_uses_absolute_attach_and_ha_panel_links() -> None:
     assert expected in captured["actions"]
 
 
+async def test_ntfy_companion_app_deep_links() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.headers)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    dispatcher = NtfyDispatcher(
+        destination="http://192.168.1.3:8089/cameras",
+        deep_link_base_url="https://ha.example/lookout/viewer",
+        media_base_url="https://lookout.example",
+        use_companion_app=True,
+        client=client,
+    )
+    ok = await dispatcher.send_notification(_event("front_door"), target="default")
+
+    assert ok is True
+    app_link = "homeassistant://navigate/lookout/viewer?camera_id=front_door&event_id=evt-1"
+    assert captured["click"] == app_link
+    assert app_link in captured["actions"]
+    assert "https://lookout.example/?camera_id=front_door&event_id=evt-1" in captured["actions"]
+    assert "view, Live Stream" in captured["actions"]
+
+
 @pytest.mark.parametrize("flag", [True, False])
 def test_mqtt_defaults(flag: bool) -> None:
     assert LookoutConfig().mqtt.enabled is False

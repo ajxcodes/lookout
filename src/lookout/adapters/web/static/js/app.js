@@ -241,6 +241,8 @@ class LookoutApp {
     window.addEventListener("message", (e) => {
       if (e.data && e.data.type === "lookout:deep-link" && typeof e.data.search === "string") {
         this.checkDeepLink(e.data.search);
+      } else if (e.data && e.data.type === "ha-set-camera" && e.data.camera) {
+        this.checkDeepLink(`?camera_id=${encodeURIComponent(e.data.camera)}`);
       }
     });
   }
@@ -460,11 +462,21 @@ class LookoutApp {
 
   checkDeepLink(customSearch = null) {
     let search = customSearch !== null ? customSearch : window.location.search;
+    if (!search && window.location.hash && window.location.hash.includes("?")) {
+      search = window.location.hash.slice(window.location.hash.indexOf("?"));
+    }
     if (!search) {
       try {
         if (window.parent && window.parent !== window && window.parent.location.search) {
           search = window.parent.location.search;
         }
+      } catch (_) {}
+    }
+
+    // If embedded in an iframe and no query found, request deep link from parent window
+    if (!search && window.self !== window.top) {
+      try {
+        window.parent.postMessage({ type: "lookout:request-deep-link" }, "*");
       } catch (_) {}
     }
 
@@ -489,6 +501,10 @@ class LookoutApp {
           .then((r) => (r.ok ? r.json() : null))
           .then((ev) => {
             if (ev) {
+              if (!this.events.some((e) => e.id === ev.id)) {
+                this.events.unshift(ev);
+                this.timeline.setEvents(this.events);
+              }
               this.playEvent(ev);
             } else if (targetCamId) {
               const cam = this.cameras.find((c) => c.id === targetCamId);

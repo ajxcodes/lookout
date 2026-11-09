@@ -54,8 +54,6 @@ def serialize_provenance(prov: InferenceProvenance) -> dict[str, Any]:
 def serialize_event(event: CameraEvent) -> dict[str, Any]:
     """Serialize CameraEvent aggregate root to JSON-compatible dictionary."""
     media_uri = event.media_uri
-    if not media_uri and not (event.metadata and event.metadata.get("media_purged")):
-        media_uri = f"/media/{event.camera_id}/{event.id}.mp4"
     snapshot_uri = event.snapshot_uri or f"/media/{event.camera_id}/{event.id}.jpg"
 
     return {

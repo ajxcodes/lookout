@@ -114,12 +114,18 @@ export class EventPlayer {
     this.updateAiDetailsCard(eventItem);
 
     const isPurged = Boolean(eventItem.metadata && eventItem.metadata.media_purged);
-    const videoUrl = isPurged
-      ? null
-      : (eventItem.media_uri ||
+    const hasExplicitVideo = Boolean(
+      eventItem.media_uri ||
+      eventItem.clip_url ||
+      eventItem.video_url ||
+      (eventItem.media_type === "video" && `/media/events/${eventItem.id}.mp4`)
+    );
+    const videoUrl = (!isPurged && hasExplicitVideo)
+      ? (eventItem.media_uri ||
          eventItem.clip_url ||
          eventItem.video_url ||
-         `/media/events/${eventItem.id}.mp4`);
+         `/media/events/${eventItem.id}.mp4`)
+      : null;
 
     if (!videoUrl || isPurged) {
       this.renderSnapshotCard(eventItem);
