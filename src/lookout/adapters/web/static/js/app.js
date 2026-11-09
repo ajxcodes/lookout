@@ -449,7 +449,14 @@ class LookoutApp {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function initApp() {
   const app = new LookoutApp();
   app.start();
-});
+  window.lookoutApp = app;
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initApp);
+} else {
+  initApp();
+}

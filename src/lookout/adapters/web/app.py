@@ -319,8 +319,19 @@ def create_app(
     app.include_router(storage_router, prefix="/api")
     app.include_router(system_router, prefix="/api")
 
-    # Static assets
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    # Static assets with no-cache revalidation
+    class NoCacheStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope: Any) -> Response:
+            response = await super().get_response(path, scope)
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
+    app.mount("/static", NoCacheStaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """Return 204 No Content for favicon requests to prevent console 404 noise."""
+        return Response(status_code=204)
 
     # Transparent multi-tier media stream resolver
     @app.api_route("/media/{file_path:path}", methods=["GET", "HEAD"])

@@ -2,7 +2,25 @@
  * Multi-camera Live Grid View component with density selector and lifecycle governance.
  */
 import { infer_camera_icon } from "./switcher.js";
-import { resolveUrl, resolveWsUrl } from "../utils/url.js";
+import { resolveUrl } from "../utils/url.js";
+
+function resolveWsUrl(path) {
+  if (!path) return path;
+  if (path.startsWith("ws://") || path.startsWith("wss://")) {
+    return path;
+  }
+  const resolved = resolveUrl(path);
+  const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (resolved.startsWith("http://")) {
+    return "ws://" + resolved.slice("http://".length);
+  }
+  if (resolved.startsWith("https://")) {
+    return "wss://" + resolved.slice("https://".length);
+  }
+  const host = window.location.host;
+  const clean = resolved.startsWith("/") ? resolved : "/" + resolved;
+  return `${wsProto}//${host}${clean}`;
+}
 
 export class LiveGrid {
   constructor({ container, densitySelector, onFocusCamera }) {
