@@ -66,12 +66,25 @@ def test_docker_compose_sidecar_validity() -> None:
 
 
 def test_docker_compose_sidecar_env_files() -> None:
-    """TR-16: Verify sidecar compose configures env_file mounts for wyze-bridge and ring-mqtt."""
+    """TR-16: Verify sidecar compose configures optional env_file mounts
+    for wyze-bridge and ring-mqtt.
+    """
     sidecar_path = Path("docker-compose.sidecar.yml")
     assert sidecar_path.is_file()
     with sidecar_path.open("r", encoding="utf-8") as f:
         sidecar_data = yaml.safe_load(f)
-    assert (
-        "env_file" in sidecar_data["services"]["wyze-bridge"]
-        and "env_file" in sidecar_data["services"]["ring-mqtt"]
+    wyze_env = sidecar_data["services"]["wyze-bridge"].get("env_file", [])
+    ring_env = sidecar_data["services"]["ring-mqtt"].get("env_file", [])
+
+    assert any(
+        isinstance(item, dict)
+        and "./data/sidecars/wyze-bridge.env" in item.get("path", "")
+        and item.get("required") is False
+        for item in wyze_env
+    )
+    assert any(
+        isinstance(item, dict)
+        and "./data/sidecars/ring-mqtt.env" in item.get("path", "")
+        and item.get("required") is False
+        for item in ring_env
     )

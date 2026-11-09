@@ -45,7 +45,8 @@ services:
       - NET_ADMIN
       - NET_RAW
     env_file:
-      - ./data/sidecars/wyze-bridge.env
+      - path: ./data/sidecars/wyze-bridge.env
+        required: false
     environment:
       - ON_DEMAND=True
       - WB_IP=0.0.0.0
@@ -57,7 +58,8 @@ services:
     container_name: ring-mqtt
     restart: unless-stopped
     env_file:
-      - ./data/sidecars/ring-mqtt.env
+      - path: ./data/sidecars/ring-mqtt.env
+        required: false
     environment:
       - MQTTHOST=localhost
       - MQTTPORT=1883
