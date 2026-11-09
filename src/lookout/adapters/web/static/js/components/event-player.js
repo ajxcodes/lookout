@@ -69,10 +69,12 @@ export class EventPlayer {
 
       if (this.snapshotImg) {
         const rawThumb =
-          eventItem.snapshot_uri ||
           eventItem.snapshot_url ||
+          eventItem.snapshot_uri ||
           eventItem.gif_url ||
-          `/media/${eventItem.camera_id}/${eventItem.id}.jpg`;
+          (eventItem.camera_id
+            ? `/media/${eventItem.camera_id}/${eventItem.id}.jpg`
+            : `/media/events/${eventItem.id}.jpg`);
         this.snapshotImg.src = resolveUrl(rawThumb);
       }
 
@@ -108,10 +110,15 @@ export class EventPlayer {
   loadEvent(eventItem) {
     this.currentEvent = eventItem;
 
-    const videoUrl = eventItem.media_uri || eventItem.clip_url || eventItem.video_url;
-    const isSnapshotOnly = !videoUrl || (eventItem.metadata && eventItem.metadata.media_purged);
+    const isPurged = Boolean(eventItem.metadata && eventItem.metadata.media_purged);
+    const videoUrl = isPurged
+      ? null
+      : (eventItem.media_uri ||
+         eventItem.clip_url ||
+         eventItem.video_url ||
+         `/media/events/${eventItem.id}.mp4`);
 
-    if (isSnapshotOnly) {
+    if (!videoUrl || isPurged) {
       this.renderSnapshotCard(eventItem);
       return;
     }
@@ -134,13 +141,16 @@ export class EventPlayer {
     if (!this.video) return;
     this.video.style.display = "block";
 
-    const posterUrl = eventItem.snapshot_uri || eventItem.snapshot_url || eventItem.gif_url || "";
+    const posterUrl =
+      eventItem.snapshot_url ||
+      eventItem.snapshot_uri ||
+      eventItem.gif_url ||
+      "";
     if (posterUrl) {
       this.video.poster = resolveUrl(posterUrl);
     }
 
-    const rawUrl = videoUrl || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
-    this.video.src = resolveUrl(rawUrl);
+    this.video.src = resolveUrl(videoUrl);
     this.video.playbackRate = this.currentSpeed;
     this.video.loop = this.isLooping;
 
@@ -188,7 +198,13 @@ export class EventPlayer {
 
   downloadSnapshot() {
     if (!this.currentEvent) return;
-    const rawThumb = this.currentEvent.snapshot_uri || `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`;
+    const rawThumb =
+      this.currentEvent.snapshot_url ||
+      this.currentEvent.snapshot_uri ||
+      this.currentEvent.gif_url ||
+      (this.currentEvent.camera_id
+        ? `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`
+        : `/media/events/${this.currentEvent.id}.jpg`);
     const a = document.createElement("a");
     a.href = resolveUrl(rawThumb);
     a.download = `${this.currentEvent.camera_id}_${this.currentEvent.id}_snapshot.jpg`;
@@ -199,7 +215,13 @@ export class EventPlayer {
 
   inspectFrame() {
     if (!this.currentEvent) return;
-    const rawThumb = this.currentEvent.snapshot_uri || `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`;
+    const rawThumb =
+      this.currentEvent.snapshot_url ||
+      this.currentEvent.snapshot_uri ||
+      this.currentEvent.gif_url ||
+      (this.currentEvent.camera_id
+        ? `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`
+        : `/media/events/${this.currentEvent.id}.jpg`);
     window.open(resolveUrl(rawThumb), "_blank");
   }
 }

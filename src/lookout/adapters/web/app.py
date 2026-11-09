@@ -22,6 +22,7 @@ from lookout.adapters.light_ml import (
 )
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
+from lookout.adapters.sqlite.repository import SqliteEventRepository
 from lookout.adapters.storage_service import StorageService
 from lookout.adapters.web.broadcast import SSEBroadcastHub
 from lookout.adapters.web.routes import (
@@ -121,9 +122,26 @@ def create_app(
             )
             is_configured = False
 
-    active_repo: EventRepositoryPort = (
-        repository if repository is not None else InMemoryEventRepository()
-    )
+    active_repo: EventRepositoryPort
+    if repository is not None:
+        active_repo = repository
+    elif (
+        active_config is not None
+        and hasattr(active_config, "storage")
+        and active_config.storage.database_path
+    ):
+        try:
+            active_repo = SqliteEventRepository(db_path=active_config.storage.database_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize SqliteEventRepository at %s: %s; "
+                "falling back to in-memory repository",
+                active_config.storage.database_path,
+                exc,
+            )
+            active_repo = InMemoryEventRepository()
+    else:
+        active_repo = InMemoryEventRepository()
     active_vision: CascadeVisionAdapter = (
         vision_adapter
         if vision_adapter is not None
@@ -235,21 +253,45 @@ def create_app(
             return JSONResponse(status_code=400, content={"error": "Invalid file path"})
 
         # 1. Local hot tier
-        local_target = (media_dir / clean_path).resolve()
-        if not local_target.is_file() and (media_dir / "media" / clean_path).is_file():
-            local_target = (media_dir / "media" / clean_path).resolve()
-        if local_target.is_file():
-            return FileResponse(local_target, headers={"Accept-Ranges": "bytes"})
+        candidate_paths: list[Path] = [
+            media_dir / clean_path,
+            media_dir / "media" / clean_path,
+            media_dir / "events" / clean_path,
+            media_dir / "events" / clean_path.name,
+        ]
 
         # 2. Warm archive tier
         cfg = getattr(app.state, "config", None)
         if cfg and hasattr(cfg, "storage") and cfg.storage.archive_path:
             archive_base = Path(cfg.storage.archive_path).resolve()
-            archive_target = (archive_base / clean_path).resolve()
-            if not archive_target.is_file() and (archive_base / "media" / clean_path).is_file():
-                archive_target = (archive_base / "media" / clean_path).resolve()
-            if archive_target.is_file():
-                return FileResponse(archive_target, headers={"Accept-Ranges": "bytes"})
+            candidate_paths.extend(
+                [
+                    archive_base / clean_path,
+                    archive_base / "media" / clean_path,
+                    archive_base / "events" / clean_path,
+                    archive_base / "events" / clean_path.name,
+                ]
+            )
+
+        # 3. Container mount fallbacks
+        candidate_paths.extend(
+            [
+                Path("/media") / clean_path,
+                Path("/media/events") / clean_path,
+                Path("/media/events") / clean_path.name,
+                Path("/snapshots") / clean_path,
+                Path("/snapshots/events") / clean_path.name,
+                Path("/snapshots") / clean_path.name,
+            ]
+        )
+
+        for candidate in candidate_paths:
+            try:
+                resolved = candidate.resolve()
+                if resolved.is_file():
+                    return FileResponse(resolved, headers={"Accept-Ranges": "bytes"})
+            except (OSError, PermissionError):
+                continue
 
         return JSONResponse(
             status_code=404,
