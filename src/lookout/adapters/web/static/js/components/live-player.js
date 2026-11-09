@@ -1,7 +1,7 @@
 /**
  * Resilient, cross-browser WebRTC, MSE, and Snapshot Live Player component.
  */
-import { resolveUrl } from "../utils/url.js";
+import { resolveUrl, resolveWsUrl } from "../utils/url.js";
 
 export class LivePlayer {
   constructor({ videoElement, overlayElement, onLiveStateChange }) {
@@ -119,10 +119,8 @@ export class LivePlayer {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Determine WebSocket protocol and endpoint
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsHost = window.location.host;
-      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?src=${encodeURIComponent(this.activeCamera.id)}`;
+      // Determine WebSocket endpoint
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(this.activeCamera.id)}`);
 
       await new Promise((resolve, reject) => {
         const ws = new WebSocket(wsUrl);

@@ -354,6 +354,8 @@ def create_app(
         # 3. Container mount fallbacks
         candidate_paths.extend(
             [
+                media_dir / "snapshots" / "events" / clean_path.name,
+                Path("/tmp/lookout_snapshots") / clean_path.name,
                 Path("/media") / clean_path,
                 Path("/media/events") / clean_path,
                 Path("/media/events") / clean_path.name,
@@ -370,6 +372,54 @@ def create_app(
                     return FileResponse(resolved, headers={"Accept-Ranges": "bytes"})
             except (OSError, PermissionError):
                 continue
+
+        # If .jpg requested and not found, extract thumbnail from matching .mp4 if available
+        if clean_path.suffix.lower() in (".jpg", ".jpeg"):
+            cache_dirs = [
+                media_dir / "snapshots" / "events",
+                Path("/tmp/lookout_snapshots"),
+            ]
+            for candidate in candidate_paths:
+                mp4_cand = candidate.with_suffix(".mp4")
+                try:
+                    if mp4_cand.resolve().is_file():
+                        import subprocess
+
+                        target_jpg: Path | None = None
+                        for c_dir in cache_dirs:
+                            try:
+                                c_dir.mkdir(parents=True, exist_ok=True)
+                                target_candidate = c_dir / f"{clean_path.stem}.jpg"
+                                if target_candidate.is_file():
+                                    return FileResponse(target_candidate, media_type="image/jpeg")
+                                target_jpg = target_candidate
+                                break
+                            except Exception:
+                                continue
+
+                        if target_jpg is not None:
+                            subprocess.run(
+                                [
+                                    "ffmpeg",
+                                    "-y",
+                                    "-ss",
+                                    "00:00:00.500",
+                                    "-i",
+                                    str(mp4_cand),
+                                    "-frames:v",
+                                    "1",
+                                    "-q:v",
+                                    "2",
+                                    str(target_jpg),
+                                ],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=6.0,
+                            )
+                            if target_jpg.is_file():
+                                return FileResponse(target_jpg, media_type="image/jpeg")
+                except Exception:
+                    continue
 
         return JSONResponse(
             status_code=404,
@@ -478,6 +528,13 @@ def create_app(
             content = index_file.read_text(encoding="utf-8")
             return HTMLResponse(_inject_base_href(content, ingress_path))
         return HTMLResponse("<!DOCTYPE html><html><body><h1>Lookout Web Viewer</h1></body></html>")
+
+    # Deep-linked viewer entrypoints (NTFY action buttons & Home Assistant links)
+    @app.get("/events/{event_id}", include_in_schema=False)
+    @app.get("/cameras/{camera_id}/live", include_in_schema=False)
+    async def deep_link_viewer(request: Request) -> Response:
+        """Serve the viewer SPA for deep-linked event or camera views."""
+        return await root_view(request)
 
     # Setup wizard entrypoint
     @app.get("/setup", include_in_schema=False)

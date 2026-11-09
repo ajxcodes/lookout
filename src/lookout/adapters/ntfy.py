@@ -312,8 +312,17 @@ class NtfyDispatcher(NotificationPort):
             if filename:
                 headers["Filename"] = filename
 
-        event_url = f"{self.deep_link_base_url}/events/{event.id}"
-        stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
+        if "?" in self.deep_link_base_url:
+            sep = "&" if "?" in self.deep_link_base_url else "?"
+            event_url = f"{self.deep_link_base_url}{sep}event_id={event.id}"
+            stream_url = f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&live=true"
+        elif self.deep_link_base_url.rstrip("/").endswith("/lookout"):
+            # Home Assistant panel_iframe path
+            event_url = f"{self.deep_link_base_url}?event_id={event.id}"
+            stream_url = f"{self.deep_link_base_url}?camera_id={event.camera_id}&live=true"
+        else:
+            event_url = f"{self.deep_link_base_url}/events/{event.id}"
+            stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
         actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
         headers["Actions"] = actions
 

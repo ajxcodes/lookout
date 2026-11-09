@@ -45,11 +45,33 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         if camera_id not in cam_ids:
             raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
 
-        # Check for cached motion snapshot on disk
+        # 1. Check for cached motion snapshot on disk
         base_path = Path(config.storage.base_path)
         snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
         if snapshot_file.exists():
             return FileResponse(snapshot_file, media_type="image/jpeg")
+
+        # 2. Dynamic live frame from go2rtc
+        go2rtc_api = "http://127.0.0.1:1984"
+        if hasattr(config, "go2rtc") and config.go2rtc.api_url:
+            go2rtc_api = config.go2rtc.api_url.rstrip("/")
+            if "lookout" in go2rtc_api:
+                go2rtc_api = "http://127.0.0.1:1984"
+
+        frame_url = f"{go2rtc_api}/api/frame.jpeg?src={camera_id}"
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(frame_url)
+                if resp.status_code == 200 and len(resp.content) > 150:
+                    return Response(
+                        content=resp.content,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                    )
+        except Exception:
+            pass
 
     return Response(content=TINY_JPEG, media_type="image/jpeg")
 

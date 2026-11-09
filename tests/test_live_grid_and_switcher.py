@@ -65,3 +65,40 @@ def test_live_grid_snapshot_fallback_resiliency() -> None:
     assert "restoreSnapshotFallback" in live_grid_source
     assert "onconnectionstatechange" in live_grid_source
     assert "tile-overlay" in live_grid_source
+
+
+def test_camera_selection_grid_focus_and_empty_events() -> None:
+    app_js = Path("src/lookout/adapters/web/static/js/app.js").read_text(encoding="utf-8")
+    sw_path = Path("src/lookout/adapters/web/static/js/components/switcher.js")
+    switcher_js = sw_path.read_text(encoding="utf-8")
+    grid_path = Path("src/lookout/adapters/web/static/js/components/live-grid.js")
+    live_grid_js = grid_path.read_text(encoding="utf-8")
+
+    assert "getSelectedCameraIds" in switcher_js
+    assert "cameraIds.length === 1" in app_js
+    assert "switchToFocus" in app_js
+    assert "selectedIds.length === 0" in app_js
+    assert "events = []" in app_js
+    assert "checkDeepLink" in app_js
+    assert "targetEventId" in app_js
+    assert "No camera feeds selected in Live Grid" in live_grid_js
+
+
+def test_ntfy_action_buttons_and_deep_links() -> None:
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from lookout.adapters.ntfy import NtfyDispatcher
+    from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
+
+    dispatcher = NtfyDispatcher(deep_link_base_url="https://ha.home.ajx.codes/lookout")
+    event = CameraEvent(
+        id=str(uuid4()),
+        camera_id="front_door",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.UNKNOWN_VISITOR,
+        threat_level=ThreatLevel.INFO,
+        summary="Front Porch Motion",
+    )
+    assert dispatcher.deep_link_base_url == "https://ha.home.ajx.codes/lookout"
+    assert event.camera_id == "front_door"

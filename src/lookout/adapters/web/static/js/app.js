@@ -107,6 +107,20 @@ class LookoutApp {
       },
       onSelectionChange: (cameraIds) => {
         this.liveGrid.setSelectedCameras(cameraIds);
+        if (cameraIds.length === 1) {
+          const singleCam = this.cameras.find((c) => c.id === cameraIds[0]);
+          if (singleCam) {
+            this.switchToFocus(singleCam);
+            // Retain grid mode on switcher so user can toggle additional cameras
+            this.cameraSwitcher.setMode("grid");
+            this.fetchEvents();
+            return;
+          }
+        } else if (cameraIds.length > 1 && this.viewMode === "focus") {
+          this.switchToGrid();
+          return;
+        }
+        this.fetchEvents();
       },
     });
 
@@ -300,6 +314,15 @@ class LookoutApp {
         this.activeCamera = this.cameras[0];
         this.livePlayer.setCamera(this.activeCamera);
       }
+
+      const selectedIds = this.cameraSwitcher.getSelectedCameraIds();
+      if (selectedIds.length === 1) {
+        const singleCam = this.cameras.find((c) => c.id === selectedIds[0]);
+        if (singleCam) {
+          this.switchToFocus(singleCam);
+          return;
+        }
+      }
       this.switchToGrid();
     } catch (err) {
       console.warn("Failed to fetch cameras:", err);
@@ -319,7 +342,18 @@ class LookoutApp {
       const res = await fetch(resolveUrl(`/api/events?${params.toString()}`));
       if (!res.ok) return;
       const data = await res.json();
-      this.events = data.events || [];
+      let events = data.events || [];
+
+      if (this.viewMode === "grid") {
+        const selectedIds = this.cameraSwitcher.getSelectedCameraIds();
+        if (selectedIds.length === 0) {
+          events = [];
+        } else {
+          events = events.filter((e) => selectedIds.includes(e.camera_id));
+        }
+      }
+
+      this.events = events;
       this.timeline.setEvents(this.events);
       if (this.scrubber) this.scrubber.setEvents(this.events);
 
@@ -361,10 +395,57 @@ class LookoutApp {
     };
   }
 
+  checkDeepLink() {
+    let search = window.location.search;
+    try {
+      if (window.parent && window.parent !== window && window.parent.location.search) {
+        search = window.parent.location.search;
+      }
+    } catch (_) {}
+
+    const urlParams = new URLSearchParams(search);
+    const eventId = urlParams.get("event_id") || urlParams.get("event");
+    const camId = urlParams.get("camera_id") || urlParams.get("camera");
+    const live = urlParams.get("live") === "true";
+
+    const path = window.location.pathname;
+    const eventMatch = path.match(/\/events\/([^/?#]+)/);
+    const camMatch = path.match(/\/cameras\/([^/?#]+)/);
+
+    const targetEventId = eventId || (eventMatch ? eventMatch[1] : null);
+    const targetCamId = camId || (camMatch ? camMatch[1] : null);
+
+    if (targetEventId) {
+      const found = this.events.find((e) => e.id === targetEventId);
+      if (found) {
+        this.playEvent(found);
+      } else {
+        fetch(resolveUrl(`/api/events/${encodeURIComponent(targetEventId)}`))
+          .then((r) => (r.ok ? r.json() : null))
+          .then((ev) => {
+            if (ev) this.playEvent(ev);
+          })
+          .catch(() => {});
+      }
+      return true;
+    } else if (targetCamId) {
+      const cam = this.cameras.find((c) => c.id === targetCamId);
+      if (cam) {
+        this.switchToFocus(cam);
+        if (live) {
+          this.livePlayer.startLive();
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   async start() {
     await this.fetchCameras();
     await this.fetchEvents();
     this.connectSse();
+    this.checkDeepLink();
   }
 }
 

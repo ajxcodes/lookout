@@ -49,6 +49,10 @@ export class CameraSwitcher {
     this.render();
   }
 
+  getSelectedCameraIds() {
+    return Array.from(this.selectedCameraIds);
+  }
+
   setEventCounts(counts) {
     this.eventCounts = counts;
     this.render();

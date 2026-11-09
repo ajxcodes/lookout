@@ -2,7 +2,7 @@
  * Multi-camera Live Grid View component with density selector and lifecycle governance.
  */
 import { infer_camera_icon } from "./switcher.js";
-import { resolveUrl } from "../utils/url.js";
+import { resolveUrl, resolveWsUrl } from "../utils/url.js";
 
 export class LiveGrid {
   constructor({ container, densitySelector, onFocusCamera }) {
@@ -95,7 +95,7 @@ export class LiveGrid {
     this.container.className = `live-grid-container density-${this.density}`;
 
     const visibleCameras =
-      this.selectedCameraIds && this.selectedCameraIds.length > 0
+      this.selectedCameraIds !== null
         ? this.cameras.filter((c) => this.selectedCameraIds.includes(c.id))
         : this.cameras;
 
@@ -104,7 +104,7 @@ export class LiveGrid {
       emptyDiv.className = "text-muted grid-empty-message";
       emptyDiv.style.padding = "var(--space-xl)";
       emptyDiv.style.textAlign = "center";
-      emptyDiv.textContent = "No camera feeds available in Live Grid";
+      emptyDiv.textContent = "No camera feeds selected in Live Grid";
       this.container.appendChild(emptyDiv);
       return;
     }
@@ -257,10 +257,8 @@ export class LiveGrid {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsHost = window.location.host;
       // Prefer substream if available to conserve bandwidth
-      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?src=${encodeURIComponent(cam.id)}`;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(cam.id)}`);
 
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
@@ -289,7 +287,11 @@ export class LiveGrid {
               await pc.addIceCandidate(c).catch(() => {});
             }
           } else if (data.type === "webrtc/candidate") {
-            const candidate = new RTCIceCandidate({ candidate: data.value });
+            const candidate = new RTCIceCandidate({
+              candidate: data.value,
+              sdpMid: data.sdpMid,
+              sdpMLineIndex: data.sdpMLineIndex,
+            });
             if (!hasRemote) {
               iceCandidates.push(candidate);
             } else {
@@ -310,7 +312,14 @@ export class LiveGrid {
 
       pc.onicecandidate = (e) => {
         if (e.candidate && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "webrtc/candidate", value: e.candidate.candidate }));
+          ws.send(
+            JSON.stringify({
+              type: "webrtc/candidate",
+              value: e.candidate.candidate,
+              sdpMid: e.candidate.sdpMid,
+              sdpMLineIndex: e.candidate.sdpMLineIndex,
+            })
+          );
         }
       };
 
