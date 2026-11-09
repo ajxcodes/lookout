@@ -1,0 +1,32 @@
+{
+  "id": "skeleton",
+  "name": "skeleton",
+  "display_name": "Starter Template Driver",
+  "description": "Starter skeleton driver for integrating new camera ecosystems into Lookout",
+  "icon": "video",
+  "brand_color": "#4a5568",
+  "badge": "Skeleton Template",
+  "default_ports": {
+    "http": 8080,
+    "rtsp": 8554
+  },
+  "default_stream_url": "rtsp://localhost:8554/live",
+  "default_camera_name": "Generic IP Camera",
+  "supported_2fa": [],
+  "auth_fields": [
+    {
+      "key": "username",
+      "label": "Username",
+      "type": "text",
+      "required": true,
+      "placeholder": "admin"
+    },
+    {
+      "key": "password",
+      "label": "Password",
+      "type": "password",
+      "required": true
+    }
+  ],
+  "docs_url": "https://github.com/ajxcodes/lookout"
+}

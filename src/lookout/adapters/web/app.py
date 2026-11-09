@@ -29,6 +29,7 @@ from lookout.adapters.web.routes import (
     cameras_router,
     entities_router,
     events_router,
+    providers_router,
     settings_router,
     setup_router,
     storage_router,
@@ -217,6 +218,7 @@ def create_app(
     app.include_router(settings_router, prefix="/api")
     app.include_router(setup_router, prefix="/api")
     app.include_router(auth_router, prefix="/api")
+    app.include_router(providers_router, prefix="/api")
     app.include_router(storage_router, prefix="/api")
 
     # Static assets

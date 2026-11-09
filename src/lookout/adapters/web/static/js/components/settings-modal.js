@@ -254,8 +254,15 @@ export class SettingsModal {
       if (!res.ok) return;
       const statusData = await res.json();
 
-      const provRes = await fetch(resolveUrl("/api/auth/providers"));
-      const providers = provRes.ok ? (await provRes.json()).providers || [] : [];
+      let provRes = await fetch(resolveUrl("/api/providers"));
+      let providers = [];
+      if (provRes.ok) {
+        const provData = await provRes.json();
+        providers = provData.providers || [];
+      } else {
+        provRes = await fetch(resolveUrl("/api/auth/providers"));
+        providers = provRes.ok ? (await provRes.json()).providers || [] : [];
+      }
 
       this.integrationsContainer.innerHTML = "";
 

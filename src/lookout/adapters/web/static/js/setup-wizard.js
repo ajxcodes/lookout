@@ -489,41 +489,81 @@ export class SetupWizard {
 
   async checkSidecars() {
     try {
+      // 1. Fetch provider manifests to render dynamic brand cards
+      try {
+        const provRes = await fetch(resolveUrl("/api/providers"));
+        if (provRes.ok) {
+          const provData = await provRes.json();
+          const providers = provData.providers || [];
+          const container = document.getElementById("sidecar-providers-list");
+          if (container && providers.length > 0) {
+            providers.forEach((prov) => {
+              let card = document.getElementById(`card-provider-${prov.id}`);
+              if (!card) {
+                card = document.createElement("div");
+                card.className = "sidecar-card";
+                card.id = `card-provider-${prov.id}`;
+                card.style.cssText =
+                  "border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--space-sm);background:var(--bg-surface);";
+                card.innerHTML = `
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-xs);">
+                    <span style="font-weight:600;font-size:0.8125rem;">${prov.display_name || prov.name}</span>
+                    <span class="badge" id="badge-${prov.id}-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
+                  </div>
+                  <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-${prov.id}">${prov.description || ""}</div>
+                  <div style="display:flex;gap:var(--space-xs);">
+                    <button class="btn btn-sm" id="btn-adopt-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
+                    <button class="btn btn-sm btn-primary" id="btn-auth-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
+                  </div>
+                `;
+                container.appendChild(card);
+                const adoptBtn = document.getElementById(`btn-adopt-${prov.id}`);
+                if (adoptBtn) {
+                  adoptBtn.addEventListener("click", () =>
+                    this.adoptBridgeStream(
+                      prov.id,
+                      prov.default_stream_url || `rtsp://localhost:8554/${prov.id}`,
+                      `${prov.id}-camera`,
+                      prov.display_name
+                    )
+                  );
+                }
+                const authBtn = document.getElementById(`btn-auth-${prov.id}`);
+                if (authBtn) {
+                  authBtn.addEventListener("click", () => this.startAuth(prov.id));
+                }
+              }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch provider manifests:", err);
+      }
+
+      // 2. Query status report
       const res = await fetch(resolveUrl("/api/auth/status"));
       if (!res.ok) return;
       const data = await res.json();
 
-      if (this.badgeWyzeStatus && data.wyze) {
-        if (data.wyze.status === "pre_authenticated") {
-          this.badgeWyzeStatus.textContent = "Connected (Pre-authenticated)";
-          this.badgeWyzeStatus.style.background = "#10b981";
-          this.badgeWyzeStatus.style.color = "#ffffff";
-        } else if (data.wyze.status === "authenticated") {
-          this.badgeWyzeStatus.textContent = "Connected (Authenticated)";
-          this.badgeWyzeStatus.style.background = "#10b981";
-          this.badgeWyzeStatus.style.color = "#ffffff";
-        } else {
-          this.badgeWyzeStatus.textContent = "Unconfigured";
-          this.badgeWyzeStatus.style.background = "var(--bg-subtle)";
-          this.badgeWyzeStatus.style.color = "var(--text-muted)";
+      Object.keys(data).forEach((pid) => {
+        const badge = document.getElementById(`badge-${pid}-status`);
+        const pStatus = data[pid];
+        if (badge && pStatus && typeof pStatus === "object") {
+          if (pStatus.status === "pre_authenticated") {
+            badge.textContent = "Connected (Pre-authenticated)";
+            badge.style.background = "#10b981";
+            badge.style.color = "#ffffff";
+          } else if (pStatus.status === "authenticated" || pStatus.status === "connected") {
+            badge.textContent = "Connected (Authenticated)";
+            badge.style.background = "#10b981";
+            badge.style.color = "#ffffff";
+          } else {
+            badge.textContent = "Unconfigured";
+            badge.style.background = "var(--bg-subtle)";
+            badge.style.color = "var(--text-muted)";
+          }
         }
-      }
-
-      if (this.badgeRingStatus && data.ring) {
-        if (data.ring.status === "pre_authenticated") {
-          this.badgeRingStatus.textContent = "Connected (Pre-authenticated)";
-          this.badgeRingStatus.style.background = "#10b981";
-          this.badgeRingStatus.style.color = "#ffffff";
-        } else if (data.ring.status === "authenticated") {
-          this.badgeRingStatus.textContent = "Connected (Authenticated)";
-          this.badgeRingStatus.style.background = "#10b981";
-          this.badgeRingStatus.style.color = "#ffffff";
-        } else {
-          this.badgeRingStatus.textContent = "Unconfigured";
-          this.badgeRingStatus.style.background = "var(--bg-subtle)";
-          this.badgeRingStatus.style.color = "var(--text-muted)";
-        }
-      }
+      });
     } catch (err) {
       console.warn("Could not probe sidecar status:", err);
     }

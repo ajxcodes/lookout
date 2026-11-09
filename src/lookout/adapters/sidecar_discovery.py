@@ -1,7 +1,9 @@
 """Discovery engine for pre-existing sidecars, streams, and bridges."""
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import Any, cast
 
 from lookout.adapters.sidecar_registry import SidecarProviderRegistry
 from lookout.config.schema import CameraConfig, LookoutConfig
@@ -20,9 +22,10 @@ class SidecarDiscoveryEngine:
         report: dict[str, Any] = {}
         for p_info in self.registry.list_providers():
             pid = p_info["id"]
-            provider = self.registry.get_provider(pid)
             try:
-                report[pid] = provider.probe_existing(config)
+                provider = self.registry.get_provider(pid)
+                res = provider.probe_existing(config)
+                report[pid] = res.model_dump() if hasattr(res, "model_dump") else res
             except Exception as exc:
                 logger.warning("Error probing provider '%s': %s", pid, exc)
                 report[pid] = {
@@ -42,9 +45,10 @@ class SidecarDiscoveryEngine:
     ) -> CameraConfig:
         """Adopt pre-existing or external stream into configuration."""
         adapter = self.registry.get_provider(provider)
-        return adapter.adopt_stream(
+        cam = adapter.adopt_stream(
             stream_url=stream_url,
             camera_id=camera_id,
             camera_name=camera_name,
             config=config,
         )
+        return cast(CameraConfig, cam)

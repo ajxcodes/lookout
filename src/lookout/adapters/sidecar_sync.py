@@ -1,5 +1,7 @@
 """Synchronizer for sidecar container environment files (.env)."""
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 
@@ -29,9 +31,14 @@ class SidecarConfigSynchronizer:
         results: dict[str, Path] = {}
         for p_info in self.registry.list_providers():
             pid = p_info["id"]
-            provider = self.registry.get_provider(pid)
             try:
-                path = provider.sync_environment(config, self.base_dir)
+                provider = self.registry.get_provider(pid)
+                res = provider.sync_environment(config, self.base_dir)
+                path = (
+                    res[0]
+                    if isinstance(res, list) and res
+                    else (res if isinstance(res, Path) else self.base_dir)
+                )
                 results[pid] = path
                 logger.info("Synchronized environment for provider '%s' to %s", pid, path)
             except Exception as exc:
@@ -42,4 +49,9 @@ class SidecarConfigSynchronizer:
         """Synchronize environment file for a single registered sidecar provider."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         provider = self.registry.get_provider(provider_id)
-        return provider.sync_environment(config, self.base_dir)
+        res = provider.sync_environment(config, self.base_dir)
+        return (
+            res[0]
+            if isinstance(res, list) and res
+            else (res if isinstance(res, Path) else self.base_dir)
+        )

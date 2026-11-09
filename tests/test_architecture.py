@@ -224,3 +224,44 @@ def test_web_adapter_boundary_isolation() -> None:
                 violations.append(f"{py_file.name} -> {mod}")
 
     assert violations == []
+
+
+def test_providers_have_no_web_framework_cross_coupling() -> None:
+    """TR-16: Verify provider drivers maintain modular boundaries and avoid
+    sibling cross-coupling.
+    """
+    providers_dir = LOOKOUT_ROOT / "providers"
+    provider_violations: list[str] = []
+
+    packages = ["wyze", "ring", "templates"]
+    for pkg in packages:
+        pkg_dir = providers_dir / pkg
+        if not pkg_dir.is_dir():
+            continue
+        other_pkgs = [p for p in packages if p != pkg]
+        for py_file in pkg_dir.rglob("*.py"):
+            imported_modules = _extract_imported_modules(py_file)
+            for mod in imported_modules:
+                for other in other_pkgs:
+                    if mod == f"lookout.providers.{other}" or mod.startswith(
+                        f"lookout.providers.{other}."
+                    ):
+                        provider_violations.append(f"{py_file.name} -> {mod}")
+
+    # Domain must not import providers
+    domain_dir = LOOKOUT_ROOT / "domain"
+    for py_file in domain_dir.glob("*.py"):
+        imported = _extract_imported_modules(py_file)
+        for mod in imported:
+            if mod == "lookout.providers" or mod.startswith("lookout.providers."):
+                provider_violations.append(f"{py_file.name} -> {mod}")
+
+    # Ports must not import providers
+    ports_dir = LOOKOUT_ROOT / "ports"
+    for py_file in ports_dir.glob("*.py"):
+        imported = _extract_imported_modules(py_file)
+        for mod in imported:
+            if mod == "lookout.providers" or mod.startswith("lookout.providers."):
+                provider_violations.append(f"{py_file.name} -> {mod}")
+
+    assert provider_violations == []
