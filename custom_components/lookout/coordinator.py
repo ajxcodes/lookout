@@ -6,6 +6,8 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+import httpx
+
 try:
     from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 except ImportError:
@@ -28,12 +30,23 @@ except ImportError:
             self.name = name
             self.update_interval = update_interval
             self.data: dict[str, Any] = {}
+            self._listeners: list[Any] = []
+
+        def async_add_listener(self, update_callback: Any, context: Any = None) -> Any:
+            self._listeners.append(update_callback)
+            return lambda: self._listeners.remove(update_callback)
+
+        def async_update_listeners(self) -> None:
+            for listener in list(self._listeners):
+                listener()
 
         async def async_refresh(self) -> None:
             await self._async_update_data()
+            self.async_update_listeners()
 
         async def async_config_entry_first_refresh(self) -> None:
             await self._async_update_data()
+            self.async_update_listeners()
 
         async def _async_update_data(self) -> dict[str, Any]:
             return self.data
@@ -66,8 +79,6 @@ class LookoutDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest camera list and system state from Lookout."""
-        import httpx
-
         try:
             headers = {}
             if self.api_key:

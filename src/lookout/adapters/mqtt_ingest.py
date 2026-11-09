@@ -254,9 +254,11 @@ class MqttEventIngestor:
                 return
             if not isinstance(data, dict):
                 return
-            label = str(
-                data.get("detection") or data.get("sound") or data.get("label") or ""
-            ).lower().strip()
+            label = (
+                str(data.get("detection") or data.get("sound") or data.get("label") or "")
+                .lower()
+                .strip()
+            )
             if label in _PET_AUDIO_LABELS:
                 await self._trigger(parts[1], "audio", {"sound": label})
 
@@ -399,7 +401,12 @@ class MqttEventIngestor:
                 if resp.status_code == 200 and resp.content.startswith(b"\xff\xd8"):
                     return resp.content
             except httpx.HTTPError as exc:
-                logger.debug("go2rtc frame unavailable for %s (attempt %d): %s", camera_id, attempt, exc)
+                logger.debug(
+                    "go2rtc frame unavailable for %s (attempt %d): %s",
+                    camera_id,
+                    attempt,
+                    exc,
+                )
             if attempt < max_attempts:
                 await asyncio.sleep(1.5)
         return None

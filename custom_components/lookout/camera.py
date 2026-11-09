@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
+
 try:
     from homeassistant.components.camera import Camera, CameraEntityFeature
     from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from homeassistant.helpers.update_coordinator import CoordinatorEntity
 except ImportError:
 
     class CameraEntityFeature:
@@ -21,6 +24,16 @@ except ImportError:
             self._attr_name = ""
             self._attr_is_streaming = True
             self._attr_supported_features = CameraEntityFeature.STREAM
+
+    class CoordinatorEntity:  # type: ignore[no-redef]
+        def __init__(self, coordinator: Any) -> None:
+            self.coordinator = coordinator
+
+        def _handle_coordinator_update(self) -> None:
+            pass
+
+        def async_write_ha_state(self) -> None:
+            pass
 
     def async_get_clientsession(hass: Any) -> Any:  # type: ignore[misc]
         return None
@@ -41,14 +54,14 @@ async def async_setup_entry(hass: Any, entry: Any, async_add_entities: Any) -> N
     async_add_entities(entities)
 
 
-class LookoutCameraEntity(Camera):
+class LookoutCameraEntity(CoordinatorEntity, Camera):
     """Represents a Lookout camera feed with WebRTC and live snapshot support."""
 
     def __init__(
         self, coordinator: LookoutDataUpdateCoordinator, camera_data: dict[str, Any]
     ) -> None:
-        super().__init__()
-        self.coordinator = coordinator
+        CoordinatorEntity.__init__(self, coordinator)
+        Camera.__init__(self)
         self.camera_data = camera_data
         self.camera_id = camera_data.get("id", "camera")
         self.entity_id = f"camera.{self.camera_id}"
@@ -61,6 +74,15 @@ class LookoutCameraEntity(Camera):
     def is_on(self) -> bool:
         return bool(self.camera_data.get("enabled", True))
 
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from coordinator."""
+        for cam in self.coordinator.data.get("cameras", []):
+            if cam.get("id") == self.camera_id:
+                self.camera_data = cam
+                self._attr_is_streaming = cam.get("enabled", True)
+                break
+        self.async_write_ha_state()
+
     async def stream_source(self) -> str | None:
         """Return RTSP or WebRTC stream source URL."""
         return self.camera_data.get("stream_url")
@@ -69,8 +91,6 @@ class LookoutCameraEntity(Camera):
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Fetch latest camera snapshot from Lookout REST endpoint."""
-        import aiohttp
-
         url = f"{self.coordinator.base_url}/api/cameras/{self.camera_id}/snapshot"
         try:
             hass = getattr(self, "hass", None) or getattr(self.coordinator, "hass", None)

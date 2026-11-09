@@ -10,6 +10,7 @@ try:
         BinarySensorDeviceClass,
         BinarySensorEntity,
     )
+    from homeassistant.helpers.update_coordinator import CoordinatorEntity
 except ImportError:
 
     class BinarySensorDeviceClass:
@@ -23,6 +24,16 @@ except ImportError:
             self._attr_name = ""
             self._attr_is_on = False
             self._attr_device_class = None
+
+    class CoordinatorEntity:  # type: ignore[no-redef]
+        def __init__(self, coordinator: Any) -> None:
+            self.coordinator = coordinator
+
+        def _handle_coordinator_update(self) -> None:
+            pass
+
+        def async_write_ha_state(self) -> None:
+            pass
 
 
 from .const import DOMAIN
@@ -48,14 +59,13 @@ async def async_setup_entry(hass: Any, entry: Any, async_add_entities: Any) -> N
     async_add_entities(entities)
 
 
-class LookoutMotionBinarySensor(BinarySensorEntity):
+class LookoutMotionBinarySensor(CoordinatorEntity, BinarySensorEntity):
     """Binary sensor indicating real-time motion detection for a camera."""
 
     def __init__(
         self, coordinator: LookoutDataUpdateCoordinator, camera_data: dict[str, Any]
     ) -> None:
-        super().__init__()
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self.camera_id = camera_data.get("id", "camera")
         self.entity_id = f"binary_sensor.{self.camera_id}_motion"
         self._attr_unique_id = f"{DOMAIN}_{self.camera_id}_motion"
@@ -67,8 +77,20 @@ class LookoutMotionBinarySensor(BinarySensorEntity):
     def is_on(self) -> bool:
         return self._is_on
 
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from coordinator."""
+        is_motion = False
+        for event in self.coordinator.data.get("events", []):
+            if event.get("camera_id") == self.camera_id and (
+                event.get("in_progress", False) or event.get("type") in ("motion", "detection")
+            ):
+                is_motion = True
+                break
+        self._is_on = is_motion
+        self.async_write_ha_state()
 
-class LookoutEntityBinarySensor(BinarySensorEntity):
+
+class LookoutEntityBinarySensor(CoordinatorEntity, BinarySensorEntity):
     """Binary sensor indicating detected entity presence (person, vehicle, pet)."""
 
     def __init__(
@@ -77,8 +99,7 @@ class LookoutEntityBinarySensor(BinarySensorEntity):
         camera_data: dict[str, Any],
         entity_type: str,
     ) -> None:
-        super().__init__()
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self.camera_id = camera_data.get("id", "camera")
         self.entity_type = entity_type
         self.entity_id = f"binary_sensor.{self.camera_id}_{entity_type}"
@@ -90,3 +111,19 @@ class LookoutEntityBinarySensor(BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return self._is_on
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from coordinator."""
+        detected = False
+        for event in self.coordinator.data.get("events", []):
+            if event.get("camera_id") == self.camera_id:
+                detections = event.get("detections", [])
+                labels = event.get("labels", [])
+                if self.entity_type in labels or any(
+                    d.get("label") == self.entity_type or d.get("category") == self.entity_type
+                    for d in detections
+                ):
+                    detected = True
+                    break
+        self._is_on = detected
+        self.async_write_ha_state()

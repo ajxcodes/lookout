@@ -255,7 +255,8 @@ async def test_wyze_detection_topic_and_boolean_payloads(tmp_path: Path) -> None
 
     # Valid detection JSON on either /audio or /detection topics must trigger
     topic_detection = "wyzebridge/mochi_crate_cam/detection"
-    await ing.handle_message(topic_detection, json.dumps({"detection": "bark", "confidence": 0.85}).encode())
+    detection_payload = json.dumps({"detection": "bark", "confidence": 0.85}).encode()
+    await ing.handle_message(topic_detection, detection_payload)
     assert len(calls) == 1
     assert calls[0][0] == "mochi_crate_cam"
     assert calls[0][1]["metadata"]["sound"] == "bark"
@@ -289,9 +290,11 @@ async def test_on_demand_clip_recording_retries_and_succeeds(tmp_path: Path) -> 
         return httpx.Response(200, content=b"\x00" * 4096)
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
-    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", return_value=mock_client):
-        with patch("asyncio.sleep", AsyncMock()):  # Avoid test delays
-            await ingestor._record_clip_background("front_door", event, duration=5.0)
+    with (
+        patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", return_value=mock_client),
+        patch("asyncio.sleep", AsyncMock()),
+    ):
+        await ingestor._record_clip_background("front_door", event, duration=5.0)
 
     assert attempts >= 2
     assert len(clip_ready_events) == 1
@@ -320,9 +323,11 @@ async def test_go2rtc_frame_retries_for_on_demand_cameras(tmp_path: Path) -> Non
     def client_factory(**kwargs: Any) -> httpx.AsyncClient:
         return real_client(transport=httpx.MockTransport(mock_handler))
 
-    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", side_effect=client_factory):
-        with patch("asyncio.sleep", AsyncMock()):
-            frame = await ingestor._go2rtc_frame("front_door")
+    with (
+        patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", side_effect=client_factory),
+        patch("asyncio.sleep", AsyncMock()),
+    ):
+        frame = await ingestor._go2rtc_frame("front_door")
 
     assert attempts == 2
     assert frame == JPEG

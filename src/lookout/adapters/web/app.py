@@ -511,7 +511,8 @@ def create_app(
                                 continue
 
                         if target_jpg is not None:
-                            subprocess.run(
+                            await asyncio.to_thread(
+                                subprocess.run,
                                 [
                                     "ffmpeg",
                                     "-y",

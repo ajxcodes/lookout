@@ -31,6 +31,8 @@ def test_hacs_manifest_and_metadata_validity() -> None:
     assert hacs_data["name"] == "Lookout Camera Intelligence" and manifest["domain"] == "lookout"
     assert manifest["config_flow"] is True
     assert manifest["version"] == "0.3.0"
+    assert "httpx>=0.27.0" in manifest["requirements"]
+    assert "voluptuous>=0.11.7" in manifest["requirements"]
 
 
 def test_ha_custom_component_entity_discovery() -> None:
@@ -63,6 +65,29 @@ def test_ha_custom_component_entity_discovery() -> None:
 
     assert "camera.front_door" in entities and "binary_sensor.front_door_motion" in entities
 
+    coordinator.data["events"] = [
+        {
+            "camera_id": "front_door",
+            "type": "motion",
+            "threat_level": "high",
+            "latency_ms": 42.0,
+            "labels": ["person"],
+        }
+    ]
+    coordinator.data["cameras"][0]["enabled"] = False
+
+    camera_entity._handle_coordinator_update()
+    motion_entity._handle_coordinator_update()
+    person_entity._handle_coordinator_update()
+    threat_sensor._handle_coordinator_update()
+    latency_sensor._handle_coordinator_update()
+
+    assert camera_entity._attr_is_streaming is False
+    assert motion_entity.is_on is True
+    assert person_entity.is_on is True
+    assert threat_sensor.native_value == "high"
+    assert latency_sensor.native_value == 42.0
+
 
 @pytest.mark.asyncio
 async def test_ha_select_ai_mode_control() -> None:
@@ -76,6 +101,10 @@ async def test_ha_select_ai_mode_control() -> None:
     assert "local_only" in select_entity.options
     assert "gemini_only" in select_entity.options
     assert "off" in select_entity.options
+
+    coordinator.data["ai_mode"] = "local_only"
+    select_entity._handle_coordinator_update()
+    assert select_entity.current_option == "local_only"
 
 
 @pytest.mark.asyncio

@@ -74,7 +74,8 @@ class LookoutConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
 
             # Prevent duplicate configuration entries
             await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
+            if getattr(self, "hass", None) is not None:
+                self._abort_if_unique_id_configured()
 
             return self.async_create_entry(title=title, data=user_input)
 
