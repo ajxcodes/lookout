@@ -1165,3 +1165,127 @@ body {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
 }
+
+/* ==========================================================================
+   Focus Mode AI Details & Telemetry Card & Event Camera Tags
+   ========================================================================== */
+
+.focus-ai-details-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.ai-badges-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-model-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.ai-threat-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.05em;
+}
+
+.ai-threat-badge.tier-none {
+  background-color: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.ai-threat-badge.tier-low {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.ai-threat-badge.tier-elevated {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.ai-threat-badge.tier-high {
+  background-color: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.ai-metrics-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.ai-details-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background-color: var(--bg-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+
+.ai-summary-text {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.event-camera-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+

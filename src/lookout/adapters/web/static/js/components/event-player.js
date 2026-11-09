@@ -58,6 +58,8 @@ export class EventPlayer {
   }
 
   renderSnapshotCard(eventItem) {
+    this.updateAiDetailsCard(eventItem);
+
     if (this.video) {
       this.video.pause();
       this.video.style.display = "none";
@@ -109,6 +111,7 @@ export class EventPlayer {
 
   loadEvent(eventItem) {
     this.currentEvent = eventItem;
+    this.updateAiDetailsCard(eventItem);
 
     const isPurged = Boolean(eventItem.metadata && eventItem.metadata.media_purged);
     const videoUrl = isPurged
@@ -223,5 +226,197 @@ export class EventPlayer {
         ? `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`
         : `/media/events/${this.currentEvent.id}.jpg`);
     window.open(resolveUrl(rawThumb), "_blank");
+  }
+
+  updateAiDetailsCard(eventItem) {
+    updateAiDetailsCard(eventItem);
+  }
+}
+
+export function updateAiDetailsCard(eventItem) {
+  const card = document.getElementById("focus-ai-details-card");
+  if (!card || !eventItem) return;
+
+  // 1. Model provenance badge
+  const modelBadge = document.getElementById("ai-model-badge");
+  if (modelBadge) {
+    let provText = "Local (moondream)";
+    if (eventItem.provenance && eventItem.provenance.length > 0) {
+      const p = eventItem.provenance[eventItem.provenance.length - 1];
+      const prov = (p.provider || "").toLowerCase();
+      const model = p.model_name || "";
+      if (prov.includes("gemini")) {
+        provText = model ? `Gemini (${model})` : "Gemini Flash";
+      } else if (prov.includes("opencode")) {
+        provText = `OpenCode (${model || "deepseek"})`;
+      } else if (prov.includes("tpu") || prov.includes("edge")) {
+        provText = "Edge TPU";
+      } else if (prov.includes("npu") || prov.includes("hailo")) {
+        provText = "Edge NPU";
+      } else if (prov.includes("ollama") || prov.includes("local")) {
+        provText = `Local (${model || "moondream"})`;
+      } else {
+        provText = `${p.provider} (${model})`;
+      }
+    } else if (eventItem.metadata && eventItem.metadata.legacy && eventItem.metadata.legacy.inference_provider) {
+      provText = String(eventItem.metadata.legacy.inference_provider);
+    }
+    modelBadge.textContent = provText;
+  }
+
+  // 2. Threat tier badge: NONE, LOW, ELEVATED, HIGH
+  const threatBadge = document.getElementById("ai-threat-badge");
+  if (threatBadge) {
+    let rawTier = eventItem.threat_level;
+    let label = "NONE";
+    let cssTier = "none";
+    if (typeof rawTier === "string") {
+      const s = rawTier.toLowerCase();
+      if (s === "high" || s === "critical" || s === "3" || s === "4") {
+        label = "HIGH";
+        cssTier = "high";
+      } else if (s === "elevated" || s === "medium" || s === "2") {
+        label = "ELEVATED";
+        cssTier = "elevated";
+      } else if (s === "low" || s === "1") {
+        label = "LOW";
+        cssTier = "low";
+      } else {
+        label = "NONE";
+        cssTier = "none";
+      }
+    } else if (typeof rawTier === "number") {
+      if (rawTier >= 3) {
+        label = "HIGH";
+        cssTier = "high";
+      } else if (rawTier === 2) {
+        label = "ELEVATED";
+        cssTier = "elevated";
+      } else if (rawTier === 1) {
+        label = "LOW";
+        cssTier = "low";
+      } else {
+        label = "NONE";
+        cssTier = "none";
+      }
+    }
+    threatBadge.textContent = label;
+    threatBadge.className = `ai-threat-badge tier-${cssTier}`;
+  }
+
+  // 3. Processing metrics
+  const infEl = document.getElementById("metric-inference-ms");
+  const clipEl = document.getElementById("metric-clip-ms");
+  const gifEl = document.getElementById("metric-gif-ms");
+  const totalEl = document.getElementById("metric-total-ms");
+
+  const metrics = eventItem.metrics || {};
+  const legacy = (eventItem.metadata && eventItem.metadata.legacy) || {};
+  const meta = eventItem.metadata || {};
+
+  // Inference ms
+  let infMs = null;
+  if (eventItem.provenance && eventItem.provenance.length > 0) {
+    infMs = eventItem.provenance[0].latency_ms;
+  } else if (metrics.inference_latency_ms !== undefined) {
+    infMs = metrics.inference_latency_ms;
+  } else if (legacy.inference_time_ms !== undefined) {
+    infMs = legacy.inference_time_ms;
+  }
+  if (infEl) {
+    infEl.textContent = infMs != null && !isNaN(infMs) ? Math.round(infMs) : "--";
+  }
+
+  // Clip ms
+  let clipMs = meta.clip_ms || legacy.clip_duration_ms || metrics.clip_generation_ms || null;
+  if (clipEl) {
+    clipEl.textContent = clipMs != null && !isNaN(clipMs) ? Math.round(clipMs) : "--";
+  }
+
+  // GIF ms
+  let gifMs = meta.gif_ms || legacy.gif_duration_ms || metrics.gif_generation_ms || null;
+  if (gifEl) {
+    gifEl.textContent = gifMs != null && !isNaN(gifMs) ? Math.round(gifMs) : "--";
+  }
+
+  // Total ms
+  let totalMs = metrics.total_latency_ms || null;
+  if ((totalMs == null || isNaN(totalMs) || totalMs === 0) && infMs != null) {
+    totalMs = infMs + (clipMs || 0) + (gifMs || 0);
+  }
+  if (totalEl) {
+    totalEl.textContent = totalMs != null && !isNaN(totalMs) && totalMs > 0 ? Math.round(totalMs) : (infMs != null && !isNaN(infMs) ? Math.round(infMs) : "--");
+  }
+
+  // 4. Taxonomy chips row: detected objects / matched entities
+  const chipsEl = document.getElementById("ai-details-chips");
+  if (chipsEl) {
+    chipsEl.innerHTML = "";
+    const chipItems = [];
+
+    // Matched entities
+    if (eventItem.matched_entities && Array.isArray(eventItem.matched_entities)) {
+      eventItem.matched_entities.forEach((entity) => {
+        const lower = entity.toLowerCase();
+        let icon = "🏷️";
+        let label = entity;
+        if (lower.includes("mochi")) {
+          icon = "🐾";
+          label = "Mochi (Family Dog)";
+        } else if (lower.includes("dog") || lower.includes("pet")) {
+          icon = "🐾";
+        } else if (lower.includes("courier") || lower.includes("package") || lower.includes("delivery")) {
+          icon = "📦";
+          label = label.toLowerCase().includes("package") ? label : `${label} Package`;
+        } else if (lower.includes("person") || lower.includes("resident")) {
+          icon = "👤";
+        } else if (lower.includes("car") || lower.includes("civic") || lower.includes("vehicle")) {
+          icon = "🚗";
+        }
+        chipItems.push({ icon, label });
+      });
+    }
+
+    // Category fallback if no matched entities
+    if (chipItems.length === 0 && eventItem.category) {
+      const cat = eventItem.category.toLowerCase();
+      if (cat.includes("courier") || cat.includes("package")) {
+        chipItems.push({ icon: "📦", label: "Courier Package" });
+      } else if (cat.includes("resident")) {
+        chipItems.push({ icon: "👤", label: "Person" });
+      } else if (cat.includes("pet") || cat.includes("dog")) {
+        chipItems.push({ icon: "🐾", label: "Mochi (Family Dog)" });
+      } else if (cat.includes("vehicle") || cat.includes("car")) {
+        chipItems.push({ icon: "🚗", label: "Vehicle" });
+      } else {
+        chipItems.push({ icon: "👁️", label: eventItem.category.replace(/_/g, " ") });
+      }
+    }
+
+    // Bounding boxes if available
+    if (metrics.bounding_boxes && Array.isArray(metrics.bounding_boxes)) {
+      metrics.bounding_boxes.forEach((box) => {
+        if (box.label && !chipItems.some(c => c.label.toLowerCase().includes(box.label.toLowerCase()))) {
+          let icon = "🎯";
+          if (box.label.toLowerCase().includes("person")) icon = "👤";
+          else if (box.label.toLowerCase().includes("dog")) icon = "🐾";
+          else if (box.label.toLowerCase().includes("package")) icon = "📦";
+          chipItems.push({ icon, label: `${box.label}` });
+        }
+      });
+    }
+
+    chipItems.forEach((c) => {
+      const chipSpan = document.createElement("span");
+      chipSpan.className = "ai-chip";
+      chipSpan.textContent = `${c.icon} ${c.label}`;
+      chipsEl.appendChild(chipSpan);
+    });
+  }
+
+  // 5. Description summary
+  const summaryEl = document.getElementById("ai-summary-text");
+  if (summaryEl) {
+    summaryEl.textContent = eventItem.summary || "Event detected and cataloged.";
   }
 }

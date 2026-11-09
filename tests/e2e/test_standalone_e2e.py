@@ -67,28 +67,51 @@ def test_standalone_onboarding_wizard_redirect_and_finalization(
 def test_standalone_dashboard_camera_switcher_and_timeline(
     page: Page, standalone_base_url: str
 ) -> None:
-    """TR-8: Verify camera switcher chips, event count badges, and timeline cards."""
+    """TR-8: Verify camera switcher chips, badges, multi-selection, and timeline."""
     page.goto(standalone_base_url)
 
     expect(page.locator(".brand-logo")).to_be_visible()
     expect(page.locator(".camera-chip").first).to_be_visible()
     expect(page.locator(".event-card").first).to_be_visible()
 
-    assert page.locator(".camera-chip").count() >= 1 and page.locator(".event-card").count() >= 1
+    # In Grid mode, timeline shows all events
+    expect(page.locator(".event-card")).to_have_count(2)
+
+    # Camera chips show provider badges (Ring, Wyze, Generic)
+    expect(page.locator(".badge-provider").first).to_be_visible()
+    badge_texts = page.locator(".badge-provider").all_text_contents()
+    assert any("Generic" in t for t in badge_texts)
+    assert any("Ring" in t for t in badge_texts)
+
+    # Multi-selection filters grid tiles
+    expect(page.locator(".camera-grid-tile")).to_have_count(2)
+    # Clicking a camera chip in grid mode toggles its selection off
+    page.locator(".camera-chip").first.click()
+    expect(page.locator(".camera-grid-tile")).to_have_count(1)
+    # Clicking it again toggles it back on
+    page.locator(".camera-chip").first.click()
+    expect(page.locator(".camera-grid-tile")).to_have_count(2)
 
 
 def test_standalone_event_playback_and_canvas(page: Page, standalone_base_url: str) -> None:
-    """TR-9: Verify event card click loads video player and initializes acoustic visualizer."""
+    """TR-9: Verify event card click loads video player, tag, and visualizer."""
     page.goto(standalone_base_url)
 
     expect(page.locator(".event-card").first).to_be_visible()
+    # Ensure .event-camera-tag is rendered
+    expect(page.locator(".event-camera-tag").first).to_be_visible()
+
+    # Click first event card to play
     page.locator(".event-card").first.click()
 
     expect(page.locator("#event-video")).to_be_visible()
     expect(page.locator("#acoustic-canvas")).to_be_visible()
+    expect(page.locator("#focus-ai-details-card")).to_be_visible()
 
     assert (
-        page.locator("#event-video").is_visible() and page.locator("#acoustic-canvas").is_visible()
+        page.locator("#event-video").is_visible()
+        and page.locator("#acoustic-canvas").is_visible()
+        and page.locator(".event-camera-tag").first.is_visible()
     )
 
 

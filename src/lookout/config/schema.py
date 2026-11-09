@@ -106,6 +106,12 @@ class CameraConfig(BaseModel):
     camera_type: str = Field(
         default="generic", description="Camera adapter type (e.g., generic, ring, go2rtc)"
     )
+    provider: str | None = Field(
+        default=None, description="Camera provider brand (e.g. ring, wyze, generic)"
+    )
+    stream_mode: str | None = Field(
+        default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
+    )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(

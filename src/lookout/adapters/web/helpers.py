@@ -33,15 +33,41 @@ def infer_camera_icon(name_or_location: str | None) -> str:
 
 def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str, Any]:
     """Generate structured camera card metadata with provider and stream badges."""
-    c_type = (cam.camera_type or "generic").lower()
-    provider_badge = "generic"
-    if "ring" in c_type:
-        provider_badge = "ring"
-    elif "wyze" in c_type:
-        provider_badge = "wyze"
+    provider_candidate = cam.provider or cam.camera_type
+    s_raw = f"{cam.id or ''} {cam.name or ''} {cam.stream_url or ''}".lower()
+    s = s_raw.replace("-", "_")
 
-    # Battery/on-demand feeds (e.g. Ring) vs continuous WebRTC feeds (e.g. Wyze/RTSP)
-    stream_mode = "on_demand" if provider_badge == "ring" else "live_rtc"
+    if provider_candidate and provider_candidate.lower() not in ("generic", ""):
+        prov = provider_candidate.lower()
+        if "ring" in prov:
+            provider_badge = "ring"
+            inferred_stream_mode = "on_demand"
+        elif "wyze" in prov:
+            provider_badge = "wyze"
+            inferred_stream_mode = "live_rtc"
+        else:
+            provider_badge = prov
+            inferred_stream_mode = "live_rtc"
+    else:
+        # Auto-infer from cam.id, cam.name, or cam.stream_url
+        if "front_door" in s or "backyard" in s or "ring" in s:
+            provider_badge = "ring"
+            inferred_stream_mode = "on_demand"
+        elif (
+            "mochi_crate_cam" in s
+            or "mochi_pan_cam" in s
+            or "office_cam" in s
+            or "wyze" in s
+            or "pan" in s
+            or "crate" in s
+        ):
+            provider_badge = "wyze"
+            inferred_stream_mode = "live_rtc"
+        else:
+            provider_badge = "generic"
+            inferred_stream_mode = "live_rtc"
+
+    stream_mode = cam.stream_mode or inferred_stream_mode
     icon = infer_camera_icon(cam.name or cam.location)
 
     return {
@@ -49,6 +75,7 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "name": cam.name,
         "stream_url": cam.stream_url,
         "camera_type": cam.camera_type,
+        "provider": cam.provider,
         "enabled": cam.enabled,
         "location": cam.location,
         "icon": icon,

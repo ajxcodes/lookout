@@ -17,12 +17,20 @@ export function infer_camera_icon(nameOrLocation) {
 }
 
 export class CameraSwitcher {
-  constructor({ container, onSelectCamera }) {
+  constructor({ container, onSelectCamera, onSelectionChange }) {
     this.container = container;
     this.onSelectCamera = onSelectCamera;
+    this.onSelectionChange = onSelectionChange;
     this.cameras = [];
     this.activeCameraId = null;
+    this.selectedCameraIds = new Set();
+    this.mode = "grid";
     this.eventCounts = {};
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+    this.render();
   }
 
   setCameras(cameras) {
@@ -30,6 +38,14 @@ export class CameraSwitcher {
     if (cameras.length > 0 && !this.activeCameraId) {
       this.activeCameraId = cameras[0].id;
     }
+    if (this.selectedCameraIds.size === 0) {
+      this.cameras.forEach((c) => this.selectedCameraIds.add(c.id));
+    }
+    this.render();
+  }
+
+  setSelectedCameraIds(ids) {
+    this.selectedCameraIds = new Set(ids);
     this.render();
   }
 
@@ -57,8 +73,13 @@ export class CameraSwitcher {
     }
 
     this.cameras.forEach((cam) => {
+      const isActive =
+        this.mode === "grid"
+          ? this.selectedCameraIds.has(cam.id)
+          : cam.id === this.activeCameraId;
+
       const tab = document.createElement("button");
-      tab.className = `cam-tab camera-chip ${cam.id === this.activeCameraId ? "active" : ""}`;
+      tab.className = `cam-tab camera-chip ${isActive ? "active" : ""}`;
       tab.dataset.cameraId = cam.id;
 
       const icon = cam.icon || infer_camera_icon(cam.name || cam.location);
@@ -103,10 +124,22 @@ export class CameraSwitcher {
       }
 
       tab.addEventListener("click", () => {
-        this.activeCameraId = cam.id;
-        this.render();
-        if (this.onSelectCamera) {
-          this.onSelectCamera(cam);
+        if (this.mode === "grid") {
+          if (this.selectedCameraIds.has(cam.id)) {
+            this.selectedCameraIds.delete(cam.id);
+          } else {
+            this.selectedCameraIds.add(cam.id);
+          }
+          this.render();
+          if (this.onSelectionChange) {
+            this.onSelectionChange(Array.from(this.selectedCameraIds));
+          }
+        } else {
+          this.activeCameraId = cam.id;
+          this.render();
+          if (this.onSelectCamera) {
+            this.onSelectCamera(cam);
+          }
         }
       });
 

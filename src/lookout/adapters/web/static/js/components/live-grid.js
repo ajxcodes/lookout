@@ -15,6 +15,12 @@ export class LiveGrid {
     } catch (_) {
       this.density = "auto";
     }
+    try {
+      const stored = localStorage?.getItem("lookout_grid_selected_cameras");
+      this.selectedCameraIds = stored ? JSON.parse(stored) : null;
+    } catch (_) {
+      this.selectedCameraIds = null;
+    }
     this.streamPlayers = new Map(); // cameraId -> { pc, ws, video, overlay, isLive }
     this.intersectionObserver = null;
     this.isTabVisible = !document.hidden;
@@ -69,6 +75,14 @@ export class LiveGrid {
     }
   }
 
+  setSelectedCameras(cameraIds) {
+    this.selectedCameraIds = cameraIds;
+    try {
+      localStorage?.setItem("lookout_grid_selected_cameras", JSON.stringify(cameraIds));
+    } catch (_) {}
+    this.render();
+  }
+
   setCameras(cameras) {
     this.cameras = cameras.filter((c) => c.enabled !== false);
     this.render();
@@ -80,7 +94,12 @@ export class LiveGrid {
     this.container.innerHTML = "";
     this.container.className = `live-grid-container density-${this.density}`;
 
-    if (this.cameras.length === 0) {
+    const visibleCameras =
+      this.selectedCameraIds && this.selectedCameraIds.length > 0
+        ? this.cameras.filter((c) => this.selectedCameraIds.includes(c.id))
+        : this.cameras;
+
+    if (visibleCameras.length === 0) {
       const emptyDiv = document.createElement("div");
       emptyDiv.className = "text-muted grid-empty-message";
       emptyDiv.style.padding = "var(--space-xl)";
@@ -90,7 +109,7 @@ export class LiveGrid {
       return;
     }
 
-    this.cameras.forEach((cam) => {
+    visibleCameras.forEach((cam) => {
       const tile = document.createElement("div");
       tile.className = "camera-grid-tile";
       tile.dataset.cameraId = cam.id;
@@ -116,19 +135,22 @@ export class LiveGrid {
       const stage = document.createElement("div");
       stage.className = "tile-stage";
 
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+
       const video = document.createElement("video");
       video.className = "tile-video";
       video.autoplay = true;
       video.playsInline = true;
       video.muted = true;
+      video.poster = snapUrl;
       video.style.display = streamMode === "live_rtc" ? "block" : "none";
       stage.appendChild(video);
 
       const overlay = document.createElement("div");
       overlay.className = "tile-overlay";
-      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
       overlay.style.backgroundImage = `url("${snapUrl}")`;
-      overlay.style.display = streamMode === "live_rtc" ? "none" : "flex";
+      // Poster background shown initially during negotiation or for on_demand
+      overlay.style.display = "flex";
 
       if (streamMode === "on_demand") {
         const liveBtn = document.createElement("button");
@@ -195,9 +217,17 @@ export class LiveGrid {
           video.srcObject.addTrack(event.track);
         }
         video.muted = true;
-        video.play().catch(() => {});
+        video.play().then(() => {
+          overlay.style.display = "none";
+        }).catch(() => {});
         video.style.display = "block";
-        overlay.style.display = "none";
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          video.style.display = "none";
+          overlay.style.display = "flex";
+        }
       };
 
       pc.addTransceiver("video", { direction: "recvonly" });
@@ -250,6 +280,8 @@ export class LiveGrid {
       record.isLive = true;
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
+      if (video) video.style.display = "none";
+      if (overlay) overlay.style.display = "flex";
     }
   }
 
