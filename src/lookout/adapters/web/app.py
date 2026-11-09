@@ -22,6 +22,8 @@ from lookout.adapters.light_ml import (
     SpatialZoneEvaluator,
 )
 from lookout.adapters.memory import InMemoryEventRepository
+from lookout.adapters.mqtt_ingest import MqttEventIngestor
+from lookout.adapters.ntfy import NtfyDispatcher
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
 from lookout.adapters.sqlite.repository import SqliteEventRepository
 from lookout.adapters.storage_service import StorageService
@@ -39,6 +41,7 @@ from lookout.adapters.web.routes import (
 )
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, StorageConfig
+from lookout.domain.models import ThreatLevel
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import EventRepositoryPort
 
@@ -169,6 +172,28 @@ async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream_url: str) 
             await websocket.close()
 
 
+def _build_notification(
+    cfg: LookoutConfig | None,
+) -> tuple[NtfyDispatcher | None, ThreatLevel, str]:
+    """Create the ntfy dispatcher from config (HA panel links if HA exists, else standalone)."""
+    if cfg is None:
+        return None, ThreatLevel.LOW, "default"
+    target = next(
+        (t for t in cfg.notification_targets if t.enabled and t.target_type == "ntfy"), None
+    )
+    if target is None:
+        return None, ThreatLevel.LOW, "default"
+    ha_url = (cfg.home_assistant_url or "").rstrip("/")
+    public_url = (cfg.public_url or "").rstrip("/")
+    deep_base = f"{ha_url}/lookout/viewer" if ha_url else public_url or None
+    dispatcher = NtfyDispatcher(
+        destination=target.destination,
+        deep_link_base_url=deep_base,
+        media_base_url=public_url or None,
+    )
+    return dispatcher, target.min_threat_level, "default"
+
+
 def create_app(
     config: LookoutConfig | None = None,
     repository: EventRepositoryPort | None = None,
@@ -251,8 +276,13 @@ def create_app(
                 logger.warning("Sidecar configuration synchronization error: %s", exc)
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             app.state.storage_service.start()
+        ingestor = getattr(app.state, "mqtt_ingestor", None)
+        if ingestor is not None:
+            ingestor.start()
         yield
         logger.info("Lookout web application shutting down")
+        if ingestor is not None:
+            await ingestor.stop()
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             await app.state.storage_service.stop()
 
@@ -265,11 +295,17 @@ def create_app(
 
     app.add_middleware(IngressSimulationMiddleware)
 
+    notification, notify_threshold, notify_target = _build_notification(active_config)
+
     active_event_service: EventProcessingService = (
         event_service
         if event_service is not None
         else EventProcessingService(
             repository=active_repo,
+            notification=notification,
+            vision_inference=active_vision,
+            notification_threshold=notify_threshold,
+            notification_target=notify_target,
             light_ml_detector=LightMLObjectDetector(),
             pet_classifier=PetPostureClassifier(),
             zone_evaluator=SpatialZoneEvaluator(zones=active_config.zones if active_config else []),
@@ -282,6 +318,16 @@ def create_app(
             else None,
         )
     )
+
+    async def _broadcast_event(evt: Any) -> None:
+        await app.state.broadcast_hub.broadcast_event(evt)
+
+    if active_config is not None and active_config.mqtt.enabled:
+        app.state.mqtt_ingestor = MqttEventIngestor(
+            active_config,
+            ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
+            on_event=_broadcast_event,
+        )
 
     # Attach application state
     app.state.config = active_config

@@ -106,6 +106,13 @@ class EventProcessingService(EventIngressPort):
 
         snapshot_uri: str | None = None
         media_uri: str | None = None
+        if isinstance(payload, dict):
+            raw_snap = payload.get("snapshot_uri")
+            if isinstance(raw_snap, str):
+                snapshot_uri = raw_snap
+            raw_media = payload.get("media_uri")
+            if isinstance(raw_media, str):
+                media_uri = raw_media
         if self.video_recorder is not None:
             snapshot_uri = await self.video_recorder.capture_snapshot(camera_id)
             media_uri = await self.video_recorder.record_clip(camera_id, 10.0)

@@ -113,6 +113,10 @@ class CameraConfig(BaseModel):
         default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
     )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
+    mqtt_id: str | None = Field(
+        default=None,
+        description="Device id used on MQTT bridge topics (e.g. ring-mqtt device id)",
+    )
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Detection trigger sensitivity"
@@ -448,6 +452,23 @@ class AudioClassifierConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether audio classification is active")
 
 
+class MqttConfig(BaseModel):
+    """Configuration for native MQTT camera-bridge event ingestion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Whether MQTT event ingestion is active")
+    host: str = Field(default="127.0.0.1", description="MQTT broker host")
+    port: int = Field(default=1883, ge=1, le=65535, description="MQTT broker port")
+    username: str | None = Field(default=None, description="MQTT username")
+    password: str | None = Field(default=None, description="MQTT password")
+    ring_topic: str = Field(default="ring", description="ring-mqtt base topic")
+    wyze_topic: str = Field(default="wyzebridge", description="wyze-bridge base topic")
+    cooldown_seconds: float = Field(
+        default=30.0, ge=0.0, description="Minimum seconds between events per camera"
+    )
+
+
 class LookoutConfig(BaseModel):
     """Top-level configuration schema for Lookout."""
 
@@ -477,6 +498,14 @@ class LookoutConfig(BaseModel):
     vehicles: list[VehicleConfig] = Field(default_factory=list)
     zones: list[PolygonZoneConfig] = Field(default_factory=list)
     light_ml: LightMLConfig = Field(default_factory=LightMLConfig)
+    mqtt: MqttConfig = Field(default_factory=MqttConfig)
+    public_url: str | None = Field(
+        default=None, description="Public base URL of Lookout (used for notification links/media)"
+    )
+    home_assistant_url: str | None = Field(
+        default=None,
+        description="Home Assistant base URL; when set, notification links open its Lookout panel",
+    )
 
     @model_validator(mode="after")
     def validate_cross_field_invariants(self) -> "LookoutConfig":

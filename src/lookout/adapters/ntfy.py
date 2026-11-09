@@ -66,6 +66,7 @@ class NtfyDispatcher(NotificationPort):
         deep_link_base_url: str | None = None,
         event_base_url: str | None = None,
         app_base_url: str | None = None,
+        media_base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
         http_client: httpx.AsyncClient | None = None,
         async_client: httpx.AsyncClient | None = None,
@@ -162,6 +163,9 @@ class NtfyDispatcher(NotificationPort):
         ):
             deep_base = _DEFAULT_DEEP_LINK_BASE
         self.deep_link_base_url = str(deep_base).rstrip("/")
+        self.media_base_url = str(
+            media_base_url or os.environ.get("LOOKOUT_BASE_URL") or ""
+        ).rstrip("/")
         self.url = self.topic_url
         self.topic = topic if topic is not None else (channel or name or target or destination)
         self.server = self.server_url
@@ -305,8 +309,15 @@ class NtfyDispatcher(NotificationPort):
             "Markdown": "yes",
         }
 
-        media_uri = event.media_uri or event.snapshot_uri
-        if media_uri:
+        media_uri = event.snapshot_uri or event.media_uri
+        if (
+            media_uri
+            and not _is_url(media_uri)
+            and media_uri.startswith("/")
+            and self.media_base_url
+        ):
+            media_uri = f"{self.media_base_url}{media_uri}"
+        if media_uri and _is_url(media_uri):
             headers["Attach"] = media_uri
             filename = _basename(media_uri)
             if filename:
@@ -328,6 +339,7 @@ class NtfyDispatcher(NotificationPort):
             stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
         actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
         headers["Actions"] = actions
+        headers["Click"] = event_url
 
         try:
             client = self._get_client()
