@@ -307,3 +307,31 @@ def test_immich_config_validation() -> None:
     assert "Alice" in config.immich.include_persons
     assert config.face_recognition.similarity_threshold == 0.6
     assert config.audio_classifier.sample_rate == 16000
+
+
+def test_wyze_config_schema_validation() -> None:
+    """TR-14: Validate WyzeConfig schema attributes and defaults."""
+    yaml_content = """
+    wyze:
+      email: "user@wyze.com"
+      password: "secretpassword"
+      auth_token: "wyze-token-abc"
+      enabled: true
+    """
+    config = load_config_from_yaml(yaml_content)
+    assert config.wyze.email == "user@wyze.com" and config.wyze.enabled is True
+
+
+def test_ring_config_extended_schema_validation() -> None:
+    """TR-15: Validate RingConfig extended schema with refresh token and oauth_url."""
+    yaml_content = """
+    ring:
+      refresh_token: "token-123"
+      oauth_url: "https://oauth.ring.com"
+      enabled: true
+    """
+    config = load_config_from_yaml(yaml_content)
+    assert (
+        config.ring.refresh_token == "token-123"
+        and config.ring.oauth_url == "https://oauth.ring.com"
+    )

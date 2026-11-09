@@ -80,10 +80,44 @@
     <section class="step-panel" id="step-2">
       <div>
         <h2 class="panel-title">Step 2: Camera Feed Ingestion</h2>
-        <p class="panel-desc">Add camera RTSP/HTTP stream URLs and validate stream reachability.</p>
+        <p class="panel-desc">Add camera RTSP/HTTP stream URLs, adopt detected bridge streams, or authenticate Wyze & Ring accounts.</p>
       </div>
 
-      <div id="cameras-list" style="display:flex;flex-direction:column;gap:var(--space-xs);"></div>
+      <!-- Sidecar Bridge Integrations -->
+      <div style="background:var(--bg-subtle);padding:var(--space-md);border-radius:var(--radius-md);margin-bottom:var(--space-md);">
+        <h3 style="font-size:0.875rem;font-weight:600;margin-bottom:var(--space-xs);">Bridge Sidecars & Ecosystem Accounts</h3>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-sm);">Auto-detects running docker-wyze-bridge or ring-mqtt instances, or connect with 2FA.</p>
+        
+        <div id="sidecar-providers-list" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-sm);">
+          <!-- Wyze Provider Card -->
+          <div class="sidecar-card" id="card-provider-wyze" style="border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--space-sm);background:var(--bg-surface);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-xs);">
+              <span style="font-weight:600;font-size:0.8125rem;">Wyze Cam Bridge</span>
+              <span class="badge" id="badge-wyze-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-wyze">docker-wyze-bridge (RTSP port 8554)</div>
+            <div style="display:flex;gap:var(--space-xs);">
+              <button class="btn btn-sm" id="btn-adopt-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
+              <button class="btn btn-sm btn-primary" id="btn-auth-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
+            </div>
+          </div>
+
+          <!-- Ring Provider Card -->
+          <div class="sidecar-card" id="card-provider-ring" style="border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--space-sm);background:var(--bg-surface);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-xs);">
+              <span style="font-weight:600;font-size:0.8125rem;">Ring Video Doorbell</span>
+              <span class="badge" id="badge-ring-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-ring">ring-mqtt bridge (SIP/RTSP)</div>
+            <div style="display:flex;gap:var(--space-xs);">
+              <button class="btn btn-sm" id="btn-adopt-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
+              <button class="btn btn-sm btn-primary" id="btn-auth-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="cameras-list" style="display:flex;flex-direction:column;gap:var(--space-xs);margin-bottom:var(--space-md);"></div>
 
       <div style="background:var(--bg-subtle);padding:var(--space-md);border-radius:var(--radius-md);display:flex;flex-direction:column;gap:var(--space-xs);">
         <h3 style="font-size:0.875rem;font-weight:600;">Add Camera Feed</h3>
@@ -106,6 +140,7 @@
           <select class="form-select" id="cam-type">
             <option value="generic">Generic RTSP / ONVIF</option>
             <option value="go2rtc">go2rtc WebRTC</option>
+            <option value="wyze">Wyze Bridge</option>
             <option value="ring">Ring Cloud SIP</option>
           </select>
         </div>
@@ -116,6 +151,31 @@
         </div>
       </div>
     </section>
+
+    <!-- Interactive 2FA Modal -->
+    <div class="modal-backdrop" id="modal-2fa" role="dialog" aria-modal="true" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:9999;">
+      <div class="modal-box" style="background:#1e293b;padding:24px;border-radius:8px;max-width:420px;width:90%;color:#fff;box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 id="modal-2fa-title" style="margin:0;font-size:1.125rem;font-weight:600;">Two-Factor Authentication</h3>
+          <button class="btn" id="modal-2fa-close" type="button" style="padding:2px 8px;">✕</button>
+        </div>
+        <p id="modal-2fa-desc" style="font-size:0.875rem;color:#94a3b8;margin-bottom:16px;">Enter the 6-digit verification code sent to your account.</p>
+        <div class="form-group" style="margin-bottom:16px;">
+          <label class="form-label" for="code-2fa" style="display:block;margin-bottom:4px;font-size:0.8125rem;">Verification Code</label>
+          <input class="form-input" id="code-2fa" type="text" placeholder="123456" maxlength="8" style="width:100%;font-size:1.25rem;letter-spacing:4px;text-align:center;box-sizing:border-box;">
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:0.75rem;color:#94a3b8;">
+          <span id="countdown-2fa">Expires in: 60s</span>
+          <button class="btn-link" id="btn-resend-2fa" type="button" style="background:none;border:none;color:#38bdf8;cursor:pointer;padding:0;">Resend Code</button>
+        </div>
+        <div id="status-2fa" style="font-size:0.8125rem;margin-bottom:16px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button class="btn" id="btn-cancel-2fa" type="button">Cancel</button>
+          <button class="btn btn-primary" id="btn-verify-2fa" type="button">Verify Code</button>
+        </div>
+      </div>
+    </div>
+
 
     <!-- Step 3: Household -->
     <section class="step-panel" id="step-3">

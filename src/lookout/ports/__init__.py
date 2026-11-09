@@ -13,6 +13,7 @@ from lookout.ports.ingress import (
     EventIngressPort,
     ViewerApiPort,
 )
+from lookout.ports.sidecar_provider import SidecarProviderPort
 
 __all__ = [
     "AudioClassifierPort",
@@ -21,6 +22,7 @@ __all__ = [
     "FaceRecognitionPort",
     "MediaTranscoderPort",
     "NotificationPort",
+    "SidecarProviderPort",
     "VideoRecorderPort",
     "ViewerApiPort",
     "VisionInferencePort",

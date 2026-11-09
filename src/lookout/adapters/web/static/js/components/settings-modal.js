@@ -13,7 +13,9 @@ export class SettingsModal {
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
     this.facesContainer = this.modal ? this.modal.querySelector("#faces-grid") : null;
     this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
+    this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
+
 
     this.bindEvents();
   }
@@ -84,6 +86,7 @@ export class SettingsModal {
     await this.loadSettings();
     await this.loadFaces();
     await this.loadEntities();
+    await this.loadIntegrations();
   }
 
   close() {
@@ -215,4 +218,83 @@ export class SettingsModal {
       console.error("Face upload error:", err);
     }
   }
+
+  async loadIntegrations() {
+    if (!this.integrationsContainer) return;
+    try {
+      const res = await fetch(resolveUrl("/api/auth/status"));
+      if (!res.ok) return;
+      const statusData = await res.json();
+
+      const provRes = await fetch(resolveUrl("/api/auth/providers"));
+      const providers = provRes.ok ? (await provRes.json()).providers || [] : [];
+
+      this.integrationsContainer.innerHTML = "";
+
+      const allProviders = [
+        ...providers,
+        { id: "go2rtc", name: "go2rtc Streaming Server", display_name: "go2rtc Streaming Server" },
+      ];
+
+      allProviders.forEach((prov) => {
+        const pStatus = statusData[prov.id] || {};
+        const isConn =
+          pStatus.status === "connected" ||
+          pStatus.status === "pre_authenticated" ||
+          pStatus.reachable;
+        const statusLabel =
+          pStatus.status === "pre_authenticated"
+            ? "Connected (Pre-authenticated)"
+            : isConn
+            ? "Connected"
+            : "Disconnected";
+        const badgeColor = isConn ? "#10b981" : "#64748b";
+
+        const row = document.createElement("div");
+        row.className = "integration-row";
+        row.style.cssText =
+          "display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-subtle, #334155);border-radius:6px;";
+
+        row.innerHTML = `
+          <div>
+            <div style="font-size:0.8125rem;font-weight:600;">${prov.display_name || prov.name}</div>
+            <div style="font-size:0.6875rem;color:var(--text-muted, #94a3b8);">${prov.id} sidecar bridge</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="badge" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:${badgeColor};color:#fff;">${statusLabel}</span>
+            <button class="btn btn-test-conn" style="padding:2px 8px;font-size:0.75rem;" type="button">Test</button>
+          </div>
+        `;
+
+        const testBtn = row.querySelector(".btn-test-conn");
+        testBtn.addEventListener("click", async () => {
+          testBtn.disabled = true;
+          testBtn.textContent = "...";
+          try {
+            const tRes = await fetch(resolveUrl("/api/auth/test-connection"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ provider: prov.id }),
+            });
+            const tData = await tRes.json();
+            testBtn.textContent = tData.reachable ? "Reachable" : "Failed";
+            testBtn.style.color = tData.reachable ? "#10b981" : "#ef4444";
+          } catch (e) {
+            testBtn.textContent = "Error";
+          } finally {
+            setTimeout(() => {
+              testBtn.disabled = false;
+              testBtn.textContent = "Test";
+              testBtn.style.color = "inherit";
+            }, 2000);
+          }
+        });
+
+        this.integrationsContainer.appendChild(row);
+      });
+    } catch (err) {
+      console.warn("Failed to load integrations status:", err);
+    }
+  }
 }
+
