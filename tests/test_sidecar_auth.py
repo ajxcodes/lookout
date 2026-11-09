@@ -1,7 +1,11 @@
 """Unit tests for Wyze and Ring sidecar authentication adapters, 2FA, and secret masking."""
 
+from pathlib import Path
+
 from lookout.adapters.sidecar_auth import RingSidecarAdapter, WyzeSidecarAdapter
 from lookout.config.schema import mask_config_dict, mask_secret
+from lookout.providers.ring.driver import RingProviderDriver
+from lookout.providers.wyze.driver import WyzeProviderDriver
 
 
 def test_wyze_2fa_challenge_and_verification() -> None:
@@ -99,3 +103,51 @@ def test_probe_existing_with_remote_endpoints() -> None:
         status_ring = ring.probe_existing(config_ring)
         assert status_ring["status"] == "pre_authenticated"
         assert status_ring["bridge_reachable"] is True
+
+
+def test_sidecar_adapters_backward_compatibility_and_driver_delegation(tmp_path: Path) -> None:
+    """AC6: Verify WyzeSidecarAdapter and RingSidecarAdapter subclass modular drivers
+    with full backward compatibility.
+    """
+    wyze_adapter = WyzeSidecarAdapter()
+    assert isinstance(wyze_adapter, WyzeProviderDriver)
+    assert wyze_adapter.provider_id == "wyze"
+
+    ring_adapter = RingSidecarAdapter()
+    assert isinstance(ring_adapter, RingProviderDriver)
+    assert ring_adapter.provider_id == "ring"
+
+    # Test backward compatibility helper methods mock_login and mock_verify
+    wyze_login = wyze_adapter.mock_login(
+        "user@example.com", "secure-password", api_key="k1", api_id="id1"
+    )
+    assert wyze_login["status"] == "2fa_required"
+    assert "session_id" in wyze_login
+    wyze_verify = wyze_adapter.mock_verify(wyze_login["session_id"], "123456")
+    assert wyze_verify["status"] == "authenticated"
+    assert wyze_verify["email"] == "user@example.com"
+
+    ring_login = ring_adapter.mock_login("ring@example.com", "secure-password")
+    assert ring_login["status"] == "2fa_required"
+    assert "session_id" in ring_login
+    ring_verify = ring_adapter.mock_verify(ring_login["session_id"], "654321")
+    assert ring_verify["status"] == "authenticated"
+    assert ring_verify["auth_token"] == "mock-ringtoken-12345"
+
+    # Test sync_environment compatibility returning a single Path
+    from lookout.config.schema import LookoutConfig, RingConfig, WyzeConfig
+
+    cfg = LookoutConfig(
+        system_name="Test System",
+        wyze=WyzeConfig(email="user@example.com", password="password"),
+        ring=RingConfig(email="ring@example.com", refresh_token="token123"),
+    )
+    wyze_env = wyze_adapter.sync_environment(cfg, tmp_path)
+    assert isinstance(wyze_env, Path)
+    assert wyze_env.name == "wyze-bridge.env"
+    assert wyze_env.exists()
+
+    ring_env = ring_adapter.sync_environment(cfg, tmp_path)
+    assert isinstance(ring_env, Path)
+    assert ring_env.name == "ring-mqtt.env"
+    assert ring_env.exists()

@@ -15,23 +15,23 @@ class SidecarProviderPort(Protocol):
     display_name: str
     default_ports: dict[str, int]
 
-    def probe_existing(self, config: LookoutConfig | None = None) -> dict[str, Any]:
+    def probe_existing(self, config: LookoutConfig | None = None) -> dict[str, Any] | Any:
         """Detect existing environment variables, active sockets, or pre-authenticated bridges."""
         ...
 
-    def initiate_login(self, credentials: dict[str, Any]) -> dict[str, Any]:
+    def initiate_login(self, credentials: dict[str, Any]) -> dict[str, Any] | Any:
         """Initiate provider authentication or trigger interactive 2FA challenge."""
         ...
 
-    def verify_2fa(self, session_id: str, code: str) -> dict[str, Any]:
+    def verify_2fa(self, session_id: str, code: str) -> dict[str, Any] | Any:
         """Verify 2FA challenge code and obtain authenticated tokens."""
         ...
 
-    def sync_environment(self, config: LookoutConfig, base_dir: Path) -> Path:
+    def sync_environment(self, config: LookoutConfig, base_dir: Path) -> Path | list[Path]:
         """Synchronize provider container environment variables to env file."""
         ...
 
-    def test_connection(self, endpoint: str | None = None) -> dict[str, Any]:
+    def test_connection(self, endpoint: str | None = None) -> dict[str, Any] | Any:
         """Verify stream or sidecar API endpoint reachability."""
         ...
 

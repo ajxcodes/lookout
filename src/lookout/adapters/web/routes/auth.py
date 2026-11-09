@@ -3,7 +3,7 @@
 import logging
 import socket
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -89,8 +89,12 @@ async def initiate_provider_login(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        result = adapter.initiate_login(credentials)
-        return result
+        if hasattr(adapter, "initiate_login"):
+            result = adapter.initiate_login(credentials)
+        else:
+            result = adapter.authenticate(credentials)
+        dumped = result.model_dump() if hasattr(result, "model_dump") else result
+        return cast(dict[str, Any], dumped)
     except Exception as exc:
         logger.warning("Provider login failed for %s: %s", provider, exc)
         raise HTTPException(status_code=400, detail=f"Login failed: {exc}") from exc
@@ -107,24 +111,51 @@ async def verify_provider_2fa(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     result = adapter.verify_2fa(payload.session_id, payload.code)
-    if result.get("status") == "authenticated":
+    status = result.get("status") if hasattr(result, "get") else getattr(result, "status", None)
+    if status == "authenticated":
         active_config = getattr(request.app.state, "config", None)
         if active_config is not None:
             if provider.lower() == "wyze":
                 if active_config.wyze is None:
                     active_config.wyze = WyzeConfig()
-                active_config.wyze.auth_token = result.get("auth_token")
-                active_config.wyze.refresh_token = result.get("refresh_token")
-                if result.get("email"):
-                    active_config.wyze.email = result["email"]
+                active_config.wyze.auth_token = (
+                    result.get("auth_token")
+                    if hasattr(result, "get")
+                    else getattr(result, "auth_token", None)
+                )
+                active_config.wyze.refresh_token = (
+                    result.get("refresh_token")
+                    if hasattr(result, "get")
+                    else getattr(result, "refresh_token", None)
+                )
+                res_email = (
+                    result.get("email")
+                    if hasattr(result, "get")
+                    else getattr(result, "email", None)
+                )
+                if res_email:
+                    active_config.wyze.email = res_email
             elif provider.lower() == "ring":
                 if active_config.ring is None:
                     active_config.ring = RingConfig()
-                token = result.get("refresh_token") or result.get("auth_token")
+                token = (
+                    result.get("refresh_token")
+                    if hasattr(result, "get")
+                    else getattr(result, "refresh_token", None)
+                ) or (
+                    result.get("auth_token")
+                    if hasattr(result, "get")
+                    else getattr(result, "auth_token", None)
+                )
                 active_config.ring.refresh_token = token
                 active_config.ring.auth_token = token
-                if result.get("email"):
-                    active_config.ring.email = result["email"]
+                res_email = (
+                    result.get("email")
+                    if hasattr(result, "get")
+                    else getattr(result, "email", None)
+                )
+                if res_email:
+                    active_config.ring.email = res_email
 
             # Synchronize environment files to data/sidecars
             config_synchronizer.sync_all(active_config)
@@ -137,7 +168,8 @@ async def verify_provider_2fa(
                     encoding="utf-8",
                 )
 
-    return result
+    dumped = result.model_dump() if hasattr(result, "model_dump") else result
+    return cast(dict[str, Any], dumped)
 
 
 @router.post("/{provider}/test")
@@ -151,7 +183,9 @@ async def test_provider_connection(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     endpoint = payload.get("endpoint") if payload else None
-    return adapter.test_connection(endpoint)
+    res = adapter.test_connection(endpoint)
+    dumped = res.model_dump() if hasattr(res, "model_dump") else res
+    return cast(dict[str, Any], dumped)
 
 
 @router.post("/adopt")
@@ -221,7 +255,8 @@ async def test_connection(payload: TestConnectionRequest) -> dict[str, Any]:
     try:
         adapter = registry.get_provider(provider)
         res = adapter.test_connection(endpoint)
-        return res
+        dumped = res.model_dump() if hasattr(res, "model_dump") else res
+        return cast(dict[str, Any], dumped)
     except KeyError:
         return {
             "reachable": False,

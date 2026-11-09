@@ -1,0 +1,48 @@
+{
+  "id": "wyze",
+  "name": "wyze",
+  "display_name": "Wyze Cam Bridge",
+  "description": "Integration with Wyze cameras via docker-wyze-bridge WebRTC/RTSP sidecar",
+  "icon": "camera",
+  "brand_color": "#00bfa5",
+  "badge": "Wyze Bridge",
+  "default_ports": {
+    "http": 5000,
+    "rtsp": 8554
+  },
+  "default_stream_url": "rtsp://localhost:8554/",
+  "default_camera_name": "Wyze Cam",
+  "supported_2fa": [
+    "totp",
+    "sms",
+    "email"
+  ],
+  "auth_fields": [
+    {
+      "key": "email",
+      "label": "Wyze Account Email",
+      "type": "email",
+      "required": true,
+      "placeholder": "user@example.com"
+    },
+    {
+      "key": "password",
+      "label": "Wyze Password",
+      "type": "password",
+      "required": true
+    },
+    {
+      "key": "api_key",
+      "label": "API Key (Optional)",
+      "type": "text",
+      "required": false
+    },
+    {
+      "key": "api_id",
+      "label": "API ID (Optional)",
+      "type": "text",
+      "required": false
+    }
+  ],
+  "docs_url": "https://github.com/mrlt8/docker-wyze-bridge"
+}
