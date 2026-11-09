@@ -321,7 +321,10 @@ class MqttEventIngestor:
                         resp = await client.get(url, params=params)
                         if (resp.status_code != 200 or len(resp.content) < 1000) and include_audio:
                             # Fallback to plain video-only stream if audio transcode failed
-                            fallback_params = {"src": camera_id, "duration": int(duration)}
+                            fallback_params: dict[str, str | int] = {
+                                "src": camera_id,
+                                "duration": int(duration),
+                            }
                             resp = await client.get(url, params=fallback_params)
                 except httpx.HTTPError as net_err:
                     logger.debug(
