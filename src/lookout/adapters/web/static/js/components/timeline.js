@@ -161,11 +161,24 @@ export class TimelineList {
       const latencyChips = TelemetryRenderer.getLatencyChips(evt);
       const entityBadges = this.getEntityBadges(evt);
 
+      const isBookmarked = Boolean(evt.bookmarked || (evt.metadata && evt.metadata.bookmarked));
+      let tierBadge = '<span class="tier-badge local">Local</span>';
+      if ((evt.metadata && evt.metadata.media_purged) || !evt.media_uri) {
+        tierBadge = '<span class="tier-badge purged">Purged</span>';
+      } else if (
+        (evt.metadata && evt.metadata.storage_tier === "archive") ||
+        evt.storage_tier === "archive" ||
+        (evt.media_uri && evt.media_uri.includes("archive"))
+      ) {
+        tierBadge = '<span class="tier-badge archive">Archive (ms)</span>';
+      }
+
       card.innerHTML = `
         <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
         <div class="event-info">
           <div class="event-header-row">
             ${this.getCategoryPill(evt.category)}
+            ${tierBadge}
             <span class="event-time">${this.formatRelativeTime(evt.timestamp)}</span>
           </div>
           <div class="event-summary" title="${evt.summary || ""}">${evt.summary || "Motion detected"}</div>
@@ -175,17 +188,42 @@ export class TimelineList {
             ${latencyChips}
           </div>
         </div>
-        <button class="btn-icon-delete" title="Delete event">✕</button>
+        <div style="display:flex;flex-direction:column;gap:4px;align-self:center;">
+          <button class="btn-icon-bookmark ${isBookmarked ? "bookmarked" : ""}" title="${isBookmarked ? "Unbookmark" : "Bookmark (Protect from eviction)"}" type="button">${isBookmarked ? "★" : "☆"}</button>
+          <button class="btn-icon-delete" title="Delete event" type="button">✕</button>
+        </div>
       `;
 
       card.addEventListener("click", (e) => {
-        if (e.target.closest(".btn-icon-delete")) return;
+        if (e.target.closest(".btn-icon-delete") || e.target.closest(".btn-icon-bookmark")) return;
         this.selectedEventId = evt.id;
         this.render();
         if (this.onSelectEvent) {
           this.onSelectEvent(evt);
         }
       });
+
+      const bookmarkBtn = card.querySelector(".btn-icon-bookmark");
+      if (bookmarkBtn) {
+        bookmarkBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const targetBm = !isBookmarked;
+          try {
+            const res = await fetch(resolveUrl(`/api/events/${evt.id}/bookmark`), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ bookmarked: targetBm }),
+            });
+            if (res.ok) {
+              evt.bookmarked = targetBm;
+              if (evt.metadata) evt.metadata.bookmarked = targetBm;
+              this.render();
+            }
+          } catch (err) {
+            console.error("Failed to toggle bookmark:", err);
+          }
+        });
+      }
 
       const delBtn = card.querySelector(".btn-icon-delete");
       if (delBtn) {

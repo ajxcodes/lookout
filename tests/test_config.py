@@ -335,3 +335,26 @@ def test_ring_config_extended_schema_validation() -> None:
         config.ring.refresh_token == "token-123"
         and config.ring.oauth_url == "https://oauth.ring.com"
     )
+
+
+def test_storage_config_extended_schema_validation() -> None:
+    """TR-6: Validate extended storage quota configuration and defaults."""
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+    assert (
+        config.storage.max_storage_percent == 80.0
+        and config.storage.retention_mode == "fifo_oldest_first"
+    )
+
+
+def test_storage_config_archive_settings_validation() -> None:
+    """TR-7: Validate archive settings schema and network share parameters."""
+    yaml_content = """
+    storage:
+      archive_enabled: true
+      archive_path: "/mnt/network_archive"
+      archive_max_storage_gb: 500.0
+      archive_max_storage_percent: 85.0
+    """
+    config = load_config_from_yaml(yaml_content)
+    assert config.storage.archive_enabled is True and config.storage.archive_path is not None
