@@ -266,6 +266,7 @@ class StorageService(StorageServicePort):
                 if self.config.archive_enabled and arch_base and status.archive_available:
                     # Migrate to warm archive tier
                     event_moved_bytes = 0
+                    event_migrated_files = 0
                     new_media_uri = None
                     new_snap_uri = None
 
@@ -281,18 +282,31 @@ class StorageService(StorageServicePort):
                                 sub = "snapshots" if is_snap else "recordings"
                                 rel = Path(sub) / p.name
                             dest = arch_base / rel
-                            dest.parent.mkdir(parents=True, exist_ok=True)
-                            f_size = p.stat().st_size
-                            shutil.move(str(p), str(dest))
-                            event_moved_bytes += f_size
-                            files_migrated += 1
-                            bytes_migrated += f_size
-                            if is_snap:
-                                new_snap_uri = str(dest)
-                            else:
-                                new_media_uri = str(dest)
+                            try:
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                f_size = p.stat().st_size
+                                shutil.move(str(p), str(dest))
+                                event_moved_bytes += f_size
+                                event_migrated_files += 1
+                                files_migrated += 1
+                                bytes_migrated += f_size
+                                if is_snap:
+                                    new_snap_uri = str(dest)
+                                else:
+                                    new_media_uri = str(dest)
+                            except (OSError, shutil.Error) as err:
+                                logger.warning(
+                                    "Failed to migrate media file %s to archive destination %s: %s",
+                                    p,
+                                    dest,
+                                    err,
+                                )
 
-                    if not new_media_uri and event.media_uri:
+                    if (
+                        not new_media_uri
+                        and event.media_uri
+                        and (event_migrated_files > 0 or not files_found)
+                    ):
                         try:
                             rel = Path(event.media_uri).relative_to(loc_base)
                             new_media_uri = str(arch_base / rel)
@@ -301,33 +315,46 @@ class StorageService(StorageServicePort):
                                 arch_base / "recordings" / Path(event.media_uri).name
                             )
 
-                    if hasattr(self.repository, "migrate_event_media"):
-                        await self.repository.migrate_event_media(
-                            event_id=event.id,
-                            new_media_uri=new_media_uri,
-                            new_snapshot_uri=new_snap_uri,
-                            new_tier="archive",
-                        )
-                    reclaimed_local += event_moved_bytes
-                    events_pruned += 1
+                    if event_migrated_files > 0 or (
+                        not files_found and (new_media_uri or new_snap_uri)
+                    ):
+                        if hasattr(self.repository, "migrate_event_media"):
+                            await self.repository.migrate_event_media(
+                                event_id=event.id,
+                                new_media_uri=new_media_uri,
+                                new_snapshot_uri=new_snap_uri,
+                                new_tier="archive",
+                            )
+                        reclaimed_local += event_moved_bytes
+                        events_pruned += 1
                 else:
                     # Permanent eviction: call archival extension hook and unlink
                     await self.archival_adapter.on_pre_evict(event, files_found)
+                    event_deleted = 0
                     event_freed = 0
                     for f in files_found:
-                        f_size = f.stat().st_size
-                        f.unlink(missing_ok=True)
-                        event_freed += f_size
-                        files_deleted += 1
-                        bytes_freed += f_size
+                        try:
+                            f_size = f.stat().st_size
+                            f.unlink(missing_ok=True)
+                            event_freed += f_size
+                            files_deleted += 1
+                            event_deleted += 1
+                            bytes_freed += f_size
+                        except OSError as err:
+                            logger.warning(
+                                "Failed to delete media file %s during eviction: %s",
+                                f,
+                                err,
+                            )
 
-                    if hasattr(self.repository, "nullify_media_references"):
-                        await self.repository.nullify_media_references(
-                            event.id,
-                            tombstone_metadata={"media_purged": True, "purged_from": "local"},
-                        )
-                    reclaimed_local += event_freed
-                    events_pruned += 1
+                    if event_deleted > 0 or not files_found:
+                        if hasattr(self.repository, "nullify_media_references"):
+                            await self.repository.nullify_media_references(
+                                event.id,
+                                tombstone_metadata={"media_purged": True, "purged_from": "local"},
+                            )
+                        reclaimed_local += event_freed
+                        events_pruned += 1
 
         # --- Stage 2: Archive Tier Quota Enforcement & Remote Full Handling ---
         if self.config.archive_enabled and self.config.archive_path:
@@ -362,21 +389,31 @@ class StorageService(StorageServicePort):
                                 files_to_purge.append(p)
 
                     await self.archival_adapter.on_pre_evict(event, files_to_purge)
+                    event_deleted = 0
                     event_freed = 0
                     for f in files_to_purge:
-                        f_size = f.stat().st_size
-                        f.unlink(missing_ok=True)
-                        event_freed += f_size
-                        files_deleted += 1
-                        bytes_freed += f_size
+                        try:
+                            f_size = f.stat().st_size
+                            f.unlink(missing_ok=True)
+                            event_freed += f_size
+                            files_deleted += 1
+                            event_deleted += 1
+                            bytes_freed += f_size
+                        except OSError as err:
+                            logger.warning(
+                                "Failed to delete archive media file %s during eviction: %s",
+                                f,
+                                err,
+                            )
 
-                    if hasattr(self.repository, "nullify_media_references"):
-                        await self.repository.nullify_media_references(
-                            event.id,
-                            tombstone_metadata={"media_purged": True, "purged_from": "archive"},
-                        )
-                    current_archive_bytes -= event_freed
-                    events_pruned += 1
+                    if event_deleted > 0 or not files_to_purge:
+                        if hasattr(self.repository, "nullify_media_references"):
+                            await self.repository.nullify_media_references(
+                                event.id,
+                                tombstone_metadata={"media_purged": True, "purged_from": "archive"},
+                            )
+                        current_archive_bytes -= event_freed
+                        events_pruned += 1
 
         # Audit logging
         if files_migrated > 0 and self.audit_logger:

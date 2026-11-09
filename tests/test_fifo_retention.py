@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -317,3 +318,87 @@ async def test_media_archival_pre_evict_hook_invocation(tmp_path: Path) -> None:
 
     await service.execute_fifo_eviction(target_bytes=10000)
     assert mock_archival.called_count == 1 and mock_archival.last_event_id == "evt-old"
+
+
+@pytest.mark.asyncio
+async def test_two_tier_archive_migration_handles_shutil_move_error(tmp_path: Path) -> None:
+    """Verify shutil.move cross-device/OS failure is caught and logged gracefully."""
+    data_dir = tmp_path / "data"
+    archive_dir = tmp_path / "network_archive"
+    (data_dir / "recordings").mkdir(parents=True, exist_ok=True)
+    (archive_dir / "recordings").mkdir(parents=True, exist_ok=True)
+
+    db_path = data_dir / "lookout.db"
+    repo = SqliteEventRepository(db_path=db_path)
+
+    now = datetime.now(UTC)
+    local_clip = data_dir / "recordings" / "fail_migrate.mp4"
+    local_clip.write_bytes(b"m" * 60000)
+
+    event = CameraEvent(
+        id="evt-fail-migrate",
+        camera_id="cam-1",
+        timestamp=now - timedelta(days=3),
+        category=EventCategory.UNKNOWN_VISITOR,
+        threat_level=ThreatLevel.LOW,
+        summary="Visitor with failed move",
+        media_uri=str(local_clip),
+    )
+    await repo.save(event)
+
+    config = StorageConfig(
+        base_path=str(data_dir),
+        database_path=str(db_path),
+        archive_enabled=True,
+        archive_path=str(archive_dir),
+    )
+    service = StorageService(config=config, repository=repo)
+
+    with patch("shutil.move", side_effect=OSError("Cross-device link error")):
+        result = await service.execute_fifo_eviction(target_bytes=10000)
+
+    assert result.files_migrated == 0
+    assert local_clip.exists()
+
+    saved = await repo.get_by_id("evt-fail-migrate")
+    assert saved is not None
+    assert saved.metadata.get("storage_tier") != "archive"
+    assert saved.media_uri == str(local_clip)
+
+
+@pytest.mark.asyncio
+async def test_fifo_eviction_handles_unlink_os_error(tmp_path: Path) -> None:
+    """Verify unlink OSError is caught and logged gracefully during permanent purge."""
+    data_dir = tmp_path / "data"
+    recordings_dir = data_dir / "recordings"
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "lookout.db"
+    repo = SqliteEventRepository(db_path=db_path)
+
+    now = datetime.now(UTC)
+    clip = recordings_dir / "protected.mp4"
+    clip.write_bytes(b"p" * 50000)
+
+    event = CameraEvent(
+        id="evt-unlink-err",
+        camera_id="cam-1",
+        timestamp=now - timedelta(days=7),
+        category=EventCategory.UNKNOWN_VISITOR,
+        threat_level=ThreatLevel.LOW,
+        summary="Event failing unlink",
+        media_uri=str(clip),
+    )
+    await repo.save(event)
+
+    config = StorageConfig(
+        base_path=str(data_dir),
+        database_path=str(db_path),
+        archive_enabled=False,
+    )
+    service = StorageService(config=config, repository=repo)
+
+    with patch.object(Path, "unlink", side_effect=OSError("Permission denied")):
+        result = await service.execute_fifo_eviction(target_bytes=45000)
+
+    assert result.files_deleted == 0
+    assert clip.exists()
