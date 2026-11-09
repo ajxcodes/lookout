@@ -162,6 +162,11 @@ export class TimelineList {
       const entityBadges = this.getEntityBadges(evt);
 
       const isBookmarked = Boolean(evt.bookmarked || (evt.metadata && evt.metadata.bookmarked));
+      const isSnapshotOnly = !evt.media_uri || (evt.metadata && evt.metadata.media_purged);
+      const mediaTypeBadge = isSnapshotOnly
+        ? '<span class="media-badge media-badge-snapshot">📸 Snapshot</span>'
+        : `<span class="media-badge media-badge-video">▶ ${evt.duration || 10}s</span>`;
+
       let tierBadge = '<span class="tier-badge local">Local</span>';
       if ((evt.metadata && evt.metadata.media_purged) || !evt.media_uri) {
         tierBadge = '<span class="tier-badge purged">Purged</span>';
@@ -174,7 +179,10 @@ export class TimelineList {
       }
 
       card.innerHTML = `
-        <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
+        <div class="thumb-wrap" style="position:relative;">
+          <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
+          ${mediaTypeBadge}
+        </div>
         <div class="event-info">
           <div class="event-header-row">
             ${this.getCategoryPill(evt.category)}

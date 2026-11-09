@@ -1,5 +1,5 @@
 /**
- * Dual-mode Live WebRTC and Snapshot player component.
+ * Resilient, cross-browser WebRTC, MSE, and Snapshot Live Player component.
  */
 import { resolveUrl } from "../utils/url.js";
 
@@ -9,8 +9,12 @@ export class LivePlayer {
     this.overlay = overlayElement;
     this.onLiveStateChange = onLiveStateChange;
     this.peerConnection = null;
+    this.websocket = null;
     this.activeCamera = null;
     this.isLive = false;
+    this.iceCandidateQueue = [];
+    this.hasRemoteDescription = false;
+    this.snapshotInterval = null;
   }
 
   setCamera(camera) {
@@ -27,11 +31,32 @@ export class LivePlayer {
     }
     if (this.overlay && this.activeCamera) {
       this.overlay.style.display = "flex";
-      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`);
+      const snapUrl = resolveUrl(
+        `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`
+      );
       this.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
     if (this.onLiveStateChange) {
       this.onLiveStateChange(false);
+    }
+  }
+
+  startSnapshotPolling(intervalMs = 3000) {
+    if (this.snapshotInterval) clearInterval(this.snapshotInterval);
+    this.snapshotInterval = setInterval(() => {
+      if (!this.isLive && this.activeCamera && this.overlay) {
+        const snapUrl = resolveUrl(
+          `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`
+        );
+        this.overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+    }, intervalMs);
+  }
+
+  stopSnapshotPolling() {
+    if (this.snapshotInterval) {
+      clearInterval(this.snapshotInterval);
+      this.snapshotInterval = null;
     }
   }
 
@@ -45,17 +70,28 @@ export class LivePlayer {
       this.video.style.display = "block";
     }
 
+    this.iceCandidateQueue = [];
+    this.hasRemoteDescription = false;
+
     try {
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
       this.peerConnection = pc;
 
+      // Cross-browser track attachment: handles Chrome/Edge/Safari missing a=msid
       pc.ontrack = (event) => {
-        if (this.video && event.streams && event.streams[0]) {
+        if (!this.video) return;
+        if (event.streams && event.streams[0]) {
           this.video.srcObject = event.streams[0];
-          this.video.play().catch(() => {});
+        } else {
+          if (!this.video.srcObject) {
+            this.video.srcObject = new MediaStream();
+          }
+          this.video.srcObject.addTrack(event.track);
         }
+        this.video.muted = true;
+        this.video.play().catch(() => {});
       };
 
       pc.addTransceiver("video", { direction: "recvonly" });
@@ -64,45 +100,123 @@ export class LivePlayer {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Fetch WebRTC metadata from backend
-      const metaRes = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/webrtc`));
-      if (!metaRes.ok) throw new Error("Failed to get WebRTC metadata");
-      const meta = await metaRes.json();
+      // Determine WebSocket protocol and endpoint
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsHost = window.location.host;
+      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?src=${encodeURIComponent(this.activeCamera.id)}`;
 
-      // Exchange SDP via go2rtc HTTP/WebSocket or proxy
-      const sdpRes = await fetch(meta.go2rtc_url.replace("/ws", "/webrtc"), {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          src: this.activeCamera.id,
-          sdp: offer.sdp,
-        }),
+      await new Promise((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        this.websocket = ws;
+
+        const timeoutId = setTimeout(() => {
+          ws.close();
+          reject(new Error("WebRTC WebSocket signaling timeout"));
+        }, 8000);
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "webrtc/offer", value: offer.sdp }));
+        };
+
+        ws.onmessage = async (msgEvent) => {
+          try {
+            const data = JSON.parse(msgEvent.data);
+            if (data.type === "webrtc/answer") {
+              await pc.setRemoteDescription({ type: "answer", sdp: data.value });
+              this.hasRemoteDescription = true;
+
+              // Flush buffered trickle ICE candidates to avoid InvalidStateError in Chromium / Safari
+              while (this.iceCandidateQueue.length > 0) {
+                const candidate = this.iceCandidateQueue.shift();
+                await pc.addIceCandidate(candidate).catch(() => {});
+              }
+              clearTimeout(timeoutId);
+              resolve();
+            } else if (data.type === "webrtc/candidate") {
+              const candidate = new RTCIceCandidate({
+                candidate: data.value,
+                sdpMid: data.sdpMid,
+                sdpMLineIndex: data.sdpMLineIndex,
+              });
+              if (!this.hasRemoteDescription) {
+                this.iceCandidateQueue.push(candidate);
+              } else {
+                await pc.addIceCandidate(candidate).catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.warn("Error processing WebRTC signaling message:", e);
+          }
+        };
+
+        ws.onerror = (err) => {
+          clearTimeout(timeoutId);
+          reject(err);
+        };
+
+        pc.onicecandidate = (iceEvent) => {
+          if (iceEvent.candidate && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "webrtc/candidate",
+                value: iceEvent.candidate.candidate,
+              })
+            );
+          }
+        };
       });
-
-      if (sdpRes.ok) {
-        const answerSdp = await sdpRes.text();
-        await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-      }
 
       this.isLive = true;
       if (this.onLiveStateChange) {
         this.onLiveStateChange(true);
       }
     } catch (err) {
-      console.warn("WebRTC live stream connection failed:", err);
-      // Fallback gracefully to snapshot
-      this.showSnapshotFallback();
+      console.warn("WebRTC primary live connection failed, attempting fallback:", err);
+      await this._attemptFallbackStream();
     }
   }
 
+  async _attemptFallbackStream() {
+    // 2. Secondary fallback: MSE / MP4 fragmented stream
+    try {
+      if (this.video && this.activeCamera) {
+        const mp4Url = resolveUrl(`/api/stream.mp4?src=${encodeURIComponent(this.activeCamera.id)}`);
+        this.video.src = mp4Url;
+        this.video.muted = true;
+        await this.video.play();
+        this.isLive = true;
+        if (this.onLiveStateChange) {
+          this.onLiveStateChange(true);
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn("MSE/MP4 live fallback failed:", e);
+    }
+
+    // 3. Quaternary fallback: Rapid snapshot polling
+    this.showSnapshotFallback();
+    this.startSnapshotPolling(2000);
+  }
+
   stopLive() {
+    this.stopSnapshotPolling();
+    if (this.websocket) {
+      try {
+        this.websocket.close();
+      } catch {}
+      this.websocket = null;
+    }
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
     if (this.video) {
       this.video.srcObject = null;
+      this.video.removeAttribute("src");
     }
+    this.hasRemoteDescription = false;
+    this.iceCandidateQueue = [];
     this.isLive = false;
   }
 }

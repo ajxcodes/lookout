@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from lookout.config.schema import PolygonZoneConfig
 from lookout.domain.models import BoundingBox
@@ -56,6 +56,7 @@ class LightMLObjectDetector:
         pet_classifier: PetPostureClassifier | None = None,
         zone_evaluator: SpatialZoneEvaluator | None = None,
         entity_matcher: Any = None,
+        npu_runtime: Any = None,
     ) -> None:
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
@@ -63,6 +64,7 @@ class LightMLObjectDetector:
         self.pet_classifier = pet_classifier or PetPostureClassifier()
         self.zone_evaluator = zone_evaluator
         self.entity_matcher = entity_matcher
+        self.npu_runtime = npu_runtime
         self._session = None
 
         try:
@@ -81,6 +83,9 @@ class LightMLObjectDetector:
 
     def detect_objects(self, frame_bytes: bytes) -> tuple[list[BoundingBox], float]:
         """Detect objects in raw image frame bytes, returning bounding boxes and latency."""
+        if self.npu_runtime is not None and self.npu_runtime.is_available():
+            return cast(tuple[list[BoundingBox], float], self.npu_runtime.infer(frame_bytes))
+
         start = time.perf_counter()
         boxes: list[BoundingBox] = []
 

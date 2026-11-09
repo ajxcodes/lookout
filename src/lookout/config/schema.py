@@ -200,6 +200,18 @@ class TranscodeConfig(BaseModel):
     use_stream_copy: bool = Field(
         default=True, description="Attempt direct stream-copy remux before re-encoding"
     )
+    hwaccel: str = Field(
+        default="none",
+        pattern="^(auto|vaapi|qsv|videotoolbox|nvenc|v4l2m2m|none)$",
+        description=(
+            "Hardware acceleration offload method "
+            "(auto, vaapi, qsv, videotoolbox, nvenc, v4l2m2m, none)"
+        ),
+    )
+    hwaccel_device: str | None = Field(
+        default=None,
+        description="Path to hardware device for acceleration (e.g. /dev/dri/renderD128)",
+    )
     max_threads: int = Field(
         default=2, ge=1, description="Maximum CPU threads allowed for transcode subprocesses"
     )
@@ -428,6 +440,10 @@ class LookoutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system_name: str = Field(default="Lookout", description="System installation name")
+    hardware_profile: str | None = Field(
+        default=None,
+        description="Declarative edge hardware sizing profile name (e.g. intel-n100-mini-pc)",
+    )
     residents: list[ResidentConfig] = Field(default_factory=list)
     pets: list[PetConfig] = Field(default_factory=list)
     cameras: list[CameraConfig] = Field(default_factory=list)

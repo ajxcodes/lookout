@@ -907,3 +907,254 @@ body {
   font-size: 0.6875rem;
   color: var(--text-muted);
 }
+
+/* ==========================================================================
+   Phase 9: Provider Badges, Stream Badges & Live Grid Matrix
+   ========================================================================== */
+
+/* Provider Badges (Legacy events.html parity) */
+.badge-provider {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  text-transform: capitalize;
+}
+
+.badge-provider.ring {
+  background-color: rgba(0, 112, 204, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.badge-provider.wyze {
+  background-color: rgba(0, 195, 137, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.4);
+}
+
+.badge-provider.generic {
+  background-color: rgba(100, 116, 139, 0.2);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* Stream Mode Badges */
+.badge-stream {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.badge-stream.live_rtc {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-stream.on_demand {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Media Badges in Timeline */
+.media-badge {
+  position: absolute;
+  bottom: 3px;
+  left: 3px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  backdrop-filter: blur(4px);
+}
+
+.media-badge-snapshot {
+  background: rgba(15, 23, 42, 0.85);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.media-badge-video {
+  background: rgba(15, 23, 42, 0.85);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+}
+
+/* Dedicated Event Snapshot Card Stage Presentation */
+.event-snapshot-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 280px;
+  background-color: #020617;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.snapshot-card-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.snapshot-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  z-index: 10;
+}
+
+.snapshot-card-meta {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(0deg, rgba(2, 6, 23, 0.9) 0%, rgba(2, 6, 23, 0) 100%);
+  padding: var(--space-md);
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.snapshot-info-overlay {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+/* Multi-Camera Live Grid View */
+.live-grid-section {
+  flex: 1;
+  padding: var(--space-md);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.live-grid-container {
+  display: grid;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.live-grid-container.density-auto {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+.live-grid-container.density-1-col {
+  grid-template-columns: 1fr;
+}
+
+.live-grid-container.density-2-col {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.live-grid-container.density-3-col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.live-grid-container.density-4-col {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.camera-grid-tile {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.camera-grid-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.tile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-xs) var(--space-sm);
+  background-color: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tile-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.tile-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tile-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-color: #000;
+  overflow: hidden;
+}
+
+.tile-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tile-overlay {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tile-live-btn {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.tile-live-btn:hover {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}

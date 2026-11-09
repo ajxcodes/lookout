@@ -6,6 +6,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
+from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_icon
+
+__all__ = ["TINY_JPEG", "build_camera_card_data", "infer_camera_icon", "router"]
+
 router = APIRouter(tags=["cameras"])
 
 # Minimal valid 1x1 pixel JPEG binary for placeholder/idle snapshot delivery
@@ -23,24 +27,12 @@ TINY_JPEG = (
 
 @router.get("/cameras")
 async def list_cameras(request: Request) -> dict[str, Any]:
-    """Retrieve all configured camera feeds with status and capabilities."""
+    """Retrieve all configured camera feeds with status, icons, and stream badges."""
     config = request.app.state.config
     if config is None or not hasattr(config, "cameras"):
         return {"cameras": []}
 
-    cameras = [
-        {
-            "id": cam.id,
-            "name": cam.name,
-            "stream_url": cam.stream_url,
-            "camera_type": cam.camera_type,
-            "enabled": cam.enabled,
-            "location": cam.location,
-            "sensitivity": cam.sensitivity,
-            "record_duration": cam.record_duration,
-        }
-        for cam in config.cameras
-    ]
+    cameras = [build_camera_card_data(cam) for cam in config.cameras]
     return {"cameras": cameras}
 
 

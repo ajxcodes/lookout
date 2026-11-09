@@ -33,6 +33,7 @@ from lookout.adapters.web.routes import (
     settings_router,
     setup_router,
     storage_router,
+    system_router,
 )
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, StorageConfig
@@ -220,6 +221,7 @@ def create_app(
     app.include_router(auth_router, prefix="/api")
     app.include_router(providers_router, prefix="/api")
     app.include_router(storage_router, prefix="/api")
+    app.include_router(system_router, prefix="/api")
 
     # Static assets
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

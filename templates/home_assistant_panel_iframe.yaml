@@ -1,0 +1,8 @@
+# Home Assistant Container Lovelace iFrame Dashboard & Panel Configuration
+# Compatible with Docker / Podman standalone installations (lacking Supervised Add-ons)
+panel_iframe:
+  lookout:
+    title: "Lookout"
+    icon: "mdi:cctv"
+    url: "https://lookout.home.ajx.codes"
+    require_admin: false

@@ -448,13 +448,43 @@ class GeminiVisionProvider:
 class LocalEdgeVisionProvider:
     """Tier 3: In-process CPU edge ML detector for people, pets, and vehicles."""
 
-    def __init__(self, model_name: str = "local-edge-vision-cpu") -> None:
+    def __init__(
+        self,
+        model_name: str = "local-edge-vision-cpu",
+        npu_runtime: Any = None,
+    ) -> None:
         self.model_name = model_name
+        self.npu_runtime = npu_runtime
 
     async def analyze(
         self, image_bytes: bytes, prompt: str | None = None
     ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
         start = time.perf_counter()
+        if self.npu_runtime is not None and self.npu_runtime.is_available():
+            boxes, latency_ms = self.npu_runtime.infer(image_bytes)
+            # Infer category from boxes
+            category = EventCategory.UNKNOWN_VISITOR
+            confidence = 0.88
+            for b in boxes:
+                if b.label in ("pet", "dog", "cat"):
+                    category = EventCategory.KNOWN_PET
+                    confidence = max(confidence, b.confidence)
+                elif b.label in ("vehicle", "car", "truck"):
+                    category = EventCategory.VEHICLE
+                    confidence = max(confidence, b.confidence)
+                elif b.label in ("person", "resident"):
+                    category = EventCategory.UNKNOWN_VISITOR
+                    confidence = max(confidence, b.confidence)
+            metrics = DetectionMetrics(confidence=confidence, bounding_boxes=boxes)
+            provenance = InferenceProvenance(
+                provider="local_edge",
+                model_name=self.npu_runtime.get_active_accelerator().name,
+                latency_ms=latency_ms,
+                confidence=confidence,
+                raw_output=f"npu:{category.value}",
+            )
+            return category, metrics, provenance
+
         payload_lower = image_bytes.lower()
 
         # Deterministic lightweight edge detection heuristics

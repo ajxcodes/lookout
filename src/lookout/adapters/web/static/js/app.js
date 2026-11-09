@@ -4,6 +4,7 @@
 import { CameraSwitcher } from "./components/switcher.js";
 import { LivePlayer } from "./components/live-player.js";
 import { EventPlayer } from "./components/event-player.js";
+import { LiveGrid } from "./components/live-grid.js";
 import { AcousticVisualizer } from "./components/acoustic-canvas.js";
 import { CategoryFilter } from "./components/filters.js";
 import { TimelineList } from "./components/timeline.js";
@@ -17,6 +18,7 @@ class LookoutApp {
     this.events = [];
     this.activeCamera = null;
     this.activeCategory = "all";
+    this.viewMode = "grid"; // Default primary main landing view
     this.sseEventSource = null;
 
     this.initElements();
@@ -26,6 +28,14 @@ class LookoutApp {
 
   initElements() {
     this.switcherEl = document.getElementById("switcher-container");
+    this.liveGridSection = document.getElementById("live-grid-section");
+    this.liveGridContainer = document.getElementById("live-grid-container");
+    this.viewerMain = document.getElementById("viewer-main");
+    this.viewGridBtn = document.getElementById("view-grid-btn");
+    this.viewFocusBtn = document.getElementById("view-focus-btn");
+    this.backToGridBtn = document.getElementById("back-to-grid-btn");
+    this.densitySelect = document.getElementById("grid-density-select");
+
     this.liveVideo = document.getElementById("live-video");
     this.eventVideo = document.getElementById("event-video");
     this.snapshotOverlay = document.getElementById("snapshot-overlay");
@@ -49,6 +59,12 @@ class LookoutApp {
   }
 
   initComponents() {
+    this.liveGrid = new LiveGrid({
+      container: this.liveGridContainer,
+      densitySelector: this.densitySelect,
+      onFocusCamera: (cam) => this.switchToFocus(cam),
+    });
+
     this.acousticVis = new AcousticVisualizer({
       canvasElement: this.canvasEl,
       vuBarElement: this.vuBarEl,
@@ -133,7 +149,18 @@ class LookoutApp {
     });
   }
 
-  bindGlobalEvents() {
+    if (this.viewGridBtn) {
+      this.viewGridBtn.addEventListener("click", () => this.switchToGrid());
+    }
+
+    if (this.viewFocusBtn) {
+      this.viewFocusBtn.addEventListener("click", () => this.switchToFocus());
+    }
+
+    if (this.backToGridBtn) {
+      this.backToGridBtn.addEventListener("click", () => this.switchToGrid());
+    }
+
     if (this.startLiveBtn) {
       this.startLiveBtn.addEventListener("click", () => {
         this.livePlayer.startLive();
@@ -171,7 +198,36 @@ class LookoutApp {
     }
   }
 
+  switchToGrid() {
+    this.viewMode = "grid";
+    if (this.liveGridSection) this.liveGridSection.style.display = "block";
+    if (this.viewerMain) this.viewerMain.style.display = "none";
+    if (this.viewGridBtn) this.viewGridBtn.classList.add("active");
+    if (this.viewFocusBtn) this.viewFocusBtn.classList.remove("active");
+    this.livePlayer.stopLive();
+    if (this.eventPlayer && this.eventPlayer.video) {
+      this.eventPlayer.video.pause();
+    }
+    this.acousticVis.stop();
+  }
+
+  switchToFocus(cam = null) {
+    this.viewMode = "focus";
+    if (this.liveGridSection) this.liveGridSection.style.display = "none";
+    if (this.viewerMain) this.viewerMain.style.display = "grid";
+    if (this.viewGridBtn) this.viewGridBtn.classList.remove("active");
+    if (this.viewFocusBtn) this.viewFocusBtn.classList.add("active");
+
+    if (cam) {
+      this.activeCamera = cam;
+      this.cameraSwitcher.setActiveCamera(cam.id);
+      this.livePlayer.setCamera(cam);
+      this.fetchEvents();
+    }
+  }
+
   playEvent(eventItem) {
+    this.switchToFocus();
     this.currentEventItem = eventItem;
     this.livePlayer.stopLive();
 
@@ -205,12 +261,14 @@ class LookoutApp {
       if (!res.ok) return;
       const data = await res.json();
       this.cameras = data.cameras || [];
+      this.liveGrid.setCameras(this.cameras);
       this.cameraSwitcher.setCameras(this.cameras);
 
       if (this.cameras.length > 0) {
         this.activeCamera = this.cameras[0];
         this.livePlayer.setCamera(this.activeCamera);
       }
+      this.switchToGrid();
     } catch (err) {
       console.warn("Failed to fetch cameras:", err);
     }
