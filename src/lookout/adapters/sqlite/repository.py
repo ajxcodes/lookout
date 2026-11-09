@@ -153,6 +153,15 @@ def _row_to_event(row: sqlite3.Row) -> CameraEvent:
         if "matched_entities_json" in keys and row["matched_entities_json"]
         else []
     )
+    metadata = (
+        json.loads(row["metadata_json"]) if "metadata_json" in keys and row["metadata_json"] else {}
+    )
+    is_bookmarked = bool(
+        (row["bookmarked"] if "bookmarked" in keys and row["bookmarked"] is not None else False)
+        or metadata.get("bookmarked", False)
+    )
+    if is_bookmarked:
+        metadata["bookmarked"] = True
 
     return CameraEvent(
         id=row["id"],
@@ -167,10 +176,11 @@ def _row_to_event(row: sqlite3.Row) -> CameraEvent:
         pet_id=row["pet_id"],
         media_uri=row["media_uri"],
         snapshot_uri=row["snapshot_uri"],
-        metadata=json.loads(row["metadata_json"]),
+        metadata=metadata,
         zone_id=zone_id,
         vehicle_id=vehicle_id,
         matched_entities=matched_entities,
+        bookmarked=is_bookmarked,
     )
 
 
@@ -200,14 +210,19 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
 
         def _write(conn: sqlite3.Connection) -> None:
             cursor = conn.cursor()
+            is_bm = bool(event.bookmarked or event.metadata.get("bookmarked", False))
+            if is_bm:
+                event.bookmarked = True
+                event.metadata["bookmarked"] = True
+
             cursor.execute(
                 """
                 INSERT INTO camera_events (
                     id, camera_id, timestamp, category, threat_level, summary,
                     metrics_json, provenance_json, resident_id, pet_id,
                     media_uri, snapshot_uri, metadata_json, zone_id, vehicle_id,
-                    matched_entities_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    matched_entities_json, created_at, bookmarked
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     camera_id = excluded.camera_id,
                     timestamp = excluded.timestamp,
@@ -223,7 +238,8 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
                     metadata_json = excluded.metadata_json,
                     zone_id = excluded.zone_id,
                     vehicle_id = excluded.vehicle_id,
-                    matched_entities_json = excluded.matched_entities_json;
+                    matched_entities_json = excluded.matched_entities_json,
+                    bookmarked = excluded.bookmarked;
                 """,
                 (
                     event.id,
@@ -243,6 +259,7 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
                     event.vehicle_id,
                     json.dumps(event.matched_entities),
                     datetime.now(UTC).isoformat(),
+                    1 if is_bm else 0,
                 ),
             )
 
@@ -429,6 +446,155 @@ class SqliteEventRepository(EventRepositoryPort, ViewerApiPort):
     async def search(self, query: str, limit: int = 50, offset: int = 0) -> list[CameraEvent]:
         """Full-text search query across event summaries, categories, and tags."""
         return await self.find(query=query, limit=limit, offset=offset)
+
+    async def migrate_event_media(
+        self,
+        event_id: str,
+        new_media_uri: str | None,
+        new_snapshot_uri: str | None = None,
+        new_tier: str = "archive",
+    ) -> bool:
+        """Update media URIs and record new storage tier in event metadata."""
+
+        def _write(conn: sqlite3.Connection) -> bool:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT media_uri, snapshot_uri, metadata_json FROM camera_events WHERE id = ?;",
+                (event_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            meta = json.loads(row["metadata_json"] or "{}")
+            meta["storage_tier"] = new_tier
+
+            med_uri = new_media_uri if new_media_uri is not None else row["media_uri"]
+            snap_uri = new_snapshot_uri if new_snapshot_uri is not None else row["snapshot_uri"]
+
+            cursor.execute(
+                """
+                UPDATE camera_events
+                SET media_uri = ?, snapshot_uri = ?, metadata_json = ?
+                WHERE id = ?;
+                """,
+                (med_uri, snap_uri, json.dumps(meta), event_id),
+            )
+            if med_uri:
+                cursor.execute(
+                    "UPDATE media_assets SET file_path = ? WHERE event_id = ?;",
+                    (med_uri, event_id),
+                )
+            return True
+
+        return await self._manager.execute_write(_write)
+
+    async def nullify_media_references(
+        self,
+        event_id: str,
+        tombstone_metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Nullify media references, record tombstone metadata, and prune media assets."""
+
+        def _write(conn: sqlite3.Connection) -> bool:
+            cursor = conn.cursor()
+            cursor.execute("SELECT metadata_json FROM camera_events WHERE id = ?;", (event_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            meta = json.loads(row["metadata_json"] or "{}")
+            meta["media_purged"] = True
+            if tombstone_metadata:
+                meta.update(tombstone_metadata)
+
+            cursor.execute(
+                """
+                UPDATE camera_events
+                SET media_uri = NULL, snapshot_uri = NULL, metadata_json = ?
+                WHERE id = ?;
+                """,
+                (json.dumps(meta), event_id),
+            )
+            cursor.execute("DELETE FROM media_assets WHERE event_id = ?;", (event_id,))
+            return True
+
+        return await self._manager.execute_write(_write)
+
+    async def bookmark_event(self, event_id: str, bookmarked: bool = True) -> bool:
+        """Set or update bookmark status for an event."""
+
+        def _write(conn: sqlite3.Connection) -> bool:
+            cursor = conn.cursor()
+            cursor.execute("SELECT metadata_json FROM camera_events WHERE id = ?;", (event_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            meta = json.loads(row["metadata_json"] or "{}")
+            meta["bookmarked"] = bookmarked
+
+            cursor.execute(
+                """
+                UPDATE camera_events
+                SET metadata_json = ?, bookmarked = ?
+                WHERE id = ?;
+                """,
+                (json.dumps(meta), 1 if bookmarked else 0, event_id),
+            )
+            return True
+
+        return await self._manager.execute_write(_write)
+
+    async def get_eviction_candidates(
+        self,
+        limit: int = 100,
+        preserve_bookmarked: bool = True,
+        retention_mode: str = "fifo_oldest_first",
+        tier: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query eviction candidates based on policy, tier, and bookmark protection."""
+
+        def _read(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+            cursor = conn.cursor()
+            conditions: list[str] = ["(media_uri IS NOT NULL OR snapshot_uri IS NOT NULL)"]
+            params: list[Any] = []
+
+            if tier == "archive":
+                conditions.append("json_extract(metadata_json, '$.storage_tier') = 'archive'")
+            elif tier == "local":
+                conditions.append(
+                    "(json_extract(metadata_json, '$.storage_tier') IS NULL "
+                    "OR json_extract(metadata_json, '$.storage_tier') != 'archive')"
+                )
+
+            if preserve_bookmarked:
+                conditions.append(
+                    "(bookmarked = 0 OR bookmarked IS NULL) AND "
+                    "(json_extract(metadata_json, '$.bookmarked') IS NULL "
+                    "OR json_extract(metadata_json, '$.bookmarked') = 0 "
+                    "OR json_extract(metadata_json, '$.bookmarked') = false)"
+                )
+
+            where_clause = " AND ".join(conditions)
+            order_clause = (
+                "threat_level ASC, timestamp ASC"
+                if retention_mode == "events_priority"
+                else "timestamp ASC"
+            )
+
+            query = (
+                f"SELECT * FROM camera_events WHERE {where_clause} ORDER BY {order_clause} LIMIT ?;"
+            )
+            params.append(limit)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            candidates: list[dict[str, Any]] = []
+            for r in rows:
+                item = dict(r)
+                item["event"] = _row_to_event(r)
+                item["metadata"] = json.loads(r["metadata_json"] or "{}")
+                candidates.append(item)
+            return candidates
+
+        return await self._manager.execute_read(_read)
 
     def close(self) -> None:
         """Close underlying database connection manager."""

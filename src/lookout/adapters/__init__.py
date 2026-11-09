@@ -60,6 +60,7 @@ from lookout.adapters.sqlite import (
     SqliteEventRepository,
     import_legacy_events,
 )
+from lookout.adapters.storage_service import NoOpMediaArchivalAdapter, StorageService
 from lookout.adapters.tempfile import TempMediaContext, TempMediaManager
 from lookout.adapters.web import SSEBroadcastHub, create_app
 
@@ -91,6 +92,7 @@ __all__ = [
     "MockTranscoderAdapter",
     "MockVideoRecorderAdapter",
     "MockVisionInferenceAdapter",
+    "NoOpMediaArchivalAdapter",
     "NtfyAdapter",
     "NtfyDispatcher",
     "NtfyNotificationAdapter",
@@ -104,6 +106,7 @@ __all__ = [
     "SpatialZoneEvaluator",
     "SqliteConnectionManager",
     "SqliteEventRepository",
+    "StorageService",
     "StructuredOutputParser",
     "TempMediaContext",
     "TempMediaManager",

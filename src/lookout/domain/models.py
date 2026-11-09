@@ -94,6 +94,7 @@ class CameraEvent:
     zone_id: str | None = None
     vehicle_id: str | None = None
     matched_entities: list[str] = field(default_factory=list)
+    bookmarked: bool = False
 
     def is_threat(self) -> bool:
         """Evaluate if the event represents an actionable threat."""
@@ -121,3 +122,50 @@ class CameraEvent:
     def is_pet_elimination(self) -> bool:
         """Check if the event represents pet elimination posture."""
         return self.category == EventCategory.PET_ELIMINATION
+
+
+@dataclass
+class StorageStatus:
+    """Storage usage metrics, quota limits, and volume telemetry for local and archive tiers."""
+
+    volume_total_bytes: int
+    volume_used_bytes: int
+    volume_available_bytes: int
+    volume_used_percent: float
+    media_total_bytes: int
+    media_breakdown: dict[str, int]
+    max_storage_bytes: int
+    max_storage_gb: float
+    max_storage_percent: float
+    media_quota_used_percent: float
+    warning_threshold_percent: float = 90.0
+    is_warning: bool = False
+    retention_mode: str = "fifo_oldest_first"
+    preserve_bookmarked: bool = True
+    cleanup_interval_seconds: float = 300.0
+    retention_runway_hours: float | None = None
+    archive_enabled: bool = False
+    archive_path: str | None = None
+    archive_available: bool = False
+    archive_volume_total_bytes: int = 0
+    archive_volume_used_bytes: int = 0
+    archive_volume_available_bytes: int = 0
+    archive_volume_used_percent: float = 0.0
+    archive_media_total_bytes: int = 0
+    archive_media_breakdown: dict[str, int] = field(default_factory=dict)
+    archive_max_storage_bytes: int = 0
+    archive_max_storage_gb: float | None = None
+    archive_max_storage_percent: float | None = None
+    archive_quota_used_percent: float = 0.0
+    archive_is_warning: bool = False
+
+
+@dataclass
+class EvictionResult:
+    """Outcome of a FIFO storage eviction run."""
+
+    files_migrated: int = 0
+    bytes_migrated: int = 0
+    files_deleted: int = 0
+    bytes_freed: int = 0
+    events_pruned: int = 0

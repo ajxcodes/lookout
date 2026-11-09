@@ -39,7 +39,17 @@ storage:
   critical_retention_days: 30
   busy_timeout_ms: 5000
   retention_days: 30
-  max_storage_gb: 100.0
+  max_storage_gb: 50.0
+  max_storage_percent: 80.0
+  retention_mode: "fifo_oldest_first"
+  preserve_bookmarked: true
+  cleanup_interval_seconds: 300.0
+  low_watermark_percent: 90.0
+  warning_threshold_percent: 90.0
+  archive_enabled: false
+  archive_path: null
+  archive_max_storage_gb: null
+  archive_max_storage_percent: 90.0
 
 go2rtc:
   api_url: "http://localhost:1984"
