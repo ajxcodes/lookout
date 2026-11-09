@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS camera_events (
     zone_id TEXT,
     vehicle_id TEXT,
     matched_entities_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    bookmarked INTEGER NOT NULL DEFAULT 0
 );
 
 -- Indexes for performance
@@ -140,7 +141,9 @@ def initialize_database(
         "ALTER TABLE camera_events ADD COLUMN zone_id TEXT;",
         "ALTER TABLE camera_events ADD COLUMN vehicle_id TEXT;",
         "ALTER TABLE camera_events ADD COLUMN matched_entities_json TEXT NOT NULL DEFAULT '[]';",
+        "ALTER TABLE camera_events ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0;",
         "ALTER TABLE household_members ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}';",
+        "CREATE INDEX IF NOT EXISTS idx_camera_events_bookmarked ON camera_events(bookmarked);",
     ]:
         with contextlib.suppress(sqlite3.OperationalError):
             cursor.execute(col_ddl)

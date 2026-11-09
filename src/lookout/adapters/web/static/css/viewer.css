@@ -791,3 +791,119 @@ body {
   align-items: center;
   gap: var(--space-xs);
 }
+
+/* Storage Warning Banner */
+.storage-warning-banner {
+  background-color: var(--color-threat-bg, rgba(239, 68, 68, 0.15));
+  border-bottom: 1px solid var(--color-threat, #ef4444);
+  color: var(--color-threat, #ef4444);
+  padding: var(--space-xs) var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  z-index: 40;
+}
+
+.storage-warning-banner .warning-icon {
+  font-size: 1rem;
+}
+
+/* Tier Badges on Timeline Cards */
+.tier-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.tier-badge.local {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.tier-badge.archive {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.tier-badge.purged {
+  background-color: rgba(107, 114, 128, 0.15);
+  color: #9ca3af;
+  border: 1px solid rgba(107, 114, 128, 0.3);
+}
+
+/* Bookmark Button on Timeline Cards */
+.btn-icon-bookmark {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-2xs);
+  font-size: 1rem;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  align-self: center;
+  transition: color var(--transition-fast);
+}
+
+.btn-icon-bookmark:hover,
+.btn-icon-bookmark.bookmarked {
+  color: #fbbf24;
+}
+
+/* Storage Visualizer Card & Progress Bars */
+.storage-visualizer-card {
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+}
+
+.storage-tier-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: var(--space-2xs);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar-fill.archive-fill {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.progress-bar-fill.warning {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.storage-meta-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}

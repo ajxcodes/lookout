@@ -36,6 +36,13 @@ export class EventPlayer {
     this.currentEvent = eventItem;
     if (!this.video) return;
 
+    if (!eventItem.media_uri || (eventItem.metadata && eventItem.metadata.media_purged)) {
+      this.video.pause();
+      this.video.removeAttribute("src");
+      this.video.load();
+      return;
+    }
+
     // Use normalized MP4 media_uri or snapshot
     const rawUrl = eventItem.media_uri || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
     const videoUrl = resolveUrl(rawUrl);

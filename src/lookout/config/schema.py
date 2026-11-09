@@ -270,7 +270,39 @@ class StorageConfig(BaseModel):
     )
     retention_days: int = Field(default=30, ge=1, description="Days to retain events and clips")
     max_storage_gb: float = Field(
-        default=100.0, gt=0.0, description="Max disk allocation in gigabytes"
+        default=50.0, gt=0.0, description="Max disk allocation in gigabytes"
+    )
+    max_storage_percent: float = Field(
+        default=80.0, gt=0.0, le=100.0, description="Max percentage of local volume"
+    )
+    retention_mode: str = Field(
+        default="fifo_oldest_first",
+        pattern="^(fifo_oldest_first|events_priority)$",
+        description="Eviction strategy",
+    )
+    preserve_bookmarked: bool = Field(
+        default=True, description="Protect bookmarked media from eviction on both tiers"
+    )
+    cleanup_interval_seconds: float = Field(
+        default=300.0, gt=0.0, description="Daemon audit interval"
+    )
+    low_watermark_percent: float = Field(
+        default=90.0, gt=0.0, le=100.0, description="Safe buffer target percentage of quota"
+    )
+    warning_threshold_percent: float = Field(
+        default=90.0, gt=0.0, le=100.0, description="Warning alert trigger"
+    )
+    archive_enabled: bool = Field(
+        default=False, description="Enable secondary tier archival to network share"
+    )
+    archive_path: str | None = Field(
+        default=None, description="Path to mounted network share (e.g. NFS/SMB on ms)"
+    )
+    archive_max_storage_gb: float | None = Field(
+        default=None, gt=0.0, description="Max disk allowance on archive server"
+    )
+    archive_max_storage_percent: float | None = Field(
+        default=90.0, gt=0.0, le=100.0, description="Max percentage of archive volume"
     )
 
 

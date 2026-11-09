@@ -75,4 +75,6 @@ def serialize_event(event: CameraEvent) -> dict[str, Any]:
         "has_pet": event.has_pet(),
         "has_vehicle": event.has_vehicle(),
         "is_pet_elimination": event.is_pet_elimination(),
+        "bookmarked": bool(event.bookmarked or event.metadata.get("bookmarked", False)),
+        "storage_tier": event.metadata.get("storage_tier", "local"),
     }

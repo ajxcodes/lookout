@@ -180,3 +180,29 @@ async def enrich_event(event_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
 
     return serialize_event(updated)
+
+
+@router.post("/events/{event_id}/bookmark")
+async def bookmark_event(event_id: str, request: Request) -> dict[str, Any]:
+    """Toggle or set bookmark status on a camera event to protect it from eviction."""
+    repo: EventRepositoryPort = request.app.state.repository
+    bookmarked = True
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "bookmarked" in body:
+            bookmarked = bool(body["bookmarked"])
+    except Exception:
+        pass
+
+    event = await repo.get_by_id(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+
+    if hasattr(repo, "bookmark_event"):
+        await repo.bookmark_event(event_id, bookmarked=bookmarked)
+    else:
+        event.bookmarked = bookmarked
+        event.metadata["bookmarked"] = bookmarked
+        await repo.save(event)
+
+    return {"status": "ok", "event_id": event_id, "bookmarked": bookmarked}

@@ -16,6 +16,11 @@ export class SettingsModal {
     this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
 
+    this.archiveToggle = this.modal ? this.modal.querySelector("#setting-archive-enabled") : null;
+    this.archiveFields = this.modal ? this.modal.querySelector("#archive-settings-fields") : null;
+    this.saveStorageBtn = this.modal ? this.modal.querySelector("#save-storage-config-btn") : null;
+    this.triggerEvictionBtn = this.modal ? this.modal.querySelector("#trigger-eviction-btn") : null;
+    this.feedbackEl = this.modal ? this.modal.querySelector("#storage-action-feedback") : null;
 
     this.bindEvents();
   }
@@ -26,6 +31,28 @@ export class SettingsModal {
     const closeBtn = this.modal.querySelector("#modal-close-btn");
     if (closeBtn) {
       closeBtn.addEventListener("click", () => this.close());
+    }
+
+    if (this.archiveToggle && this.archiveFields) {
+      this.archiveToggle.addEventListener("change", (e) => {
+        this.archiveFields.style.display = e.target.checked ? "grid" : "none";
+      });
+    }
+
+    if (this.saveStorageBtn) {
+      this.saveStorageBtn.addEventListener("click", () => this.saveStorageConfig());
+    }
+
+    if (this.triggerEvictionBtn) {
+      this.triggerEvictionBtn.addEventListener("click", () => this.triggerEviction());
+    }
+
+    const dismissWarningBtn = document.querySelector("#dismiss-storage-warning");
+    if (dismissWarningBtn) {
+      dismissWarningBtn.addEventListener("click", () => {
+        const banner = document.querySelector("#storage-warning-banner");
+        if (banner) banner.style.display = "none";
+      });
     }
 
     this.modal.addEventListener("click", (e) => {
@@ -87,6 +114,7 @@ export class SettingsModal {
     await this.loadFaces();
     await this.loadEntities();
     await this.loadIntegrations();
+    await this.loadStorage();
   }
 
   close() {
@@ -294,6 +322,193 @@ export class SettingsModal {
       });
     } catch (err) {
       console.warn("Failed to load integrations status:", err);
+    }
+  }
+
+  async loadStorage() {
+    try {
+      const [statusRes, configRes] = await Promise.all([
+        fetch(resolveUrl("/api/storage/status")),
+        fetch(resolveUrl("/api/storage/config")),
+      ]);
+
+      if (statusRes.ok) {
+        const s = await statusRes.json();
+        const localUsedGb = (s.media_total_bytes / (1024 ** 3)).toFixed(2);
+        const localMaxGb = (s.max_storage_bytes / (1024 ** 3)).toFixed(1);
+        const localStats = this.modal.querySelector("#local-storage-stats");
+        if (localStats) localStats.textContent = `${localUsedGb} / ${localMaxGb} GB (${s.media_quota_used_percent}%)`;
+
+        const localFill = this.modal.querySelector("#local-progress-fill");
+        if (localFill) {
+          localFill.style.width = `${Math.min(100, s.media_quota_used_percent)}%`;
+          localFill.classList.toggle("warning", s.is_warning);
+        }
+
+        const localQuotaDesc = this.modal.querySelector("#local-quota-desc");
+        if (localQuotaDesc) localQuotaDesc.textContent = `Quota: ${s.max_storage_gb} GB | Cap: ${s.max_storage_percent}%`;
+
+        const localRunwayDesc = this.modal.querySelector("#local-runway-desc");
+        if (localRunwayDesc) localRunwayDesc.textContent = s.retention_runway_hours !== null ? `Runway: ~${s.retention_runway_hours}h` : "Runway: N/A";
+
+        // Archive tier
+        const archStats = this.modal.querySelector("#archive-storage-stats");
+        const archFill = this.modal.querySelector("#archive-progress-fill");
+        const archQuotaDesc = this.modal.querySelector("#archive-quota-desc");
+        const archBadge = this.modal.querySelector("#archive-status-badge");
+
+        if (s.archive_enabled && s.archive_path) {
+          const archUsedGb = (s.archive_media_total_bytes / (1024 ** 3)).toFixed(2);
+          const archMaxGb = s.archive_max_storage_bytes > 0 ? (s.archive_max_storage_bytes / (1024 ** 3)).toFixed(1) : "Unbounded";
+          if (archStats) archStats.textContent = `${archUsedGb} / ${archMaxGb} GB (${s.archive_quota_used_percent}%)`;
+          if (archFill) {
+            archFill.style.width = `${Math.min(100, s.archive_quota_used_percent)}%`;
+            archFill.classList.toggle("warning", s.archive_is_warning);
+          }
+          if (archQuotaDesc) archQuotaDesc.textContent = `Mount: ${s.archive_path}`;
+          if (archBadge) {
+            archBadge.textContent = s.archive_available ? "Mounted (Writable)" : "Unavailable / Read-Only";
+            archBadge.style.color = s.archive_available ? "#10b981" : "#ef4444";
+          }
+        } else {
+          if (archStats) archStats.textContent = "Disabled";
+          if (archFill) archFill.style.width = "0%";
+          if (archQuotaDesc) archQuotaDesc.textContent = "Mount: Inactive";
+          if (archBadge) {
+            archBadge.textContent = "Disabled";
+            archBadge.style.color = "var(--text-muted)";
+          }
+        }
+
+        // Global warning banner
+        const banner = document.querySelector("#storage-warning-banner");
+        if (banner) {
+          if (s.is_warning || s.archive_is_warning) {
+            banner.style.display = "flex";
+            const text = document.querySelector("#storage-warning-text");
+            if (text) {
+              text.textContent = s.archive_is_warning
+                ? "Archive storage quota exceeded (>90%). Purging oldest archived media."
+                : "Local storage quota exceeded (>90%). Evicting oldest media.";
+            }
+          } else {
+            banner.style.display = "none";
+          }
+        }
+      }
+
+      if (configRes.ok) {
+        const c = await configRes.json();
+        const maxGbInput = this.modal.querySelector("#setting-max-storage-gb");
+        if (maxGbInput && c.max_storage_gb !== undefined) maxGbInput.value = c.max_storage_gb;
+
+        const maxPctInput = this.modal.querySelector("#setting-max-storage-pct");
+        if (maxPctInput && c.max_storage_percent !== undefined) maxPctInput.value = c.max_storage_percent;
+
+        const retModeInput = this.modal.querySelector("#setting-retention-mode");
+        if (retModeInput && c.retention_mode) retModeInput.value = c.retention_mode;
+
+        const bmToggle = this.modal.querySelector("#setting-preserve-bookmarked");
+        if (bmToggle && c.preserve_bookmarked !== undefined) bmToggle.checked = c.preserve_bookmarked;
+
+        if (this.archiveToggle && c.archive_enabled !== undefined) {
+          this.archiveToggle.checked = c.archive_enabled;
+          if (this.archiveFields) this.archiveFields.style.display = c.archive_enabled ? "grid" : "none";
+        }
+
+        const archPathInput = this.modal.querySelector("#setting-archive-path");
+        if (archPathInput && c.archive_path) archPathInput.value = c.archive_path;
+
+        const archMaxGbInput = this.modal.querySelector("#setting-archive-max-gb");
+        if (archMaxGbInput && c.archive_max_storage_gb !== null && c.archive_max_storage_gb !== undefined) {
+          archMaxGbInput.value = c.archive_max_storage_gb;
+        }
+
+        const archMaxPctInput = this.modal.querySelector("#setting-archive-max-pct");
+        if (archMaxPctInput && c.archive_max_storage_percent !== undefined) {
+          archMaxPctInput.value = c.archive_max_storage_percent;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load storage telemetry:", err);
+    }
+  }
+
+  async saveStorageConfig() {
+    if (!this.saveStorageBtn) return;
+    this.saveStorageBtn.disabled = true;
+    this.saveStorageBtn.textContent = "Saving...";
+    try {
+      const maxGb = parseFloat(this.modal.querySelector("#setting-max-storage-gb")?.value || "50");
+      const maxPct = parseFloat(this.modal.querySelector("#setting-max-storage-pct")?.value || "80");
+      const retentionMode = this.modal.querySelector("#setting-retention-mode")?.value || "fifo_oldest_first";
+      const preserveBm = Boolean(this.modal.querySelector("#setting-preserve-bookmarked")?.checked);
+      const archiveEnabled = Boolean(this.archiveToggle?.checked);
+      const archivePath = this.modal.querySelector("#setting-archive-path")?.value?.trim() || null;
+      const rawArchGb = this.modal.querySelector("#setting-archive-max-gb")?.value;
+      const archiveMaxGb = rawArchGb ? parseFloat(rawArchGb) : null;
+      const archiveMaxPct = parseFloat(this.modal.querySelector("#setting-archive-max-pct")?.value || "90");
+
+      const res = await fetch(resolveUrl("/api/storage/config"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          max_storage_gb: maxGb,
+          max_storage_percent: maxPct,
+          retention_mode: retentionMode,
+          preserve_bookmarked: preserveBm,
+          archive_enabled: archiveEnabled,
+          archive_path: archivePath,
+          archive_max_storage_gb: archiveMaxGb,
+          archive_max_storage_percent: archiveMaxPct,
+        }),
+      });
+
+      if (this.feedbackEl) {
+        this.feedbackEl.style.display = "block";
+        if (res.ok) {
+          this.feedbackEl.textContent = "✓ Storage settings saved successfully.";
+          this.feedbackEl.style.color = "#10b981";
+          await this.loadStorage();
+        } else {
+          this.feedbackEl.textContent = "✕ Failed to save storage settings.";
+          this.feedbackEl.style.color = "#ef4444";
+        }
+      }
+    } catch (err) {
+      if (this.feedbackEl) {
+        this.feedbackEl.style.display = "block";
+        this.feedbackEl.textContent = "Error saving settings.";
+        this.feedbackEl.style.color = "#ef4444";
+      }
+    } finally {
+      this.saveStorageBtn.disabled = false;
+      this.saveStorageBtn.textContent = "Save Storage Settings";
+    }
+  }
+
+  async triggerEviction() {
+    if (!this.triggerEvictionBtn) return;
+    this.triggerEvictionBtn.disabled = true;
+    this.triggerEvictionBtn.textContent = "Running...";
+    try {
+      const res = await fetch(resolveUrl("/api/storage/clean"), { method: "POST" });
+      const data = await res.json();
+      if (this.feedbackEl) {
+        this.feedbackEl.style.display = "block";
+        this.feedbackEl.style.color = "#10b981";
+        this.feedbackEl.textContent = `✓ Eviction complete: ${data.files_migrated || 0} migrated, ${data.files_deleted || 0} pruned.`;
+      }
+      await this.loadStorage();
+    } catch (err) {
+      if (this.feedbackEl) {
+        this.feedbackEl.style.display = "block";
+        this.feedbackEl.style.color = "#ef4444";
+        this.feedbackEl.textContent = "Failed to run eviction.";
+      }
+    } finally {
+      this.triggerEvictionBtn.disabled = false;
+      this.triggerEvictionBtn.textContent = "⚡ Run Eviction / Sync Now";
     }
   }
 }

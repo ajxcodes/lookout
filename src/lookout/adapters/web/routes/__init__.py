@@ -4,6 +4,7 @@ from lookout.adapters.web.routes.entities import router as entities_router
 from lookout.adapters.web.routes.events import router as events_router
 from lookout.adapters.web.routes.settings import router as settings_router
 from lookout.adapters.web.routes.setup import router as setup_router
+from lookout.adapters.web.routes.storage import router as storage_router
 
 __all__ = [
     "auth_router",
@@ -12,4 +13,5 @@ __all__ = [
     "events_router",
     "settings_router",
     "setup_router",
+    "storage_router",
 ]
