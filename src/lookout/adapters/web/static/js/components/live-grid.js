@@ -10,7 +10,11 @@ export class LiveGrid {
     this.densitySelector = densitySelector;
     this.onFocusCamera = onFocusCamera;
     this.cameras = [];
-    this.density = localStorage.getItem("lookout_grid_density") || "auto";
+    try {
+      this.density = localStorage?.getItem("lookout_grid_density") || "auto";
+    } catch (_) {
+      this.density = "auto";
+    }
     this.streamPlayers = new Map(); // cameraId -> { pc, ws, video, overlay, isLive }
     this.intersectionObserver = null;
     this.isTabVisible = !document.hidden;
@@ -57,7 +61,9 @@ export class LiveGrid {
 
   setDensity(density) {
     this.density = density;
-    localStorage.setItem("lookout_grid_density", density);
+    try {
+      localStorage?.setItem("lookout_grid_density", density);
+    } catch (_) {}
     if (this.container) {
       this.container.className = `live-grid-container density-${density}`;
     }

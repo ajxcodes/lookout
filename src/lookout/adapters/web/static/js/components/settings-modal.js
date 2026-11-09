@@ -11,7 +11,7 @@ export class SettingsModal {
 
     this.aiSelect = this.modal ? this.modal.querySelector("#setting-ai-mode") : null;
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
-    this.facesContainer = this.modal ? this.modal.querySelector("#faces-grid") : null;
+    this.facesContainer = this.modal ? (this.modal.querySelector("#face-gallery-list") || this.modal.querySelector("#faces-grid")) : null;
     this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
     this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;

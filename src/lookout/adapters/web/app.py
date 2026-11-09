@@ -236,6 +236,8 @@ def create_app(
 
         # 1. Local hot tier
         local_target = (media_dir / clean_path).resolve()
+        if not local_target.is_file() and (media_dir / "media" / clean_path).is_file():
+            local_target = (media_dir / "media" / clean_path).resolve()
         if local_target.is_file():
             return FileResponse(local_target, headers={"Accept-Ranges": "bytes"})
 
@@ -244,6 +246,8 @@ def create_app(
         if cfg and hasattr(cfg, "storage") and cfg.storage.archive_path:
             archive_base = Path(cfg.storage.archive_path).resolve()
             archive_target = (archive_base / clean_path).resolve()
+            if not archive_target.is_file() and (archive_base / "media" / clean_path).is_file():
+                archive_target = (archive_base / "media" / clean_path).resolve()
             if archive_target.is_file():
                 return FileResponse(archive_target, headers={"Accept-Ranges": "bytes"})
 

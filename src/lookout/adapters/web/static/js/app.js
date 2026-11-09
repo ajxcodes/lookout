@@ -30,6 +30,7 @@ class LookoutApp {
     this.switcherEl = document.getElementById("switcher-container");
     this.liveGridSection = document.getElementById("live-grid-section");
     this.liveGridContainer = document.getElementById("live-grid-container");
+    this.focusStage = document.getElementById("focus-stage");
     this.viewerMain = document.getElementById("viewer-main");
     this.viewGridBtn = document.getElementById("view-grid-btn");
     this.viewFocusBtn = document.getElementById("view-focus-btn");
@@ -149,6 +150,7 @@ class LookoutApp {
     });
   }
 
+  bindGlobalEvents() {
     if (this.viewGridBtn) {
       this.viewGridBtn.addEventListener("click", () => this.switchToGrid());
     }
@@ -201,7 +203,8 @@ class LookoutApp {
   switchToGrid() {
     this.viewMode = "grid";
     if (this.liveGridSection) this.liveGridSection.style.display = "block";
-    if (this.viewerMain) this.viewerMain.style.display = "none";
+    if (this.focusStage) this.focusStage.style.display = "none";
+    if (this.viewerMain) this.viewerMain.style.display = "grid";
     if (this.viewGridBtn) this.viewGridBtn.classList.add("active");
     if (this.viewFocusBtn) this.viewFocusBtn.classList.remove("active");
     this.livePlayer.stopLive();
@@ -214,6 +217,7 @@ class LookoutApp {
   switchToFocus(cam = null) {
     this.viewMode = "focus";
     if (this.liveGridSection) this.liveGridSection.style.display = "none";
+    if (this.focusStage) this.focusStage.style.display = "flex";
     if (this.viewerMain) this.viewerMain.style.display = "grid";
     if (this.viewGridBtn) this.viewGridBtn.classList.remove("active");
     if (this.viewFocusBtn) this.viewFocusBtn.classList.add("active");
@@ -223,6 +227,9 @@ class LookoutApp {
       this.cameraSwitcher.setActiveCamera(cam.id);
       this.livePlayer.setCamera(cam);
       this.fetchEvents();
+    } else if (this.activeCamera) {
+      this.cameraSwitcher.setActiveCamera(this.activeCamera.id);
+      this.livePlayer.setCamera(this.activeCamera);
     }
   }
 

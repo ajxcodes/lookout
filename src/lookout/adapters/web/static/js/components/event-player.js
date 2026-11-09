@@ -57,54 +57,62 @@ export class EventPlayer {
     }
   }
 
+  renderSnapshotCard(eventItem) {
+    if (this.video) {
+      this.video.pause();
+      this.video.style.display = "none";
+      this.video.removeAttribute("src");
+    }
+
+    if (this.snapshotCard) {
+      this.snapshotCard.style.display = "flex";
+
+      if (this.snapshotImg) {
+        const rawThumb =
+          eventItem.snapshot_uri ||
+          eventItem.snapshot_url ||
+          eventItem.gif_url ||
+          `/media/${eventItem.camera_id}/${eventItem.id}.jpg`;
+        this.snapshotImg.src = resolveUrl(rawThumb);
+      }
+
+      if (this.snapshotMeta) {
+        const timeStr = new Date(eventItem.timestamp).toLocaleString();
+        const categoryStr = (eventItem.category || "Motion").replace(/_/g, " ");
+        const entities = (eventItem.matched_entities || []).join(", ");
+        this.snapshotMeta.innerHTML = `
+          <span class="snapshot-badge">📸 Snapshot</span>
+          <div class="snapshot-info-overlay">
+            <span class="meta-camera">${eventItem.camera_id}</span>
+            <span class="meta-time">${timeStr}</span>
+            <span class="meta-category">${categoryStr}</span>
+            ${entities ? `<span class="meta-entities">Entities: ${entities}</span>` : ""}
+          </div>
+        `;
+      }
+    }
+
+    // Controls Bar Adaptation: Hide video controls, display snapshot actions
+    if (this.videoControls) {
+      this.videoControls.style.display = "none";
+    }
+    const videoDownloadWrap = document.getElementById("video-download-wrap");
+    if (videoDownloadWrap) {
+      videoDownloadWrap.style.display = "none";
+    }
+    if (this.snapshotControls) {
+      this.snapshotControls.style.display = "flex";
+    }
+  }
+
   loadEvent(eventItem) {
     this.currentEvent = eventItem;
 
-    const isSnapshotOnly = !eventItem.media_uri || (eventItem.metadata && eventItem.metadata.media_purged);
+    const videoUrl = eventItem.media_uri || eventItem.clip_url || eventItem.video_url;
+    const isSnapshotOnly = !videoUrl || (eventItem.metadata && eventItem.metadata.media_purged);
 
     if (isSnapshotOnly) {
-      // 1. Stage Presentation: Render dedicated high-resolution Snapshot Card
-      if (this.video) {
-        this.video.pause();
-        this.video.style.display = "none";
-        this.video.removeAttribute("src");
-      }
-
-      if (this.snapshotCard) {
-        this.snapshotCard.style.display = "flex";
-
-        if (this.snapshotImg) {
-          const rawThumb = eventItem.snapshot_uri || `/media/${eventItem.camera_id}/${eventItem.id}.jpg`;
-          this.snapshotImg.src = resolveUrl(rawThumb);
-        }
-
-        if (this.snapshotMeta) {
-          const timeStr = new Date(eventItem.timestamp).toLocaleString();
-          const categoryStr = (eventItem.category || "Motion").replace(/_/g, " ");
-          const entities = (eventItem.matched_entities || []).join(", ");
-          this.snapshotMeta.innerHTML = `
-            <span class="snapshot-badge">📸 Snapshot</span>
-            <div class="snapshot-info-overlay">
-              <span class="meta-camera">${eventItem.camera_id}</span>
-              <span class="meta-time">${timeStr}</span>
-              <span class="meta-category">${categoryStr}</span>
-              ${entities ? `<span class="meta-entities">Entities: ${entities}</span>` : ""}
-            </div>
-          `;
-        }
-      }
-
-      // 2. Controls Bar Adaptation: Hide video controls, display snapshot actions
-      if (this.videoControls) {
-        this.videoControls.style.display = "none";
-      }
-      const videoDownloadWrap = document.getElementById("video-download-wrap");
-      if (videoDownloadWrap) {
-        videoDownloadWrap.style.display = "none";
-      }
-      if (this.snapshotControls) {
-        this.snapshotControls.style.display = "flex";
-      }
+      this.renderSnapshotCard(eventItem);
       return;
     }
 
@@ -126,15 +134,29 @@ export class EventPlayer {
     if (!this.video) return;
     this.video.style.display = "block";
 
-    const rawUrl = eventItem.media_uri || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
-    const videoUrl = resolveUrl(rawUrl);
-    this.video.src = videoUrl;
+    const posterUrl = eventItem.snapshot_uri || eventItem.snapshot_url || eventItem.gif_url || "";
+    if (posterUrl) {
+      this.video.poster = resolveUrl(posterUrl);
+    }
+
+    const rawUrl = videoUrl || `/media/${eventItem.camera_id}/${eventItem.id}.mp4`;
+    this.video.src = resolveUrl(rawUrl);
     this.video.playbackRate = this.currentSpeed;
     this.video.loop = this.isLooping;
-    this.video.play().catch(() => {
-      this.video.muted = true;
-      this.video.play().catch(() => {});
-    });
+
+    this.video.onerror = () => {
+      console.warn("Video failed to load/decode, falling back to snapshot card");
+      this.renderSnapshotCard(eventItem);
+    };
+
+    this.video.load();
+    const playPromise = this.video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        this.video.muted = true;
+        this.video.play().catch(() => {});
+      });
+    }
   }
 
   setSpeed(speed) {

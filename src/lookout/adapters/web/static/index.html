@@ -48,74 +48,77 @@
   <!-- Camera Switcher Toolbar -->
   <nav class="switcher-bar" id="switcher-container" aria-label="Camera selection"></nav>
 
-  <!-- Multi-Camera Live Grid View (Default Landing Main Interface) -->
-  <section class="live-grid-section" id="live-grid-section">
-    <div class="live-grid-container density-auto" id="live-grid-container"></div>
-  </section>
+  <!-- Main Viewer Grid (Stage on Left, Timeline Drawer on Right) -->
+  <main class="viewer-main" id="viewer-main">
+    <!-- Left Stage: Live Grid or Single Camera Focus Video & Acoustic Visualizer -->
+    <section class="stage-section" id="stage-section">
+      <!-- Multi-Camera Live Grid View (Default Landing in Stage) -->
+      <section class="live-grid-section" id="live-grid-section">
+        <div class="live-grid-container density-auto" id="live-grid-container"></div>
+      </section>
 
-  <!-- Main Single Camera Focus View -->
-  <main class="viewer-main" id="viewer-main" style="display:none;">
-    <!-- Left Stage: Video & Acoustic Visualizer -->
-    <section class="stage-section">
-      <div style="margin-bottom:8px;">
-        <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
-      </div>
-      <div class="video-container">
-        <!-- Live WebRTC Video -->
-        <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
-
-        <!-- Recorded Event Video -->
-        <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
-
-        <!-- Dedicated Snapshot Card Container -->
-        <div class="event-snapshot-card" id="event-snapshot-card" style="display:none;">
-          <span class="snapshot-badge">📸 Snapshot</span>
-          <img class="snapshot-card-img" id="snapshot-card-img" alt="Captured snapshot" />
-          <div class="snapshot-card-meta" id="snapshot-card-meta"></div>
+      <!-- Single Camera Focus Stage -->
+      <div class="focus-stage" id="focus-stage" style="display:none;">
+        <div style="margin-bottom:8px;">
+          <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
         </div>
+        <div class="video-container">
+          <!-- Live WebRTC Video -->
+          <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
 
-        <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
-        <div class="snapshot-overlay" id="snapshot-overlay">
-          <button class="start-live-btn" id="start-live-btn" type="button">
-            ▶ Start Live Stream
-          </button>
-        </div>
-      </div>
+          <!-- Recorded Event Video -->
+          <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
 
-      <!-- Playback Controls Bar -->
-      <div class="player-controls-bar" id="player-controls">
-        <div class="playback-toggles" id="video-playback-controls">
-          <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
-          <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
-          <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
-          <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
-          <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
-        </div>
-
-        <div class="snapshot-action-controls" id="snapshot-playback-controls" style="display:none;gap:6px;">
-          <button class="btn btn-primary" id="download-snapshot-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download Snapshot</button>
-          <button class="btn" id="inspect-frame-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">🔍 Inspect Frame</button>
-        </div>
-
-        <div id="video-download-wrap">
-          <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
-        </div>
-      </div>
-
-      <!-- Interactive Acoustic Visualizer -->
-      <div class="acoustic-panel">
-        <div class="acoustic-header">
-          <span>Acoustic Frequency Waveform</span>
-          <span>Acoustic Decibel Level</span>
-        </div>
-        <div class="acoustic-canvas-wrap">
-          <canvas id="acoustic-canvas"></canvas>
-        </div>
-        <div class="vu-meter-wrap">
-          <div class="vu-meter">
-            <div class="vu-bar" id="vu-bar"></div>
+          <!-- Dedicated Snapshot Card Container -->
+          <div class="event-snapshot-card" id="event-snapshot-card" style="display:none;">
+            <span class="snapshot-badge">📸 Snapshot</span>
+            <img class="snapshot-card-img" id="snapshot-card-img" alt="Captured snapshot" />
+            <div class="snapshot-card-meta" id="snapshot-card-meta"></div>
           </div>
-          <span class="vu-db-text" id="vu-db-text">-36 dB</span>
+
+          <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
+          <div class="snapshot-overlay" id="snapshot-overlay">
+            <button class="start-live-btn" id="start-live-btn" type="button">
+              ▶ Start Live Stream
+            </button>
+          </div>
+        </div>
+
+        <!-- Playback Controls Bar -->
+        <div class="player-controls-bar" id="player-controls">
+          <div class="playback-toggles" id="video-playback-controls">
+            <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
+            <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
+            <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
+            <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
+            <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
+          </div>
+
+          <div class="snapshot-action-controls" id="snapshot-playback-controls" style="display:none;gap:6px;">
+            <button class="btn btn-primary" id="download-snapshot-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download Snapshot</button>
+            <button class="btn" id="inspect-frame-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">🔍 Inspect Frame</button>
+          </div>
+
+          <div id="video-download-wrap">
+            <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
+          </div>
+        </div>
+
+        <!-- Interactive Acoustic Visualizer -->
+        <div class="acoustic-panel">
+          <div class="acoustic-header">
+            <span>Acoustic Frequency Waveform</span>
+            <span>Acoustic Decibel Level</span>
+          </div>
+          <div class="acoustic-canvas-wrap">
+            <canvas id="acoustic-canvas"></canvas>
+          </div>
+          <div class="vu-meter-wrap">
+            <div class="vu-meter">
+              <div class="vu-bar" id="vu-bar"></div>
+            </div>
+            <span class="vu-db-text" id="vu-db-text">-36 dB</span>
+          </div>
         </div>
       </div>
     </section>
