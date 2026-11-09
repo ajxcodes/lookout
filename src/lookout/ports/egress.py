@@ -1,13 +1,16 @@
 """Egress port definitions for media recording, AI inference, persistence, and notifications."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from lookout.domain.models import (
     CameraEvent,
     DetectionMetrics,
     EventCategory,
+    EvictionResult,
     InferenceProvenance,
+    StorageStatus,
     ThreatLevel,
 )
 
@@ -76,6 +79,8 @@ class EventRepositoryPort(Protocol):
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
         """Find events matching search criteria."""
         ...
@@ -138,4 +143,34 @@ class MediaTranscoderPort(Protocol):
         width: int = 320,
     ) -> list[str]:
         """Extract scrubbed thumbnail stills across video duration; returns list of image paths."""
+        ...
+
+
+@runtime_checkable
+class StorageServicePort(Protocol):
+    """Port for storage quota monitoring, telemetry reporting, and FIFO eviction."""
+
+    def get_storage_status(self) -> StorageStatus:
+        """Calculate and return current dual-tier storage status."""
+        ...
+
+    async def execute_fifo_eviction(self, target_bytes: int | None = None) -> EvictionResult:
+        """Execute FIFO eviction across tiers down to target bytes or low-watermark buffer."""
+        ...
+
+    def start(self) -> None:
+        """Start background cleaner daemon."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop background cleaner daemon."""
+        ...
+
+
+@runtime_checkable
+class MediaArchivalPort(Protocol):
+    """Port for external media archival hooks before permanent file deletion."""
+
+    async def on_pre_evict(self, event: CameraEvent, file_paths: list[Path]) -> None:
+        """Hook invoked before permanent media file unlinking."""
         ...

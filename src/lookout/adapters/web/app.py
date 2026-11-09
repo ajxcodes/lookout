@@ -9,21 +9,33 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from lookout import __version__
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
+from lookout.adapters.entity_matcher import EntityCatalogMatcher
+from lookout.adapters.light_ml import (
+    LightMLObjectDetector,
+    PetPostureClassifier,
+    SpatialZoneEvaluator,
+)
 from lookout.adapters.memory import InMemoryEventRepository
+from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
+from lookout.adapters.storage_service import StorageService
 from lookout.adapters.web.broadcast import SSEBroadcastHub
 from lookout.adapters.web.routes import (
+    auth_router,
     cameras_router,
+    entities_router,
     events_router,
+    providers_router,
     settings_router,
     setup_router,
+    storage_router,
 )
 from lookout.config.loader import load_config
-from lookout.config.schema import LookoutConfig
+from lookout.config.schema import LookoutConfig, StorageConfig
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import EventRepositoryPort
 
@@ -135,8 +147,17 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Lookout web application starting up")
+        if app.state.config is not None:
+            try:
+                SidecarConfigSynchronizer().sync_all(app.state.config)
+            except Exception as exc:
+                logger.warning("Sidecar configuration synchronization error: %s", exc)
+        if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
+            app.state.storage_service.start()
         yield
         logger.info("Lookout web application shutting down")
+        if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
+            await app.state.storage_service.stop()
 
     app = FastAPI(
         title="Lookout",
@@ -150,7 +171,19 @@ def create_app(
     active_event_service: EventProcessingService = (
         event_service
         if event_service is not None
-        else EventProcessingService(repository=active_repo)
+        else EventProcessingService(
+            repository=active_repo,
+            light_ml_detector=LightMLObjectDetector(),
+            pet_classifier=PetPostureClassifier(),
+            zone_evaluator=SpatialZoneEvaluator(zones=active_config.zones if active_config else []),
+            entity_matcher=EntityCatalogMatcher(
+                residents=active_config.residents if active_config else [],
+                pets=active_config.pets if active_config else [],
+                vehicles=active_config.vehicles if active_config else [],
+            )
+            if active_config
+            else None,
+        )
     )
 
     # Attach application state
@@ -161,16 +194,64 @@ def create_app(
     app.state.event_service = active_event_service
     app.state.vision_adapter = active_vision
     app.state.broadcast_hub = SSEBroadcastHub()
+    app.state.custom_entities = {}
+
+    from lookout.adapters.sqlite.members import HouseholdMembersRepository
+
+    db_path = ":memory:"
+    if active_config and hasattr(active_config, "storage") and active_config.storage.database_path:
+        db_path = active_config.storage.database_path
+    app.state.members_repo = HouseholdMembersRepository(db_path=db_path)
+
+    storage_cfg = (
+        active_config.storage
+        if (active_config and hasattr(active_config, "storage"))
+        else StorageConfig()
+    )
+    storage_svc = StorageService(config=storage_cfg, repository=active_repo)
+    app.state.storage_service = storage_svc
 
     # Mount REST API routers
     app.include_router(events_router, prefix="/api")
     app.include_router(cameras_router, prefix="/api")
+    app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
     app.include_router(setup_router, prefix="/api")
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(providers_router, prefix="/api")
+    app.include_router(storage_router, prefix="/api")
 
-    # Static assets and media files
+    # Static assets
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-    app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+
+    # Transparent multi-tier media stream resolver
+    @app.api_route("/media/{file_path:path}", methods=["GET", "HEAD"])
+    async def serve_media(file_path: str, request: Request) -> Response:
+        """Serve media transparently across local base_path and network archive_path."""
+        clean_path = Path(file_path)
+        if clean_path.is_absolute() or ".." in clean_path.parts:
+            return JSONResponse(status_code=400, content={"error": "Invalid file path"})
+
+        # 1. Local hot tier
+        local_target = (media_dir / clean_path).resolve()
+        if local_target.is_file():
+            return FileResponse(local_target, headers={"Accept-Ranges": "bytes"})
+
+        # 2. Warm archive tier
+        cfg = getattr(app.state, "config", None)
+        if cfg and hasattr(cfg, "storage") and cfg.storage.archive_path:
+            archive_base = Path(cfg.storage.archive_path).resolve()
+            archive_target = (archive_base / clean_path).resolve()
+            if archive_target.is_file():
+                return FileResponse(archive_target, headers={"Accept-Ranges": "bytes"})
+
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "Media file not found or has been purged by retention policy",
+                "path": file_path,
+            },
+        )
 
     @app.get("/health")
     async def health_check() -> dict[str, Any]:

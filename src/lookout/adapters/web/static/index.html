@@ -24,6 +24,13 @@
     </div>
   </header>
 
+  <!-- Storage Warning Notification Banner -->
+  <div class="storage-warning-banner" id="storage-warning-banner" style="display:none;" role="alert">
+    <span class="warning-icon">⚠</span>
+    <span class="warning-text" id="storage-warning-text">Storage utilization exceeds warning threshold (&gt;90%). Oldest media will be automatically pruned.</span>
+    <button class="btn" id="dismiss-storage-warning" type="button" style="padding:2px 8px;font-size:0.75rem;">✕</button>
+  </div>
+
   <!-- Camera Switcher Toolbar -->
   <nav class="switcher-bar" id="switcher-container" aria-label="Camera selection"></nav>
 
@@ -86,6 +93,9 @@
     </aside>
   </main>
 
+  <!-- 24-Hour Continuous Scrubber Timeline Bar -->
+  <footer id="scrubber-container"></footer>
+
   <!-- Admin / Settings Modal Dialog -->
   <div class="modal-backdrop" id="settings-modal" role="dialog" aria-modal="true">
     <div class="modal-box">
@@ -109,6 +119,15 @@
 
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
+        <!-- Unified Entity Reference Catalog Manager -->
+        <div class="setting-group">
+          <label class="setting-label">Entity Reference Catalog (People, Pets & Vehicles)</label>
+          <p class="setting-desc">Manage enrolled household people, pets (Mochi), and vehicles (Civic) for visual matching.</p>
+          <div id="entity-catalog-list" class="entity-catalog-list"></div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
         <!-- Face Gallery Manager -->
         <div class="setting-group">
           <label class="setting-label">Face Recognition Gallery</label>
@@ -121,6 +140,109 @@
           </div>
 
           <div class="faces-grid" id="faces-grid"></div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Sidecar Integrations & Credentials Manager -->
+        <div class="setting-group" id="integrations-setting-group">
+          <label class="setting-label">Sidecar Bridges & Cloud Integrations</label>
+          <p class="setting-desc">Status of Wyze, Ring, and go2rtc camera stream bridge sidecars.</p>
+          <div id="sidecar-integrations-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Two-Tier Media Storage & Looping Retention -->
+        <div class="setting-group" id="storage-retention-group">
+          <label class="setting-label">Storage Quotas & Looping Retention Policy</label>
+          <p class="setting-desc">Two-tier media management across local hot edge storage and warm network share (ms).</p>
+
+          <!-- Hot Tier Visualizer -->
+          <div class="storage-visualizer-card">
+            <div class="storage-tier-header">
+              <span class="tier-title">🔥 Hot Tier: Local Node</span>
+              <span class="tier-stats" id="local-storage-stats">-- / -- GB</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="local-progress-fill" style="width:0%;"></div>
+            </div>
+            <div class="storage-meta-row">
+              <span id="local-quota-desc">Quota: 50 GB | Cap: 80%</span>
+              <span id="local-runway-desc">Runway: ~--h</span>
+            </div>
+          </div>
+
+          <!-- Warm Tier Visualizer -->
+          <div class="storage-visualizer-card" style="margin-top:10px;">
+            <div class="storage-tier-header">
+              <span class="tier-title">📦 Warm Tier: Network Share Archive (ms)</span>
+              <span class="tier-stats" id="archive-storage-stats">Disabled</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill archive-fill" id="archive-progress-fill" style="width:0%;"></div>
+            </div>
+            <div class="storage-meta-row">
+              <span id="archive-quota-desc">Mount: --</span>
+              <span id="archive-status-badge">Inactive</span>
+            </div>
+          </div>
+
+          <!-- Settings Form Controls -->
+          <div class="storage-form-grid" style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="setting-max-storage-gb">Local Max Storage (GB)</label>
+              <input class="input-control" type="number" id="setting-max-storage-gb" step="1" min="1" value="50">
+            </div>
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="setting-max-storage-pct">Local Max Disk (%)</label>
+              <input class="input-control" type="number" id="setting-max-storage-pct" step="1" min="10" max="100" value="80">
+            </div>
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="setting-retention-mode">Eviction Strategy</label>
+              <select class="select-control" id="setting-retention-mode">
+                <option value="fifo_oldest_first">FIFO (Oldest First)</option>
+                <option value="events_priority">Threat Priority (Prune Routine First)</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:center;padding-top:16px;">
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.8125rem;cursor:pointer;">
+                <input type="checkbox" id="setting-preserve-bookmarked" checked>
+                <span>Protect Bookmarked Clips</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Network Share Archive Settings -->
+          <div style="margin-top:10px;padding:8px;background:var(--surface-muted);border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.8125rem;font-weight:600;cursor:pointer;">
+                <input type="checkbox" id="setting-archive-enabled">
+                <span>Enable Secondary Network Archive (ms)</span>
+              </label>
+            </div>
+            <div id="archive-settings-fields" style="margin-top:8px;display:none;grid-template-columns:1fr 1fr;gap:8px;">
+              <div style="grid-column:1 / -1;">
+                <label class="setting-desc" style="font-weight:600;" for="setting-archive-path">Archive Share Path</label>
+                <input class="input-control" type="text" id="setting-archive-path" placeholder="/mnt/ms_archive">
+              </div>
+              <div>
+                <label class="setting-desc" style="font-weight:600;" for="setting-archive-max-gb">Archive Max Storage (GB)</label>
+                <input class="input-control" type="number" id="setting-archive-max-gb" step="10" placeholder="Unlimited">
+              </div>
+              <div>
+                <label class="setting-desc" style="font-weight:600;" for="setting-archive-max-pct">Archive Disk Limit (%)</label>
+                <input class="input-control" type="number" id="setting-archive-max-pct" step="1" min="10" max="100" value="90">
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="btn btn-primary" id="save-storage-config-btn" type="button">Save Storage Settings</button>
+            <button class="btn" id="trigger-eviction-btn" type="button">⚡ Run Eviction / Sync Now</button>
+          </div>
+          <div id="storage-action-feedback" style="font-size:0.75rem;margin-top:6px;display:none;"></div>
         </div>
       </div>
     </div>

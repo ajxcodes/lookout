@@ -185,3 +185,96 @@ def test_face_gallery_upload_and_list(client: TestClient) -> None:
     assert list_res.status_code == 200
     data = list_res.json()
     assert "alice_test.jpg" in [f["filename"] for f in data["faces"]]
+
+
+def test_entities_api_endpoints_crud(client: TestClient) -> None:
+    """TR-23: Verify entities CRUD endpoints."""
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "civic-test-1",
+            "name": "Silver Honda Civic",
+            "entity_type": "vehicle",
+            "attributes": {"color": "silver", "make": "Honda", "model": "Civic"},
+        },
+    )
+    assert create_res.status_code == 200
+
+    response = client.get("/api/entities")
+    assert response.status_code == 200 and len(response.json()["entities"]) >= 1
+    assert any(e["id"] == "civic-test-1" for e in response.json()["entities"])
+
+    get_res = client.get("/api/entities/civic-test-1")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Silver Honda Civic"
+
+    del_res = client.delete("/api/entities/civic-test-1")
+    assert del_res.status_code == 200
+
+
+def test_enrich_event_endpoint(client: TestClient) -> None:
+    """Verify POST /api/events/{event_id}/enrich runs Pass 2 clip enrichment."""
+    sample_frames = [
+        "dog pet squatting elimination lawn",
+        "dog pet squatting elimination lawn",
+    ]
+    response = client.post(
+        "/api/events/event-2/enrich",
+        json={"frames": sample_frames},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "event-2"
+    assert data["category"] == "pet_elimination"
+    assert data["metadata"]["sustained_elimination"] is True
+
+    res_404 = client.post("/api/events/non-existent-event/enrich", json={"frames": []})
+    assert res_404.status_code == 404
+
+
+def test_entity_photo_upload_and_delete(client: TestClient) -> None:
+    """Verify entity photo upload and deletion with valid extensions."""
+    file_bytes = b"fake-entity-photo-content"
+    files = {"file": ("corgi.png", BytesIO(file_bytes), "image/png")}
+
+    res = client.post("/api/entities/pet-corgi/photos", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["filename"] == "corgi.png"
+    assert data["path"] == "/media/entities/pet-corgi/corgi.png"
+
+    # Delete the photo
+    del_res = client.delete("/api/entities/pet-corgi/photos/corgi.png")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+    # Deleting again returns 404
+    del_404 = client.delete("/api/entities/pet-corgi/photos/corgi.png")
+    assert del_404.status_code == 404
+
+
+def test_entity_photo_upload_disallowed_extension(client: TestClient) -> None:
+    """Verify entity photo upload rejects disallowed file extensions with 400."""
+    disallowed_files = [
+        ("malicious.sh", b"echo evil", "text/plain"),
+        ("script.py", b"print('hack')", "text/x-python"),
+        ("binary.exe", b"\x00\x01\x02", "application/octet-stream"),
+        ("noextension", b"some content", "application/octet-stream"),
+    ]
+
+    for fname, content, mtype in disallowed_files:
+        files = {"file": (fname, BytesIO(content), mtype)}
+        res = client.post("/api/entities/pet-corgi/photos", files=files)
+        assert res.status_code == 400, f"Expected 400 for {fname}, got {res.status_code}"
+        assert "Unsupported file extension" in res.json()["detail"]
+
+
+def test_entity_photo_upload_size_limit_exceeded(client: TestClient) -> None:
+    """Verify entity photo upload rejects files exceeding 15MB with 413."""
+    oversized_bytes = b"X" * (15 * 1024 * 1024 + 1024)
+    files = {"file": ("giant_photo.jpg", BytesIO(oversized_bytes), "image/jpeg")}
+
+    res = client.post("/api/entities/pet-corgi/photos", files=files)
+    assert res.status_code == 413
+    assert "File too large. Max size is 15MB." in res.json()["detail"]

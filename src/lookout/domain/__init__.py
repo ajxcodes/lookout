@@ -5,7 +5,9 @@ from lookout.domain.models import (
     CameraEvent,
     DetectionMetrics,
     EventCategory,
+    EvictionResult,
     InferenceProvenance,
+    StorageStatus,
     ThreatLevel,
 )
 from lookout.domain.service import EventProcessingService
@@ -16,6 +18,8 @@ __all__ = [
     "DetectionMetrics",
     "EventCategory",
     "EventProcessingService",
+    "EvictionResult",
     "InferenceProvenance",
+    "StorageStatus",
     "ThreatLevel",
 ]

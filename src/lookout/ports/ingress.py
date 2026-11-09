@@ -36,8 +36,10 @@ class ViewerApiPort(Protocol):
         min_threat: ThreatLevel | None = None,
         limit: int = 50,
         offset: int = 0,
+        zone_id: str | None = None,
+        entity: str | None = None,
     ) -> list[CameraEvent]:
-        """List events filtered by camera, category, or threat level."""
+        """List events filtered by camera, category, threat level, zone, or entity."""
         ...
 
     async def get_timeline(self, start_time: datetime, end_time: datetime) -> list[CameraEvent]:

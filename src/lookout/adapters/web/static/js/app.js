@@ -7,6 +7,7 @@ import { EventPlayer } from "./components/event-player.js";
 import { AcousticVisualizer } from "./components/acoustic-canvas.js";
 import { CategoryFilter } from "./components/filters.js";
 import { TimelineList } from "./components/timeline.js";
+import { TimelineScrubber } from "./components/scrubber.js";
 import { SettingsModal } from "./components/settings-modal.js";
 import { resolveUrl } from "./utils/url.js";
 
@@ -35,6 +36,7 @@ class LookoutApp {
     this.vuTextEl = document.getElementById("vu-db-text");
     this.filterBarEl = document.getElementById("filter-bar");
     this.timelineEl = document.getElementById("timeline-list");
+    this.scrubberEl = document.getElementById("scrubber-container");
     this.settingsModalEl = document.getElementById("settings-modal");
     this.openSettingsBtn = document.getElementById("open-settings-btn");
 
@@ -105,6 +107,22 @@ class LookoutApp {
         await this.deleteEvent(eventId);
       },
     });
+
+    if (this.scrubberEl) {
+      this.scrubber = new TimelineScrubber({
+        container: this.scrubberEl,
+        onTimeSelect: (selectedTime) => {
+          const target = this.events.find(
+            (e) =>
+              Math.abs(new Date(e.timestamp).getTime() - selectedTime.getTime()) < 30 * 60 * 1000
+          );
+          if (target) {
+            this.timeline.setSelectedEvent(target.id);
+            this.playEvent(target);
+          }
+        },
+      });
+    }
 
     this.settingsModal = new SettingsModal({
       modalBackdrop: this.settingsModalEl,
@@ -213,6 +231,7 @@ class LookoutApp {
       const data = await res.json();
       this.events = data.events || [];
       this.timeline.setEvents(this.events);
+      if (this.scrubber) this.scrubber.setEvents(this.events);
 
       // Compute counts per camera
       const counts = {};
@@ -236,6 +255,7 @@ class LookoutApp {
       try {
         const eventData = JSON.parse(e.data);
         this.timeline.addEvent(eventData);
+        if (this.scrubber) this.scrubber.setEvents(this.events);
 
         // Update counts
         const currentCounts = { ...this.cameraSwitcher.eventCounts };

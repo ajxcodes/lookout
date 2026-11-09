@@ -1,0 +1,36 @@
+{
+  "id": "ring",
+  "name": "ring",
+  "display_name": "Ring Video Doorbell",
+  "description": "Integration with Ring cameras and doorbells via ring-mqtt sidecar",
+  "icon": "bell",
+  "brand_color": "#0078ca",
+  "badge": "Ring MQTT",
+  "default_ports": {
+    "http": 55123,
+    "rtsp": 8555
+  },
+  "default_stream_url": "rtsp://localhost:8555/",
+  "default_camera_name": "Ring Doorbell",
+  "supported_2fa": [
+    "sms",
+    "email",
+    "totp"
+  ],
+  "auth_fields": [
+    {
+      "key": "email",
+      "label": "Ring Account Email",
+      "type": "email",
+      "required": true,
+      "placeholder": "user@example.com"
+    },
+    {
+      "key": "password",
+      "label": "Ring Password",
+      "type": "password",
+      "required": true
+    }
+  ],
+  "docs_url": "https://github.com/tsightler/ring-mqtt"
+}

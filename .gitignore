@@ -4,6 +4,10 @@ artifacts
 __pycache__/
 *.pyc
 .env
+*.env
+data/
+data/sidecars/
+!data/faces/
 .venv/
 .coverage
 .pytest_cache/

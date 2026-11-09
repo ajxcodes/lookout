@@ -19,6 +19,8 @@ def serialize_bounding_box(box: BoundingBox) -> dict[str, Any]:
         "y_min": box.y_min,
         "x_max": box.x_max,
         "y_max": box.y_max,
+        "entity_id": box.entity_id,
+        "entity_name": box.entity_name,
     }
 
 
@@ -30,6 +32,9 @@ def serialize_metrics(metrics: DetectionMetrics) -> dict[str, Any]:
         "audio_decibels": metrics.audio_decibels,
         "duration_seconds": metrics.duration_seconds,
         "total_latency_ms": metrics.total_latency_ms,
+        "tracked_entities": metrics.tracked_entities,
+        "posture_telemetry": metrics.posture_telemetry,
+        "zone_id": metrics.zone_id,
     }
 
 
@@ -62,7 +67,14 @@ def serialize_event(event: CameraEvent) -> dict[str, Any]:
         "media_uri": event.media_uri,
         "snapshot_uri": event.snapshot_uri,
         "metadata": event.metadata,
+        "zone_id": event.zone_id,
+        "vehicle_id": event.vehicle_id,
+        "matched_entities": event.matched_entities,
         "is_threat": event.is_threat(),
         "has_resident": event.has_resident(),
         "has_pet": event.has_pet(),
+        "has_vehicle": event.has_vehicle(),
+        "is_pet_elimination": event.is_pet_elimination(),
+        "bookmarked": bool(event.bookmarked or event.metadata.get("bookmarked", False)),
+        "storage_tier": event.metadata.get("storage_tier", "local"),
     }

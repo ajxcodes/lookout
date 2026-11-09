@@ -1,6 +1,7 @@
 """REST API endpoints for event queries, single event lookup, deletion, and SSE streaming."""
 
 import asyncio
+import base64
 import contextlib
 import logging
 from collections.abc import AsyncGenerator
@@ -29,6 +30,8 @@ async def list_events(
     start_time: str | None = Query(None, description="ISO format start datetime"),
     end_time: str | None = Query(None, description="ISO format end datetime"),
     query: str | None = Query(None, description="Full text search query"),
+    zone_id: str | None = Query(None, description="Spatial zone identifier"),
+    entity: str | None = Query(None, description="Entity name or identifier"),
     limit: int = Query(50, ge=1, le=500, description="Page size limit"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ) -> dict[str, Any]:
@@ -68,6 +71,8 @@ async def list_events(
         query=query,
         limit=limit,
         offset=offset,
+        zone_id=zone_id,
+        entity=entity,
     )
     total = await repo.count()
     return {
@@ -127,3 +132,77 @@ async def delete_event(event_id: str, request: Request) -> dict[str, Any]:
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
     return {"deleted": True, "event_id": event_id}
+
+
+@router.post("/events/{event_id}/enrich")
+async def enrich_event(event_id: str, request: Request) -> dict[str, Any]:
+    """Trigger background or immediate multi-frame video clip enrichment for an event."""
+    repo: EventRepositoryPort = request.app.state.repository
+    service = getattr(request.app.state, "event_service", None)
+    if service is None:
+        from lookout.domain.service import EventProcessingService
+
+        service = EventProcessingService(repository=repo)
+
+    frames: list[bytes] = []
+    try:
+        body = await request.json()
+        raw_frames: list[Any] = []
+        if isinstance(body, list):
+            raw_frames = body
+        elif isinstance(body, dict):
+            raw_frames = body.get("frames") or body.get("frame_samples") or []
+
+        for item in raw_frames:
+            if isinstance(item, bytes):
+                frames.append(item)
+            elif isinstance(item, str):
+                if item.startswith("data:"):
+                    try:
+                        _, encoded = item.split(",", 1)
+                        frames.append(base64.b64decode(encoded))
+                        continue
+                    except Exception:
+                        pass
+                if " " in item or "\n" in item:
+                    frames.append(item.encode("utf-8"))
+                else:
+                    try:
+                        frames.append(base64.b64decode(item, validate=True))
+                    except Exception:
+                        frames.append(item.encode("utf-8"))
+    except Exception:
+        # Request body may be empty or not JSON
+        pass
+
+    updated = await service.enrich_event_from_media(event_id, frames)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+
+    return serialize_event(updated)
+
+
+@router.post("/events/{event_id}/bookmark")
+async def bookmark_event(event_id: str, request: Request) -> dict[str, Any]:
+    """Toggle or set bookmark status on a camera event to protect it from eviction."""
+    repo: EventRepositoryPort = request.app.state.repository
+    bookmarked = True
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "bookmarked" in body:
+            bookmarked = bool(body["bookmarked"])
+    except Exception:
+        pass
+
+    event = await repo.get_by_id(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+
+    if hasattr(repo, "bookmark_event"):
+        await repo.bookmark_event(event_id, bookmarked=bookmarked)
+    else:
+        event.bookmarked = bookmarked
+        event.metadata["bookmarked"] = bookmarked
+        await repo.save(event)
+
+    return {"status": "ok", "event_id": event_id, "bookmarked": bookmarked}

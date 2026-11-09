@@ -268,3 +268,126 @@ async def test_sqlite_repository_json_roundtrip_metrics_and_provenance(tmp_path:
     assert retrieved.provenance[0].provider == "local_yolo"
     assert retrieved.provenance[0].model_name == "yolov8n"
     assert retrieved.provenance[0].confidence == 0.94
+
+
+@pytest.mark.asyncio
+async def test_sqlite_multi_object_query_and_zone_indexing(tmp_path: Path) -> None:
+    """TR-22: Verify multi-object co-occurrence query and spatial zone indexing."""
+    db_file = tmp_path / "test.db"
+    repo = SqliteEventRepository(db_path=db_file)
+    now = datetime.now(UTC)
+
+    e1 = CameraEvent(
+        id="pet-lawn-1",
+        camera_id="cam-backyard",
+        timestamp=now,
+        category=EventCategory.PET_ELIMINATION,
+        threat_level=ThreatLevel.INFO,
+        summary="Dog elimination on lawn",
+        zone_id="lawn",
+        matched_entities=["Mochi", "Silver Honda Civic"],
+    )
+    e2 = CameraEvent(
+        id="pet-deck-1",
+        camera_id="cam-backyard",
+        timestamp=now - timedelta(minutes=5),
+        category=EventCategory.KNOWN_PET,
+        threat_level=ThreatLevel.INFO,
+        summary="Mochi on deck",
+        zone_id="deck",
+        matched_entities=["Mochi"],
+    )
+    await repo.save(e1)
+    await repo.save(e2)
+
+    results = await repo.find(zone_id="lawn")
+    assert len(results) == 1 and results[0].zone_id == "lawn"
+
+
+@pytest.mark.asyncio
+async def test_nullify_media_references_preserves_event_history(tmp_path: Path) -> None:
+    """TR-19: Verify nullifying media references keeps metadata and event history intact."""
+    db_file = tmp_path / "test.db"
+    repo = SqliteEventRepository(db_path=db_file)
+    now = datetime.now(UTC)
+
+    evt = CameraEvent(
+        id="evt-threat",
+        camera_id="cam-1",
+        timestamp=now,
+        category=EventCategory.SECURITY_INTRUSION,
+        threat_level=ThreatLevel.HIGH,
+        summary="Intruder detected",
+        media_uri="/data/recordings/threat.mp4",
+    )
+    await repo.save(evt)
+
+    nullified = await repo.nullify_media_references(
+        "evt-threat", tombstone_metadata={"purged_from": "local"}
+    )
+    assert nullified is True
+
+    event = await repo.get_by_id("evt-threat")
+    assert event is not None
+    assert (
+        event.media_uri is None
+        and event.summary == "Intruder detected"
+        and event.metadata.get("media_purged") is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_migrate_event_media_tier_persistence(tmp_path: Path) -> None:
+    """TR-20: Verify migrating event media persists new media URI and archive tier in metadata."""
+    db_file = tmp_path / "test.db"
+    repo = SqliteEventRepository(db_path=db_file)
+    now = datetime.now(UTC)
+
+    evt = CameraEvent(
+        id="evt-1",
+        camera_id="cam-1",
+        timestamp=now,
+        category=EventCategory.COURIER_DELIVERY,
+        threat_level=ThreatLevel.LOW,
+        summary="Package delivery",
+        media_uri="/data/recordings/clip1.mp4",
+    )
+    await repo.save(evt)
+
+    new_uri = "/mnt/archive/recordings/clip1.mp4"
+    migrated = await repo.migrate_event_media("evt-1", new_media_uri=new_uri, new_tier="archive")
+    assert migrated is True
+
+    event = await repo.get_by_id("evt-1")
+    assert event is not None
+    assert (
+        event.metadata.get("storage_tier") == "archive"
+        and (await repo.get_by_id("evt-1")).media_uri == new_uri
+    )
+
+
+@pytest.mark.asyncio
+async def test_bookmark_event_persistence(tmp_path: Path) -> None:
+    """TR-21: Verify bookmarking event sets flag and persists across retrieval."""
+    db_file = tmp_path / "test.db"
+    repo = SqliteEventRepository(db_path=db_file)
+    now = datetime.now(UTC)
+
+    evt = CameraEvent(
+        id="evt-1",
+        camera_id="cam-1",
+        timestamp=now,
+        category=EventCategory.UNKNOWN_VISITOR,
+        threat_level=ThreatLevel.LOW,
+        summary="Visitor at door",
+        media_uri="/data/recordings/visitor.mp4",
+        bookmarked=False,
+    )
+    await repo.save(evt)
+
+    bookmarked = await repo.bookmark_event("evt-1", bookmarked=True)
+    assert bookmarked is True
+
+    event = await repo.get_by_id("evt-1")
+    assert event is not None
+    assert event.bookmarked is True and (await repo.get_by_id("evt-1")).bookmarked is True

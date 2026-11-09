@@ -237,6 +237,13 @@ async def finalize_setup(request: Request) -> dict[str, Any]:
     request.app.state.config = validated_config
     request.app.state.is_configured = True
 
+    try:
+        from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
+
+        SidecarConfigSynchronizer().sync_all(validated_config)
+    except Exception as exc:
+        logger.warning("Sidecar configuration synchronization during finalization error: %s", exc)
+
     return {
         "status": "finalized",
         "message": "Configuration saved successfully",

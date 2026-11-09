@@ -26,6 +26,14 @@ from lookout.adapters.home_assistant import (
     HomeAssistantEgressAdapter,
 )
 from lookout.adapters.immich import ImmichGalleryAdapter
+from lookout.adapters.light_ml import (
+    ClipAnalysisResult,
+    IlluminationFilter,
+    LightMLObjectDetector,
+    PetPostureClassifier,
+    SpatialZoneEvaluator,
+    analyze_clip_frames,
+)
 from lookout.adapters.memory import (
     InMemoryEventRepository,
     MockAudioClassifierAdapter,
@@ -52,12 +60,14 @@ from lookout.adapters.sqlite import (
     SqliteEventRepository,
     import_legacy_events,
 )
+from lookout.adapters.storage_service import NoOpMediaArchivalAdapter, StorageService
 from lookout.adapters.tempfile import TempMediaContext, TempMediaManager
 from lookout.adapters.web import SSEBroadcastHub, create_app
 
 __all__ = [
     "AuditLogger",
     "CascadeVisionAdapter",
+    "ClipAnalysisResult",
     "FastAPIIngressAdapter",
     "FFmpegNotFoundError",
     "FFmpegTranscoderAdapter",
@@ -69,9 +79,11 @@ __all__ = [
     "HomeAssistantEgressAdapter",
     "HouseholdMember",
     "HouseholdMembersRepository",
+    "IlluminationFilter",
     "ImmichGalleryAdapter",
     "ImportResult",
     "InMemoryEventRepository",
+    "LightMLObjectDetector",
     "LocalEdgeVisionProvider",
     "MediaRetentionWorker",
     "MockAudioClassifierAdapter",
@@ -80,22 +92,27 @@ __all__ = [
     "MockTranscoderAdapter",
     "MockVideoRecorderAdapter",
     "MockVisionInferenceAdapter",
+    "NoOpMediaArchivalAdapter",
     "NtfyAdapter",
     "NtfyDispatcher",
     "NtfyNotificationAdapter",
     "OfflineVisionFallbackProvider",
     "OllamaVisionProvider",
     "OpenCodeVisionProvider",
+    "PetPostureClassifier",
     "RetentionResult",
     "RingAdapter",
     "SSEBroadcastHub",
+    "SpatialZoneEvaluator",
     "SqliteConnectionManager",
     "SqliteEventRepository",
+    "StorageService",
     "StructuredOutputParser",
     "TempMediaContext",
     "TempMediaManager",
     "TranscodeError",
     "YamnetAudioClassifierAdapter",
+    "analyze_clip_frames",
     "app",
     "create_app",
     "create_ingress_app",
