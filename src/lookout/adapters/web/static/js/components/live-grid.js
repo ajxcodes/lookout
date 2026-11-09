@@ -202,6 +202,31 @@ export class LiveGrid {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
 
+    // Ensure snapshot overlay is visible initially during WebRTC negotiation
+    if (overlay) {
+      overlay.style.display = "flex";
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+      overlay.style.backgroundImage = `url("${snapUrl}")`;
+    }
+
+    const restoreSnapshotFallback = () => {
+      if (video) video.style.display = "none";
+      if (overlay) {
+        overlay.style.display = "flex";
+        const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+        overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+    };
+
+    if (video) {
+      const hideOverlayWhenReady = () => {
+        if (overlay) overlay.style.display = "none";
+      };
+      video.onplaying = hideOverlayWhenReady;
+      video.onloadeddata = hideOverlayWhenReady;
+      video.onerror = restoreSnapshotFallback;
+    }
+
     try {
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -217,16 +242,13 @@ export class LiveGrid {
           video.srcObject.addTrack(event.track);
         }
         video.muted = true;
-        video.play().then(() => {
-          overlay.style.display = "none";
-        }).catch(() => {});
+        video.play().catch(() => {});
         video.style.display = "block";
       };
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          video.style.display = "none";
-          overlay.style.display = "flex";
+          restoreSnapshotFallback();
         }
       };
 
@@ -243,6 +265,11 @@ export class LiveGrid {
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
 
+      const timeoutId = setTimeout(() => {
+        try { ws.close(); } catch {}
+        restoreSnapshotFallback();
+      }, 8000);
+
       const iceCandidates = [];
       let hasRemote = false;
 
@@ -256,6 +283,7 @@ export class LiveGrid {
           if (data.type === "webrtc/answer") {
             await pc.setRemoteDescription({ type: "answer", sdp: data.value });
             hasRemote = true;
+            clearTimeout(timeoutId);
             while (iceCandidates.length > 0) {
               const c = iceCandidates.shift();
               await pc.addIceCandidate(c).catch(() => {});
@@ -271,6 +299,15 @@ export class LiveGrid {
         } catch {}
       };
 
+      ws.onerror = (err) => {
+        clearTimeout(timeoutId);
+        restoreSnapshotFallback();
+      };
+
+      ws.onclose = () => {
+        clearTimeout(timeoutId);
+      };
+
       pc.onicecandidate = (e) => {
         if (e.candidate && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "webrtc/candidate", value: e.candidate.candidate }));
@@ -280,8 +317,7 @@ export class LiveGrid {
       record.isLive = true;
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
-      if (video) video.style.display = "none";
-      if (overlay) overlay.style.display = "flex";
+      restoreSnapshotFallback();
     }
   }
 

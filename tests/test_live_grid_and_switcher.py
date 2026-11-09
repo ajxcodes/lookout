@@ -48,3 +48,20 @@ def test_live_player_early_ice_candidate_queueing() -> None:
     live_player_path = Path("src/lookout/adapters/web/static/js/components/live-player.js")
     live_player_source = live_player_path.read_text(encoding="utf-8")
     assert "iceCandidateQueue" in live_player_source and "addIceCandidate" in live_player_source
+
+
+def test_live_player_snapshot_overlay_lifecycle() -> None:
+    live_player_path = Path("src/lookout/adapters/web/static/js/components/live-player.js")
+    live_player_source = live_player_path.read_text(encoding="utf-8")
+    assert "onplaying" in live_player_source
+    assert "showSnapshotFallback" in live_player_source
+    assert "onconnectionstatechange" in live_player_source
+
+
+def test_live_grid_snapshot_fallback_resiliency() -> None:
+    live_grid_path = Path("src/lookout/adapters/web/static/js/components/live-grid.js")
+    live_grid_source = live_grid_path.read_text(encoding="utf-8")
+    assert "onplaying" in live_grid_source
+    assert "restoreSnapshotFallback" in live_grid_source
+    assert "onconnectionstatechange" in live_grid_source
+    assert "tile-overlay" in live_grid_source

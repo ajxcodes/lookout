@@ -15,6 +15,29 @@ except ImportError:
             def __init_subclass__(cls, domain: str | None = None, **kwargs: Any) -> None:
                 cls.domain = domain
 
+            async def async_set_unique_id(
+                self, unique_id: str | None = None, *, raise_on_progress: bool = True
+            ) -> Any:
+                pass
+
+            def _abort_if_unique_id_configured(
+                self, updates: dict[str, Any] | None = None, *, reload_on_update: bool = True
+            ) -> None:
+                pass
+
+            def async_create_entry(self, title: str, data: dict[str, Any]) -> dict[str, Any]:
+                return {"type": "create_entry", "title": title, "data": data}
+
+            def async_show_form(
+                self, step_id: str, data_schema: Any, errors: dict[str, str]
+            ) -> dict[str, Any]:
+                return {
+                    "type": "form",
+                    "step_id": step_id,
+                    "data_schema": data_schema,
+                    "errors": errors,
+                }
+
     class vol:  # type: ignore[no-redef]
         @staticmethod
         def Schema(d: Any) -> Any:
@@ -47,9 +70,10 @@ class LookoutConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
             host = user_input.get(CONF_HOST, DEFAULT_HOST)
             port = user_input.get(CONF_PORT, DEFAULT_PORT)
             title = f"Lookout ({host}:{port})"
+            unique_id = f"{host}:{port}"
 
             # Prevent duplicate configuration entries
-            await self.async_set_unique_id(f"{host}:{port}")
+            await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
 
             return self.async_create_entry(title=title, data=user_input)
@@ -61,17 +85,3 @@ class LookoutConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         }
 
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
-
-    async def async_set_unique_id(self, unique_id: str) -> None:
-        pass
-
-    def _abort_if_unique_id_configured(self) -> None:
-        pass
-
-    def async_create_entry(self, title: str, data: dict[str, Any]) -> dict[str, Any]:
-        return {"type": "create_entry", "title": title, "data": data}
-
-    def async_show_form(
-        self, step_id: str, data_schema: Any, errors: dict[str, str]
-    ) -> dict[str, Any]:
-        return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}

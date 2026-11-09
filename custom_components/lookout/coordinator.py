@@ -30,7 +30,13 @@ except ImportError:
             self.data: dict[str, Any] = {}
 
         async def async_refresh(self) -> None:
-            pass
+            await self._async_update_data()
+
+        async def async_config_entry_first_refresh(self) -> None:
+            await self._async_update_data()
+
+        async def _async_update_data(self) -> dict[str, Any]:
+            return self.data
 
 
 from .const import DOMAIN

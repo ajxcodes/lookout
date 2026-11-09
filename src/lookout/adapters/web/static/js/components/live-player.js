@@ -63,11 +63,23 @@ export class LivePlayer {
   async startLive() {
     if (!this.activeCamera) return;
 
+    // Keep snapshot overlay visible while WebRTC is negotiating to prevent black screen
     if (this.overlay) {
-      this.overlay.style.display = "none";
+      this.overlay.style.display = "flex";
     }
     if (this.video) {
       this.video.style.display = "block";
+      const hideOverlayWhenReady = () => {
+        if (this.overlay) {
+          this.overlay.style.display = "none";
+        }
+      };
+      this.video.onplaying = hideOverlayWhenReady;
+      this.video.onloadeddata = hideOverlayWhenReady;
+      this.video.onerror = () => {
+        if (this.overlay) this.overlay.style.display = "flex";
+        this.showSnapshotFallback();
+      };
     }
 
     this.iceCandidateQueue = [];
@@ -78,6 +90,13 @@ export class LivePlayer {
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
       this.peerConnection = pc;
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          if (this.overlay) this.overlay.style.display = "flex";
+          this.showSnapshotFallback();
+        }
+      };
 
       // Cross-browser track attachment: handles Chrome/Edge/Safari missing a=msid
       pc.ontrack = (event) => {
@@ -110,7 +129,9 @@ export class LivePlayer {
         this.websocket = ws;
 
         const timeoutId = setTimeout(() => {
-          ws.close();
+          try { ws.close(); } catch {}
+          if (this.overlay) this.overlay.style.display = "flex";
+          this.showSnapshotFallback();
           reject(new Error("WebRTC WebSocket signaling timeout"));
         }, 8000);
 
@@ -151,6 +172,8 @@ export class LivePlayer {
 
         ws.onerror = (err) => {
           clearTimeout(timeoutId);
+          if (this.overlay) this.overlay.style.display = "flex";
+          this.showSnapshotFallback();
           reject(err);
         };
 
@@ -172,6 +195,8 @@ export class LivePlayer {
       }
     } catch (err) {
       console.warn("WebRTC primary live connection failed, attempting fallback:", err);
+      if (this.overlay) this.overlay.style.display = "flex";
+      this.showSnapshotFallback();
       await this._attemptFallbackStream();
     }
   }

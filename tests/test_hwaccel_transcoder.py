@@ -1,5 +1,4 @@
-"""Unit tests for FFmpeg hardware acceleration offload and software fallback."""
-
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -22,7 +21,7 @@ def test_ffmpeg_hardware_acceleration_detection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ffmpeg_hardware_transcode_vaapi_command() -> None:
+async def test_ffmpeg_hardware_transcode_vaapi_command(tmp_path: Path) -> None:
     adapter = FFmpegTranscoderAdapter(
         config=TranscodeConfig(
             hwaccel="vaapi",
@@ -31,12 +30,12 @@ async def test_ffmpeg_hardware_transcode_vaapi_command() -> None:
         )
     )
     with patch("asyncio.create_subprocess_exec", return_value=make_mock_proc(0, b"", b"")):
-        await adapter.normalize_mp4("input.mp4", "output.mp4")
+        await adapter.normalize_mp4("input.mp4", str(tmp_path / "output.mp4"))
         assert "-c:v h264_vaapi" in " ".join(adapter.last_command)
 
 
 @pytest.mark.asyncio
-async def test_ffmpeg_hardware_fallback_to_software_libx264() -> None:
+async def test_ffmpeg_hardware_fallback_to_software_libx264(tmp_path: Path) -> None:
     fail_proc = make_mock_proc(1, b"", b"Hardware init failure")
     success_proc = make_mock_proc(0, b"", b"Software transcode complete")
 
@@ -44,7 +43,7 @@ async def test_ffmpeg_hardware_fallback_to_software_libx264() -> None:
         config=TranscodeConfig(hwaccel="vaapi", use_stream_copy=False)
     )
     with patch("asyncio.create_subprocess_exec", side_effect=[fail_proc, success_proc]):
-        await adapter.normalize_mp4("input.mp4", "output.mp4")
+        await adapter.normalize_mp4("input.mp4", str(tmp_path / "output.mp4"))
         assert "-c:v libx264" in " ".join(adapter.last_command) and "-preset ultrafast" in " ".join(
             adapter.last_command
         )

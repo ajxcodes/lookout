@@ -1,14 +1,15 @@
 """FastAPI application factory, lifespan management, and static file mounting."""
 
+import asyncio
 import logging
 import os
 import re
 from collections.abc import AsyncGenerator, MutableMapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -89,6 +90,83 @@ def _inject_base_href(html_content: str, ingress_path: str) -> str:
     if "<head>" in html_content:
         return html_content.replace("<head>", f'<head>\n  <base href="{base_href}">', 1)
     return html_content
+
+
+def _get_go2rtc_ws_url(app: FastAPI, query_params: str = "") -> str:
+    cfg = getattr(app.state, "config", None)
+    go2rtc_api = "http://localhost:1984"
+    if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
+        go2rtc_api = cfg.go2rtc.api_url.rstrip("/")
+
+    if go2rtc_api.startswith("https://"):
+        base_ws = "wss://" + go2rtc_api[len("https://") :]
+    elif go2rtc_api.startswith("http://"):
+        base_ws = "ws://" + go2rtc_api[len("http://") :]
+    elif go2rtc_api.startswith("ws://") or go2rtc_api.startswith("wss://"):
+        base_ws = go2rtc_api
+    else:
+        base_ws = f"ws://{go2rtc_api}"
+
+    url = f"{base_ws}/api/ws"
+    if query_params:
+        url = f"{url}?{query_params}"
+    return url
+
+
+async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream_url: str) -> None:
+    import aiohttp
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=30.0)
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.ws_connect(upstream_url) as upstream_ws,
+        ):
+
+            async def client_to_upstream() -> None:
+                try:
+                    while True:
+                        data = await websocket.receive_text()
+                        await upstream_ws.send_str(data)
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+                except Exception as e:
+                    logger.debug("Client->Upstream ws proxy closed: %s", e)
+
+            async def upstream_to_client() -> None:
+                try:
+                    async for msg in upstream_ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await websocket.send_text(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            await websocket.send_bytes(msg.data)
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            break
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+                except Exception as e:
+                    logger.debug("Upstream->Client ws proxy closed: %s", e)
+
+            t1 = asyncio.create_task(client_to_upstream())
+            t2 = asyncio.create_task(upstream_to_client())
+
+            done, pending = await asyncio.wait(
+                [t1, t2],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+    except Exception as exc:
+        logger.debug("WebRTC WebSocket proxy connection error for %s: %s", upstream_url, exc)
+    finally:
+        with suppress(Exception):
+            await websocket.close()
 
 
 def create_app(
@@ -336,6 +414,56 @@ def create_app(
         hub: SSEBroadcastHub = app.state.broadcast_hub
         await hub.broadcast_event(event)
         return {"status": "ok", "event_id": event.id, "id": event.id}
+
+    # WebRTC live streaming WebSocket and HTTP signaling proxies to go2rtc
+    @app.websocket("/api/ws")
+    async def websocket_proxy(websocket: WebSocket) -> None:
+        """Proxy client WebRTC WebSocket connections directly to go2rtc."""
+        await websocket.accept()
+        query_str = str(websocket.query_params)
+        upstream_url = _get_go2rtc_ws_url(app, query_str)
+        await _proxy_websocket_to_upstream(websocket, upstream_url)
+
+    @app.websocket("/api/webrtc/{camera_id}/ws")
+    async def websocket_camera_proxy(websocket: WebSocket, camera_id: str) -> None:
+        """Proxy camera-specific WebRTC WebSocket connections to go2rtc."""
+        await websocket.accept()
+        query_parts = [f"src={camera_id}"]
+        if str(websocket.query_params):
+            query_parts.append(str(websocket.query_params))
+        query_str = "&".join(query_parts)
+        upstream_url = _get_go2rtc_ws_url(app, query_str)
+        await _proxy_websocket_to_upstream(websocket, upstream_url)
+
+    @app.post("/api/webrtc")
+    async def proxy_webrtc_post(request: Request) -> Response:
+        """Proxy WebRTC HTTP signaling to go2rtc."""
+        cfg = getattr(app.state, "config", None)
+        go2rtc_api = "http://localhost:1984"
+        if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
+            go2rtc_api = cfg.go2rtc.api_url.rstrip("/")
+
+        query_str = str(request.url.query)
+        upstream_url = f"{go2rtc_api}/api/webrtc"
+        if query_str:
+            upstream_url = f"{upstream_url}?{query_str}"
+
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(upstream_url, content=body, headers=headers)
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    media_type=resp.headers.get("content-type"),
+                )
+        except Exception as exc:
+            logger.debug("Error proxying /api/webrtc POST to go2rtc: %s", exc)
+            return JSONResponse(status_code=502, content={"error": "go2rtc unavailable"})
 
     # Root viewer entrypoint with setup redirection guardrail
     @app.get("/", include_in_schema=False)

@@ -7,6 +7,7 @@ from typing import Any
 
 try:
     from homeassistant.components.camera import Camera, CameraEntityFeature
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
 except ImportError:
 
     class CameraEntityFeature:
@@ -14,11 +15,15 @@ except ImportError:
 
     class Camera:  # type: ignore[no-redef]
         def __init__(self) -> None:
+            self.hass: Any = None
             self.entity_id = ""
             self._attr_unique_id = ""
             self._attr_name = ""
             self._attr_is_streaming = True
             self._attr_supported_features = CameraEntityFeature.STREAM
+
+    def async_get_clientsession(hass: Any) -> Any:  # type: ignore[misc]
+        return None
 
 
 from .const import DOMAIN
@@ -64,14 +69,28 @@ class LookoutCameraEntity(Camera):
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Fetch latest camera snapshot from Lookout REST endpoint."""
-        import httpx
+        import aiohttp
 
         url = f"{self.coordinator.base_url}/api/cameras/{self.camera_id}/snapshot"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                res = await client.get(url)
-                if res.status_code == 200:
-                    return res.content
+            hass = getattr(self, "hass", None) or getattr(self.coordinator, "hass", None)
+            timeout = aiohttp.ClientTimeout(total=10.0)
+
+            if hass is not None:
+                session = async_get_clientsession(hass)
+                if session is not None:
+                    async with session.get(url, timeout=timeout) as res:
+                        if res.status == 200:
+                            return await res.read()
+                    return None
+
+            # Standalone or mock fallback without bound hass session
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(url) as res,
+            ):
+                if res.status == 200:
+                    return await res.read()
         except Exception as e:
             logger.debug("Failed fetching camera snapshot for %s: %s", self.camera_id, e)
         return None

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -76,3 +76,58 @@ async def test_ha_select_ai_mode_control() -> None:
     assert "local_only" in select_entity.options
     assert "gemini_only" in select_entity.options
     assert "off" in select_entity.options
+
+
+@pytest.mark.asyncio
+async def test_ha_config_flow_unique_id() -> None:
+    from custom_components.lookout.config_flow import LookoutConfigFlow
+
+    flow = LookoutConfigFlow()
+    result = await flow.async_step_user({"host": "192.168.1.100", "port": 8000})
+    assert result["type"] == "create_entry"
+    assert result["title"] == "Lookout (192.168.1.100:8000)"
+    assert result["data"]["host"] == "192.168.1.100"
+
+
+@pytest.mark.asyncio
+async def test_ha_setup_entry_first_refresh() -> None:
+    from custom_components.lookout import async_setup_entry
+
+    hass = MagicMock()
+    hass.data = {}
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {"host": "localhost", "port": 8000}
+
+    success = await async_setup_entry(hass, entry)
+    assert success is True
+    coordinator = hass.data["lookout"]["test_entry"]["coordinator"]
+    assert coordinator is not None
+    assert "cameras" in coordinator.data
+
+
+@pytest.mark.asyncio
+async def test_ha_camera_image_with_clientsession() -> None:
+    hass = MagicMock()
+    coordinator = LookoutDataUpdateCoordinator(hass, "localhost", 8000)
+    camera_data = {"id": "driveway", "name": "Driveway", "enabled": True}
+    cam = LookoutCameraEntity(coordinator, camera_data)
+    cam.hass = hass
+
+    fake_response = AsyncMock()
+    fake_response.status = 200
+    fake_response.read.return_value = b"fake_jpeg_bytes"
+
+    mock_session = MagicMock()
+    mock_session.get.return_value.__aenter__.return_value = fake_response
+
+    with patch(
+        "custom_components.lookout.camera.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        img = await cam.async_camera_image()
+        assert img == b"fake_jpeg_bytes"
+        mock_session.get.assert_called_once()
