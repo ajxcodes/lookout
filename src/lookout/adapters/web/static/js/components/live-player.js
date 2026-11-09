@@ -94,6 +94,11 @@ export class LivePlayer {
       };
       this.video.onplaying = hideOverlayWhenReady;
       this.video.onloadeddata = hideOverlayWhenReady;
+      this.video.ontimeupdate = () => {
+        if (this.video && this.video.currentTime > 0) {
+          hideOverlayWhenReady();
+        }
+      };
       this.video.onerror = () => {
         if (this.overlay) this.overlay.style.display = "flex";
         this.showSnapshotFallback();
@@ -110,7 +115,9 @@ export class LivePlayer {
       this.peerConnection = pc;
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+        if (pc.connectionState === "connected") {
+          if (this.overlay) this.overlay.style.display = "none";
+        } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
           if (this.overlay) this.overlay.style.display = "flex";
           this.showSnapshotFallback();
         }
@@ -170,15 +177,28 @@ export class LivePlayer {
               clearTimeout(timeoutId);
               resolve();
             } else if (data.type === "webrtc/candidate") {
-              const candidate = new RTCIceCandidate({
-                candidate: data.value,
-                sdpMid: data.sdpMid,
-                sdpMLineIndex: data.sdpMLineIndex,
-              });
-              if (!this.hasRemoteDescription) {
-                this.iceCandidateQueue.push(candidate);
-              } else {
-                await pc.addIceCandidate(candidate).catch(() => {});
+              if (!data.value || (typeof data.value === "string" && !data.value.trim())) return;
+              try {
+                const candidateInit =
+                  typeof data.value === "object" && data.value !== null
+                    ? data.value
+                    : {
+                        candidate: data.value,
+                        sdpMid:
+                          data.sdpMid !== undefined && data.sdpMid !== null ? String(data.sdpMid) : "0",
+                        sdpMLineIndex:
+                          data.sdpMLineIndex !== undefined && data.sdpMLineIndex !== null
+                            ? Number(data.sdpMLineIndex)
+                            : 0,
+                      };
+                const candidate = new RTCIceCandidate(candidateInit);
+                if (!this.hasRemoteDescription) {
+                  this.iceCandidateQueue.push(candidate);
+                } else {
+                  await pc.addIceCandidate(candidate).catch(() => {});
+                }
+              } catch (candErr) {
+                console.warn("Could not add ICE candidate:", candErr);
               }
             }
           } catch (e) {

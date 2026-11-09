@@ -305,18 +305,40 @@ export class LiveGrid {
               await pc.addIceCandidate(c).catch(() => {});
             }
           } else if (data.type === "webrtc/candidate") {
-            const candidate = new RTCIceCandidate({
-              candidate: data.value,
-              sdpMid: data.sdpMid,
-              sdpMLineIndex: data.sdpMLineIndex,
-            });
-            if (!hasRemote) {
-              iceCandidates.push(candidate);
-            } else {
-              await pc.addIceCandidate(candidate).catch(() => {});
-            }
+            if (!data.value || (typeof data.value === "string" && !data.value.trim())) return;
+            try {
+              const candidateInit =
+                typeof data.value === "object" && data.value !== null
+                  ? data.value
+                  : {
+                      candidate: data.value,
+                      sdpMid:
+                        data.sdpMid !== undefined && data.sdpMid !== null ? String(data.sdpMid) : "0",
+                      sdpMLineIndex:
+                        data.sdpMLineIndex !== undefined && data.sdpMLineIndex !== null
+                          ? Number(data.sdpMLineIndex)
+                          : 0,
+                    };
+              const candidate = new RTCIceCandidate(candidateInit);
+              if (!hasRemote) {
+                iceCandidates.push(candidate);
+              } else {
+                await pc.addIceCandidate(candidate).catch(() => {});
+              }
+            } catch {}
           }
         } catch {}
+      };
+
+      pc.onicecandidate = (iceEvent) => {
+        if (iceEvent.candidate && ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "webrtc/candidate",
+              value: iceEvent.candidate.candidate,
+            })
+          );
+        }
       };
 
       ws.onerror = (err) => {
