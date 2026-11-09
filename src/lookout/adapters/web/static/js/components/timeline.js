@@ -33,8 +33,12 @@ export class TimelineList {
   }
 
   addEvent(eventItem) {
-    // Prepend new event to timeline
-    this.events.unshift(eventItem);
+    const existingIndex = this.events.findIndex((e) => e.id === eventItem.id);
+    if (existingIndex >= 0) {
+      this.events[existingIndex] = eventItem;
+    } else {
+      this.events.unshift(eventItem);
+    }
     this.render();
   }
 
@@ -182,7 +186,7 @@ export class TimelineList {
         : `<span class="media-badge media-badge-video">▶ ${evt.duration || 10}s</span>`;
 
       let tierBadge = '<span class="tier-badge local">Local</span>';
-      if ((evt.metadata && evt.metadata.media_purged) || !evt.media_uri) {
+      if (evt.metadata && evt.metadata.media_purged) {
         tierBadge = '<span class="tier-badge purged">Purged</span>';
       } else if (
         (evt.metadata && evt.metadata.storage_tier === "archive") ||

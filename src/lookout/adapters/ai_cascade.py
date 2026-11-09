@@ -27,10 +27,11 @@ from lookout.ports.egress import VisionInferencePort
 logger = logging.getLogger(__name__)
 
 DEFAULT_VISION_PROMPT = (
-    "Analyze this smart home camera image. Output JSON with:\n"
+    "Analyze this smart home camera image. If nothing is happening or the scene is "
+    "clear/empty, use category 'false_positive'. Output JSON with:\n"
     "{\n"
     '  "category": "<courier_delivery|food_delivery|unknown_visitor|'
-    'known_pet|vehicle|package_event|security_intrusion|animal_wildlife>",\n'
+    'known_pet|vehicle|package_event|security_intrusion|animal_wildlife|false_positive>",\n'
     '  "confidence": <float 0.0-1.0>,\n'
     '  "summary": "<short description>",\n'
     '  "bounding_boxes": [{"label": "<label>", "confidence": <float>, '
@@ -511,13 +512,22 @@ class LocalEdgeVisionProvider:
             boxes = [box]
             confidence = 0.86
         else:
-            # Default edge person detection
-            category = EventCategory.UNKNOWN_VISITOR
-            box = BoundingBox(
-                label="person", confidence=0.85, x_min=0.25, y_min=0.1, x_max=0.75, y_max=0.9
+            # For real camera images without matched cues, classify as false positive
+            # rather than intruder
+            is_real_image = image_bytes.startswith(b"\xff\xd8") or image_bytes.startswith(
+                b"\x89PNG"
             )
-            boxes = [box]
-            confidence = 0.85
+            if is_real_image:
+                category = EventCategory.FALSE_POSITIVE
+                boxes = []
+                confidence = 0.50
+            else:
+                category = EventCategory.UNKNOWN_VISITOR
+                box = BoundingBox(
+                    label="person", confidence=0.85, x_min=0.25, y_min=0.1, x_max=0.75, y_max=0.9
+                )
+                boxes = [box]
+                confidence = 0.85
 
         latency_ms = max(0.5, (time.perf_counter() - start) * 1000.0)
         metrics = DetectionMetrics(
@@ -649,6 +659,21 @@ class CascadeVisionAdapter(VisionInferencePort):
                 )
                 elapsed_ms = (time.perf_counter() - tier_start) * 1000.0
                 cumulative_latency_ms += elapsed_ms
+
+                min_conf = getattr(self.cascade_config, "min_confidence", 0.0)
+                if (
+                    prov.confidence is not None
+                    and prov.confidence < min_conf
+                    and tier_name != "offline"
+                ):
+                    logger.info(
+                        "Cascade tier '%s' produced low confidence %.2f (< %.2f), cascading",
+                        tier_name,
+                        prov.confidence,
+                        min_conf,
+                    )
+                    continue
+
                 metrics.total_latency_ms = cumulative_latency_ms
                 return cat, metrics, prov
 

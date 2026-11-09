@@ -27,8 +27,19 @@ _PINGREQ = 0xC0
 _PROTOCOL_LEVEL = 4
 _RETAINED_GRACE_SECONDS = 3.0
 _RECONNECT_MAX_SECONDS = 30.0
-_PET_AUDIO_LABELS = frozenset({"bark", "whimper", "crying", "crying, sobbing"})
 _EVENT_SNAPSHOT_DIR = ("snapshots", "events")
+_PET_AUDIO_LABELS = frozenset(
+    {
+        "bark",
+        "whimper",
+        "crying",
+        "crying, sobbing",
+        "alarm",
+        "smoke_alarm",
+        "glass_break",
+        "scream",
+    }
+)
 
 
 def _encode_str(value: str) -> bytes:
@@ -154,11 +165,13 @@ class MqttEventIngestor:
         config: LookoutConfig,
         ingest: Callable[[str, dict[str, Any]], Awaitable[CameraEvent]],
         on_event: Callable[[CameraEvent], Awaitable[None]] | None = None,
+        on_clip_ready: Callable[[CameraEvent], Awaitable[None]] | None = None,
         client_factory: Callable[[], MiniMqttClient] | None = None,
     ) -> None:
         self.config = config
         self._ingest = ingest
         self._on_event = on_event
+        self._on_clip_ready = on_clip_ready
         self._client_factory = client_factory or self._default_client
         self._ring_snapshots: dict[str, bytes] = {}
         self._last_trigger: dict[str, float] = {}
@@ -187,6 +200,7 @@ class MqttEventIngestor:
             f"{ring}/+/camera/+/ding/state",
             f"{ring}/+/camera/+/snapshot/image",
             f"{wyze}/+/audio",
+            f"{wyze}/+/detection",
         ]
 
     async def _run(self) -> None:
@@ -233,12 +247,16 @@ class MqttEventIngestor:
                 and payload.decode(errors="ignore").strip().upper() == "ON"
             ):
                 await self._trigger(device, kind, {})
-        elif parts[0] == wyze and len(parts) == 3 and parts[2] == "audio":
+        elif parts[0] == wyze and len(parts) == 3 and parts[2] in ("audio", "detection"):
             try:
                 data = json.loads(payload)
             except ValueError:
                 return
-            label = str(data.get("detection", "")).lower() if isinstance(data, dict) else ""
+            if not isinstance(data, dict):
+                return
+            label = str(
+                data.get("detection") or data.get("sound") or data.get("label") or ""
+            ).lower().strip()
             if label in _PET_AUDIO_LABELS:
                 await self._trigger(parts[1], "audio", {"sound": label})
 
@@ -259,19 +277,131 @@ class MqttEventIngestor:
         if image:
             payload["image"] = image
             payload["snapshot_uri"] = self._save_snapshot(cam.id, kind, image)
+        if kind == "audio" and "sound" in extra:
+            payload["audio"] = str(extra["sound"]).encode("utf-8")
         event = await self._ingest(cam.id, payload)
         if self._on_event is not None:
             await self._on_event(event)
+        if event is not None and self._on_clip_ready is not None:
+            asyncio.create_task(self._record_clip_background(cam.id, event, duration=10.0))
+
+    async def _record_clip_background(
+        self, camera_id: str, event: CameraEvent, duration: float = 10.0
+    ) -> None:
+        base = self.config.go2rtc.api_url.rstrip("/")
+        name = f"{camera_id}_{event.id}.mp4"
+        directory = Path(self.config.storage.base_path) / "events"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            clip_path = directory / name
+            url = f"{base}/api/stream.mp4"
+
+            cam = self._camera_for(camera_id)
+            include_audio = (
+                cam.record_audio
+                if cam and cam.record_audio is not None
+                else getattr(self.config.transcode, "record_audio", True)
+            )
+
+            is_on_demand = bool(cam and cam.mqtt_id)
+            if is_on_demand:
+                # Allow on-demand streams (e.g. Ring WebRTC signaling) time to establish producer
+                await asyncio.sleep(2.5)
+
+            primary_src = f"ffmpeg:{camera_id}#video=copy#audio=aac" if include_audio else camera_id
+            params: dict[str, str | int] = {"src": primary_src, "duration": int(duration)}
+            max_attempts = 3 if is_on_demand else 2
+            resp: httpx.Response | None = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    async with httpx.AsyncClient(timeout=duration + 15.0) as client:
+                        resp = await client.get(url, params=params)
+                        if (resp.status_code != 200 or len(resp.content) < 1000) and include_audio:
+                            # Fallback to plain video-only stream if audio transcode failed
+                            fallback_params = {"src": camera_id, "duration": int(duration)}
+                            resp = await client.get(url, params=fallback_params)
+                except httpx.HTTPError as net_err:
+                    logger.debug(
+                        "Clip recording request attempt %d/%d for %s failed: %s",
+                        attempt,
+                        max_attempts,
+                        camera_id,
+                        net_err,
+                    )
+
+                if resp is not None and resp.status_code == 200 and len(resp.content) > 1000:
+                    break
+
+                if attempt < max_attempts:
+                    await asyncio.sleep(1.5 * attempt)
+
+            if resp is not None and resp.status_code == 200 and len(resp.content) > 1000:
+                clip_path.write_bytes(resp.content)
+                event.media_uri = f"/media/events/{name}"
+                logger.info(
+                    "Recorded background clip for %s (%s): %s bytes -> %s (audio=%s)",
+                    camera_id,
+                    event.id,
+                    len(resp.content),
+                    event.media_uri,
+                    include_audio,
+                )
+
+                # Generate lightweight animated preview GIF for mobile notifications & cards
+                try:
+                    from lookout.adapters.ffmpeg import FFmpegTranscoderAdapter
+
+                    gif_name = f"{camera_id}_{event.id}.gif"
+                    gif_path = directory / gif_name
+                    adapter = FFmpegTranscoderAdapter(config=self.config.transcode)
+                    await adapter.generate_preview_gif(
+                        input_path=str(clip_path),
+                        output_path=str(gif_path),
+                        duration_seconds=min(self.config.transcode.gif_duration, duration),
+                        fps=self.config.transcode.gif_fps,
+                        width=self.config.transcode.gif_width,
+                    )
+                    if gif_path.is_file() and gif_path.stat().st_size > 0:
+                        if event.metadata is None:
+                            event.metadata = {}
+                        event.metadata["gif_uri"] = f"/media/events/{gif_name}"
+                        logger.info(
+                            "Generated preview GIF for %s: %s",
+                            event.id,
+                            event.metadata["gif_uri"],
+                        )
+                except Exception as gif_exc:
+                    logger.debug("GIF preview generation skipped for %s: %s", event.id, gif_exc)
+
+                if self._on_clip_ready is not None:
+                    await self._on_clip_ready(event)
+            else:
+                status = resp.status_code if resp is not None else 0
+                size = len(resp.content) if resp is not None else 0
+                logger.warning(
+                    "Failed to record clip from go2rtc for %s: status=%d size=%d",
+                    camera_id,
+                    status,
+                    size,
+                )
+        except Exception as exc:
+            logger.warning("Background clip recording error for %s: %s", camera_id, exc)
 
     async def _go2rtc_frame(self, camera_id: str) -> bytes | None:
         base = self.config.go2rtc.api_url.rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=self.config.go2rtc.timeout_seconds) as client:
-                resp = await client.get(f"{base}/api/frame.jpeg", params={"src": camera_id})
-            if resp.status_code == 200 and resp.content.startswith(b"\xff\xd8"):
-                return resp.content
-        except httpx.HTTPError as exc:
-            logger.debug("go2rtc frame unavailable for %s: %s", camera_id, exc)
+        cam = self._camera_for(camera_id)
+        max_attempts = 2 if (cam and cam.mqtt_id) else 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.config.go2rtc.timeout_seconds) as client:
+                    resp = await client.get(f"{base}/api/frame.jpeg", params={"src": camera_id})
+                if resp.status_code == 200 and resp.content.startswith(b"\xff\xd8"):
+                    return resp.content
+            except httpx.HTTPError as exc:
+                logger.debug("go2rtc frame unavailable for %s (attempt %d): %s", camera_id, attempt, exc)
+            if attempt < max_attempts:
+                await asyncio.sleep(1.5)
         return None
 
     def _save_snapshot(self, camera_id: str, kind: str, image: bytes) -> str:

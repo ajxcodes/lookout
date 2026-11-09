@@ -15,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 
 from lookout import __version__
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
+from lookout.adapters.audio_classifier import YamnetAudioClassifierAdapter
 from lookout.adapters.entity_matcher import EntityCatalogMatcher
+from lookout.adapters.face_recognition import FaceRecognitionAdapter
 from lookout.adapters.light_ml import (
     LightMLObjectDetector,
     PetPostureClassifier,
@@ -249,7 +251,12 @@ def create_app(
     active_vision: CascadeVisionAdapter = (
         vision_adapter
         if vision_adapter is not None
-        else CascadeVisionAdapter(cascade_config=active_config.cascade if active_config else None)
+        else CascadeVisionAdapter(
+            cascade_config=active_config.cascade if active_config else None,
+            ollama_config=active_config.ollama if active_config else None,
+            opencode_config=active_config.opencode if active_config else None,
+            gemini_config=active_config.gemini if active_config else None,
+        )
     )
 
     static_dir = Path(__file__).parent / "static"
@@ -269,7 +276,15 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        logger.info("Lookout web application starting up")
+        log_level_name = os.getenv("LOOKOUT_LOG_LEVEL", "INFO").upper()
+        log_level = getattr(logging, log_level_name, logging.INFO)
+        logging.getLogger("lookout").setLevel(log_level)
+        if not logging.getLogger().handlers:
+            logging.basicConfig(level=log_level, format="%(levelname)s:     %(name)s - %(message)s")
+        else:
+            logging.getLogger().setLevel(log_level)
+
+        logger.info("Lookout web application starting up (log_level=%s)", log_level_name)
         if app.state.config is not None:
             try:
                 SidecarConfigSynchronizer().sync_all(app.state.config)
@@ -298,6 +313,20 @@ def create_app(
 
     notification, notify_threshold, notify_target = _build_notification(active_config)
 
+    active_audio = (
+        YamnetAudioClassifierAdapter(config=active_config.audio_classifier)
+        if (active_config and active_config.audio_classifier.enabled)
+        else YamnetAudioClassifierAdapter()
+    )
+    active_faces = (
+        FaceRecognitionAdapter(
+            config=active_config.face_recognition,
+            residents=active_config.residents if active_config else None,
+        )
+        if (active_config and active_config.face_recognition.enabled)
+        else FaceRecognitionAdapter()
+    )
+
     active_event_service: EventProcessingService = (
         event_service
         if event_service is not None
@@ -305,6 +334,8 @@ def create_app(
             repository=active_repo,
             notification=notification,
             vision_inference=active_vision,
+            face_recognition=active_faces,
+            audio_classifier=active_audio,
             notification_threshold=notify_threshold,
             notification_target=notify_target,
             light_ml_detector=LightMLObjectDetector(),
@@ -323,11 +354,33 @@ def create_app(
     async def _broadcast_event(evt: Any) -> None:
         await app.state.broadcast_hub.broadcast_event(evt)
 
+    async def _on_clip_ready(evt: Any) -> None:
+        if active_repo is not None:
+            await active_repo.save(evt)
+        await app.state.broadcast_hub.broadcast_event(evt)
+        if (
+            active_event_service is not None
+            and active_event_service.notification is not None
+            and hasattr(evt, "threat_level")
+            and evt.threat_level >= active_event_service.notification_threshold
+        ):
+            try:
+                # Dispatch in-place notification update via X-Sequence-ID
+                target = active_event_service.notification_target or "default"
+                await active_event_service.notification.send_notification(event=evt, target=target)
+            except Exception as notify_err:
+                logger.warning(
+                    "Second-pass notification update failed for %s: %s",
+                    getattr(evt, "id", "?"),
+                    notify_err,
+                )
+
     if active_config is not None and active_config.mqtt.enabled:
         app.state.mqtt_ingestor = MqttEventIngestor(
             active_config,
             ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
             on_event=_broadcast_event,
+            on_clip_ready=_on_clip_ready,
         )
 
     # Attach application state
@@ -394,6 +447,8 @@ def create_app(
             media_dir / "media" / clean_path,
             media_dir / "events" / clean_path,
             media_dir / "events" / clean_path.name,
+            media_dir / "recordings" / clean_path,
+            media_dir / "recordings" / clean_path.name,
         ]
 
         # 2. Warm archive tier

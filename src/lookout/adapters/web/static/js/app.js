@@ -10,6 +10,7 @@ import { CategoryFilter } from "./components/filters.js";
 import { TimelineList } from "./components/timeline.js";
 import { TimelineScrubber } from "./components/scrubber.js";
 import { SettingsModal } from "./components/settings-modal.js";
+import { ZoomController } from "./components/zoom-controller.js";
 import { resolveUrl } from "./utils/url.js";
 
 class LookoutApp {
@@ -35,6 +36,7 @@ class LookoutApp {
     this.viewGridBtn = document.getElementById("view-grid-btn");
     this.viewFocusBtn = document.getElementById("view-focus-btn");
     this.backToGridBtn = document.getElementById("back-to-grid-btn");
+    this.returnToLiveBtn = document.getElementById("return-to-live-btn");
     this.densitySelect = document.getElementById("grid-density-select");
 
     this.liveVideo = document.getElementById("live-video");
@@ -186,6 +188,11 @@ class LookoutApp {
         console.log("Runtime AI mode updated to:", mode);
       },
     });
+
+    const videoContainer = document.querySelector(".video-container");
+    if (videoContainer) {
+      this.zoomController = new ZoomController(videoContainer);
+    }
   }
 
   bindGlobalEvents() {
@@ -199,6 +206,10 @@ class LookoutApp {
 
     if (this.backToGridBtn) {
       this.backToGridBtn.addEventListener("click", () => this.switchToGrid());
+    }
+
+    if (this.returnToLiveBtn) {
+      this.returnToLiveBtn.addEventListener("click", () => this.returnToLive());
     }
 
     if (this.startLiveBtn) {
@@ -247,8 +258,24 @@ class LookoutApp {
     });
   }
 
+  returnToLive() {
+    if (!this.activeCamera) return;
+    this.currentEventItem = null;
+    if (this.eventPlayer) this.eventPlayer.stop();
+    const aiDetails = document.getElementById("focus-ai-details-card");
+    if (aiDetails) aiDetails.style.display = "none";
+    if (this.returnToLiveBtn) this.returnToLiveBtn.style.display = "none";
+    if (this.timeline) this.timeline.setSelectedEvent(null);
+    if (this.zoomController) this.zoomController.resetZoom(false);
+    this.switchToFocus(this.activeCamera, { autoStartLive: true, fetchTimeline: false });
+  }
+
   switchToGrid() {
     this.viewMode = "grid";
+    if (this.zoomController) this.zoomController.resetZoom(false);
+    if (this.returnToLiveBtn) this.returnToLiveBtn.style.display = "none";
+    const aiDetails = document.getElementById("focus-ai-details-card");
+    if (aiDetails) aiDetails.style.display = "none";
     if (this.liveGridSection) this.liveGridSection.style.display = "block";
     if (this.focusStage) this.focusStage.style.display = "none";
     if (this.viewerMain) this.viewerMain.style.display = "grid";
@@ -256,8 +283,8 @@ class LookoutApp {
     if (this.viewFocusBtn) this.viewFocusBtn.classList.remove("active");
     this.cameraSwitcher.setMode("grid");
     this.livePlayer.stopLive();
-    if (this.eventPlayer && this.eventPlayer.video) {
-      this.eventPlayer.video.pause();
+    if (this.eventPlayer) {
+      this.eventPlayer.stop();
     }
     this.acousticVis.stop();
     this.fetchEvents();
@@ -265,6 +292,7 @@ class LookoutApp {
 
   switchToFocus(cam = null, { autoStartLive = true, fetchTimeline = true } = {}) {
     this.viewMode = "focus";
+    if (this.zoomController) this.zoomController.resetZoom(false);
     if (this.liveGridSection) this.liveGridSection.style.display = "none";
     if (this.focusStage) this.focusStage.style.display = "flex";
     if (this.viewerMain) this.viewerMain.style.display = "grid";
@@ -285,8 +313,22 @@ class LookoutApp {
         (targetCam.stream_mode !== "on_demand" &&
           targetCam.provider_badge !== "ring" &&
           targetCam.camera_type !== "ring");
-      if (autoStartLive && isLiveRtc) {
-        this.livePlayer.startLive();
+      if (autoStartLive) {
+        if (this.returnToLiveBtn) this.returnToLiveBtn.style.display = "none";
+        const aiDetails = document.getElementById("focus-ai-details-card");
+        if (aiDetails) aiDetails.style.display = "none";
+        if (this.eventVideo) this.eventVideo.style.display = "none";
+        const snapCard = document.getElementById("event-snapshot-card");
+        if (snapCard) snapCard.style.display = "none";
+
+        if (isLiveRtc) {
+          if (this.snapshotOverlay) this.snapshotOverlay.style.display = "none";
+          if (this.liveVideo) this.liveVideo.style.display = "block";
+          this.livePlayer.startLive();
+        } else {
+          if (this.snapshotOverlay) this.snapshotOverlay.style.display = "flex";
+          if (this.liveVideo) this.liveVideo.style.display = "none";
+        }
       }
       if (fetchTimeline) {
         this.fetchEvents();
@@ -304,8 +346,11 @@ class LookoutApp {
     this.activeCamera = cam;
     this.currentEventItem = eventItem;
 
+    if (this.zoomController) this.zoomController.resetZoom(false);
     this.switchToFocus(cam, { autoStartLive: false, fetchTimeline: false });
     this.livePlayer.stopLive();
+
+    if (this.returnToLiveBtn) this.returnToLiveBtn.style.display = "inline-flex";
 
     if (this.snapshotOverlay) this.snapshotOverlay.style.display = "none";
     if (this.liveVideo) this.liveVideo.style.display = "none";
@@ -321,10 +366,14 @@ class LookoutApp {
       const selectedCard = this.timelineEl.querySelector(
         `.event-card[data-event-id="${eventItem.id}"], .event-card[data-id="${eventItem.id}"]`
       );
-      if (selectedCard && typeof selectedCard.scrollIntoView === "function") {
-        selectedCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (selectedCard) {
+        const containerRect = this.timelineEl.getBoundingClientRect();
+        const cardRect = selectedCard.getBoundingClientRect();
+        this.timelineEl.scrollTop += (cardRect.top - containerRect.top);
       }
     }
+    // Prevent awkward scroll jumps down to the card; keep video player front and center
+    window.scrollTo({ top: 0, behavior: "instant" });
 
     this.acousticVis.start();
     if (eventItem.metrics && eventItem.metrics.audio_decibels) {
@@ -426,13 +475,21 @@ class LookoutApp {
     this.sseEventSource.addEventListener("camera_event", (e) => {
       try {
         const eventData = JSON.parse(e.data);
+        const isNew = !this.timeline.events.some((ev) => ev.id === eventData.id);
         this.timeline.addEvent(eventData);
         if (this.scrubber) this.scrubber.setEvents(this.events);
 
-        // Update counts
-        const currentCounts = { ...this.cameraSwitcher.eventCounts };
-        currentCounts[eventData.camera_id] = (currentCounts[eventData.camera_id] || 0) + 1;
-        this.cameraSwitcher.setEventCounts(currentCounts);
+        if (isNew) {
+          // Update counts only for new events
+          const currentCounts = { ...this.cameraSwitcher.eventCounts };
+          currentCounts[eventData.camera_id] = (currentCounts[eventData.camera_id] || 0) + 1;
+          this.cameraSwitcher.setEventCounts(currentCounts);
+        } else if (this.currentEventItem && this.currentEventItem.id === eventData.id) {
+          this.currentEventItem = eventData;
+          if (this.eventPlayer && eventData.media_uri) {
+            this.eventPlayer.loadEvent(eventData);
+          }
+        }
       } catch (err) {
         console.warn("Malformed SSE camera_event payload:", err);
       }
@@ -496,25 +553,29 @@ class LookoutApp {
       const found = this._matchEventByTarget(this.events, targetEventId, targetCamId);
       if (found) {
         this.playEvent(found);
-      } else {
-        fetch(resolveUrl(`/api/events/${encodeURIComponent(targetEventId)}`))
-          .then((r) => (r.ok ? r.json() : null))
-          .then((ev) => {
-            if (ev) {
-              if (!this.events.some((e) => e.id === ev.id)) {
-                this.events.unshift(ev);
-                this.timeline.setEvents(this.events);
-              }
-              this.playEvent(ev);
-            } else if (targetCamId) {
-              const cam = this.cameras.find((c) => c.id === targetCamId);
-              if (cam) {
-                this.switchToFocus(cam, { autoStartLive: false, fetchTimeline: true });
-              }
-            }
-          })
-          .catch(() => {});
       }
+      fetch(resolveUrl(`/api/events/${encodeURIComponent(targetEventId)}`))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((ev) => {
+          if (ev) {
+            const idx = this.events.findIndex((e) => e.id === ev.id);
+            if (idx >= 0) {
+              this.events[idx] = ev;
+            } else {
+              this.events.unshift(ev);
+            }
+            this.timeline.setEvents(this.events);
+            if (!found || ev.media_uri !== found.media_uri) {
+              this.playEvent(ev);
+            }
+          } else if (!found && targetCamId) {
+            const cam = this.cameras.find((c) => c.id === targetCamId);
+            if (cam) {
+              this.switchToFocus(cam, { autoStartLive: false, fetchTimeline: true });
+            }
+          }
+        })
+        .catch(() => {});
       return true;
     } else if (targetCamId) {
       const cam = this.cameras.find((c) => c.id === targetCamId);

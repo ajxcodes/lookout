@@ -124,6 +124,13 @@ class CameraConfig(BaseModel):
     record_duration: float = Field(
         default=10.0, gt=0.0, description="Duration in seconds for captured video clips"
     )
+    record_audio: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to include and transcode audio in event recordings "
+            "(None inherits transcode.record_audio)"
+        ),
+    )
     timestamp_overlay: bool | None = Field(
         default=None,
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
@@ -245,6 +252,10 @@ class TranscodeConfig(BaseModel):
     )
     gif_duration: float = Field(
         default=2.5, gt=0.0, description="Maximum duration in seconds for preview GIF"
+    )
+    record_audio: bool = Field(
+        default=True,
+        description="Whether to include and transcode audio (AAC) in event MP4 recordings",
     )
     thumbnail_count: int = Field(
         default=5, ge=1, description="Number of scrubbed thumbnail images to extract"
@@ -375,7 +386,7 @@ class GeminiConfig(BaseModel):
         description="Gemini API base endpoint",
     )
     model: str = Field(default="gemini-3.5-flash-lite", description="Gemini model name")
-    timeout_seconds: float = Field(default=8.0, gt=0.0, description="Request timeout in seconds")
+    timeout_seconds: float = Field(default=15.0, gt=0.0, description="Request timeout in seconds")
     enabled: bool = Field(default=True, description="Whether Gemini inference is active")
 
 
@@ -401,6 +412,12 @@ class CascadeConfig(BaseModel):
     fallback_category: EventCategory = Field(
         default=EventCategory.UNKNOWN_VISITOR,
         description="Default fallback category when all tiers fail",
+    )
+    min_confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence required to accept tier result before cascading",
     )
 
 

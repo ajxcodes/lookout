@@ -2,6 +2,7 @@
  * Recorded event video player and dedicated snapshot card presentation component.
  */
 import { resolveUrl } from "../utils/url.js";
+import { ZoomController } from "./zoom-controller.js";
 
 export class EventPlayer {
   constructor({
@@ -29,6 +30,7 @@ export class EventPlayer {
     this.currentEvent = null;
 
     this.bindEvents();
+    this.initLightbox();
   }
 
   bindEvents() {
@@ -46,6 +48,13 @@ export class EventPlayer {
       }
     });
 
+    this.video.addEventListener("error", () => {
+      console.warn("Event video failed to load, falling back to snapshot card:", this.video.src);
+      if (this.currentEvent) {
+        this.renderSnapshotCard(this.currentEvent);
+      }
+    });
+
     const downloadSnapBtn = document.getElementById("download-snapshot-btn");
     if (downloadSnapBtn) {
       downloadSnapBtn.addEventListener("click", () => this.downloadSnapshot());
@@ -55,6 +64,23 @@ export class EventPlayer {
     if (inspectBtn) {
       inspectBtn.addEventListener("click", () => this.inspectFrame());
     }
+  }
+
+  stop() {
+    if (this.video) {
+      this.video.pause();
+      this.video.style.display = "none";
+      this.video.removeAttribute("src");
+      this.video.load();
+    }
+    if (this.snapshotCard) {
+      this.snapshotCard.style.display = "none";
+    }
+    const aiDetails = document.getElementById("focus-ai-details-card");
+    if (aiDetails) {
+      aiDetails.style.display = "none";
+    }
+    this.currentEvent = null;
   }
 
   renderSnapshotCard(eventItem) {
@@ -222,6 +248,81 @@ export class EventPlayer {
     document.body.removeChild(a);
   }
 
+  initLightbox() {
+    this.lightboxModal = document.getElementById("snapshot-lightbox-modal");
+    this.lightboxImg = document.getElementById("lightbox-img");
+    this.lightboxFilename = document.getElementById("lightbox-filename");
+    this.lightboxDownload = document.getElementById("lightbox-download");
+    this.lightboxZoomLevel = document.getElementById("lightbox-zoom-level");
+    this.lightboxViewport = document.getElementById("lightbox-viewport");
+
+    if (!this.lightboxModal || !this.lightboxViewport || !this.lightboxImg) return;
+
+    this.lightboxZoom = new ZoomController(this.lightboxViewport, {
+      customTargetEl: this.lightboxImg,
+      showHud: false,
+      onZoomChange: (zoom) => {
+        if (this.lightboxZoomLevel) {
+          this.lightboxZoomLevel.textContent = `${zoom.toFixed(1)}x`;
+        }
+      },
+    });
+
+    const closeBtn = document.getElementById("lightbox-close-btn");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => this.closeLightbox());
+    }
+
+    this.lightboxModal.addEventListener("click", (e) => {
+      if (e.target === this.lightboxModal) {
+        this.closeLightbox();
+      }
+    });
+
+    const zoomInBtn = document.getElementById("lightbox-zoom-in");
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener("click", () => this.lightboxZoom.zoomIn(0.5));
+    }
+
+    const zoomOutBtn = document.getElementById("lightbox-zoom-out");
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener("click", () => this.lightboxZoom.zoomOut(0.5));
+    }
+
+    const resetBtn = document.getElementById("lightbox-reset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", () => this.lightboxZoom.resetZoom(true));
+    }
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.lightboxModal && this.lightboxModal.style.display !== "none") {
+        this.closeLightbox();
+      }
+    });
+  }
+
+  openLightbox(url, title = "") {
+    if (!this.lightboxModal || !this.lightboxImg) return;
+    this.lightboxImg.src = url;
+    if (this.lightboxFilename) this.lightboxFilename.textContent = title;
+    if (this.lightboxDownload) {
+      this.lightboxDownload.href = url;
+      this.lightboxDownload.download = title || "snapshot.jpg";
+    }
+    this.lightboxModal.style.display = "flex";
+    if (this.lightboxZoom) {
+      this.lightboxZoom.resetZoom(false);
+    }
+  }
+
+  closeLightbox() {
+    if (!this.lightboxModal) return;
+    this.lightboxModal.style.display = "none";
+    if (this.lightboxZoom) {
+      this.lightboxZoom.resetZoom(false);
+    }
+  }
+
   inspectFrame() {
     if (!this.currentEvent) return;
     const rawThumb =
@@ -231,7 +332,9 @@ export class EventPlayer {
       (this.currentEvent.camera_id
         ? `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`
         : `/media/events/${this.currentEvent.id}.jpg`);
-    window.open(resolveUrl(rawThumb), "_blank");
+    const dateStr = this.currentEvent.timestamp ? new Date(this.currentEvent.timestamp).toLocaleTimeString() : "";
+    const title = `${this.currentEvent.camera_id || "Camera"} - ${dateStr}`;
+    this.openLightbox(resolveUrl(rawThumb), title);
   }
 
   updateAiDetailsCard(eventItem) {
@@ -241,7 +344,12 @@ export class EventPlayer {
 
 export function updateAiDetailsCard(eventItem) {
   const card = document.getElementById("focus-ai-details-card");
-  if (!card || !eventItem) return;
+  if (!card) return;
+  if (!eventItem) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "block";
 
   // 1. Model provenance badge
   const modelBadge = document.getElementById("ai-model-badge");
