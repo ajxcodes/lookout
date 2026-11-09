@@ -85,6 +85,8 @@ export class LivePlayer {
   async startLive() {
     if (!this.activeCamera) return;
 
+    this.stopSnapshotPolling();
+
     if (
       this.activeCamera &&
       this.activeCamera.timestamp_overlay !== false &&
