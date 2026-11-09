@@ -142,6 +142,27 @@ class Go2RtcConfig(BaseModel):
     )
 
 
+class WyzeConfig(BaseModel):
+    """Configuration for Wyze cloud and bridge adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str | None = Field(default=None, description="Wyze account email")
+    password: str | None = Field(default=None, description="Wyze account password")
+    key_id: str | None = Field(default=None, description="Wyze API Key ID")
+    api_key: str | None = Field(default=None, description="Wyze API Key")
+    totp_key: str | None = Field(default=None, description="Wyze TOTP secret key for automatic 2FA")
+    auth_token: str | None = Field(default=None, description="Wyze API access token")
+    refresh_token: str | None = Field(default=None, description="Wyze API refresh token")
+    external_bridge_url: str | None = Field(
+        default=None, description="External docker-wyze-bridge Web API endpoint"
+    )
+    bridge_rtsp_url: str | None = Field(
+        default=None, description="External docker-wyze-bridge RTSP endpoint"
+    )
+    enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
+
+
 class RingConfig(BaseModel):
     """Configuration for Ring cloud adapter."""
 
@@ -152,6 +173,21 @@ class RingConfig(BaseModel):
     timeout_seconds: float = Field(
         default=15.0, gt=0.0, description="Timeout for Ring cloud API requests"
     )
+    refresh_token: str | None = Field(
+        default=None, description="Ring OAuth refresh token (RINGTOKEN)"
+    )
+    email: str | None = Field(default=None, description="Ring account email")
+    session_id: str | None = Field(default=None, description="Active 2FA challenge session ID")
+    external_stream_url: str | None = Field(
+        default=None, description="External ring-mqtt stream URL"
+    )
+    oauth_url: str = Field(
+        default="https://oauth.ring.com", description="Ring OAuth authentication endpoint"
+    )
+    two_factor_auth_required: bool = Field(
+        default=False, description="Whether 2FA challenge is currently pending"
+    )
+    enabled: bool = Field(default=True, description="Whether Ring bridge integration is active")
 
 
 class TranscodeConfig(BaseModel):
@@ -366,6 +402,7 @@ class LookoutConfig(BaseModel):
     notification_targets: list[NotificationTargetConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     go2rtc: Go2RtcConfig = Field(default_factory=Go2RtcConfig)
+    wyze: WyzeConfig = Field(default_factory=WyzeConfig)
     ring: RingConfig = Field(default_factory=RingConfig)
     transcode: TranscodeConfig = Field(default_factory=TranscodeConfig)
     cascade: CascadeConfig = Field(default_factory=CascadeConfig)
@@ -428,3 +465,44 @@ class LookoutConfig(BaseModel):
                     )
 
         return self
+
+
+SENSITIVE_KEYS: set[str] = {
+    "password",
+    "auth_token",
+    "refresh_token",
+    "api_key",
+    "totp_key",
+    "key_id",
+    "client_secret",
+}
+
+
+def mask_secret(val: str | None, prefix: int = 2, suffix: int = 2) -> str | None:
+    """Mask secret token or password with asterisk characters."""
+    if val is None:
+        return None
+    if not val:
+        return ""
+    if len(val) <= prefix + suffix:
+        return "******"
+    return f"{val[:prefix]}***{val[-suffix:]}"
+
+
+def mask_config_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Recursively traverse a dictionary and mask sensitive secrets."""
+    masked: dict[str, Any] = {}
+    for key, val in data.items():
+        if isinstance(val, dict):
+            masked[key] = mask_config_dict(val)
+        elif isinstance(val, list):
+            masked[key] = [
+                mask_config_dict(item) if isinstance(item, dict) else item for item in val
+            ]
+        elif key.lower() == "password":
+            masked[key] = "******" if val else val
+        elif key.lower() in SENSITIVE_KEYS:
+            masked[key] = mask_secret(str(val), prefix=2, suffix=2) if val is not None else None
+        else:
+            masked[key] = val
+    return masked

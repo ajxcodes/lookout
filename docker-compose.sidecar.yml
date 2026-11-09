@@ -44,9 +44,10 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    env_file:
+      - path: ./data/sidecars/wyze-bridge.env
+        required: false
     environment:
-      - WYZE_EMAIL=${WYZE_EMAIL:-}
-      - WYZE_PASSWORD=${WYZE_PASSWORD:-}
       - ON_DEMAND=True
       - WB_IP=0.0.0.0
     networks:
@@ -56,12 +57,15 @@ services:
     image: tsightler/ring-mqtt:latest
     container_name: ring-mqtt
     restart: unless-stopped
+    env_file:
+      - path: ./data/sidecars/ring-mqtt.env
+        required: false
     environment:
       - MQTTHOST=localhost
       - MQTTPORT=1883
-      - RINGTOKEN=${RING_TOKEN:-}
     networks:
       - home_net
+
 
 networks:
   home_net:

@@ -124,6 +124,27 @@ export class SetupWizard {
     this.btnAddCam = document.getElementById("btn-add-cam");
     this.cameraListEl = document.getElementById("cameras-list");
 
+    // Step 2: Sidecar Integrations & 2FA Modal
+    this.badgeWyzeStatus = document.getElementById("badge-wyze-status");
+    this.badgeRingStatus = document.getElementById("badge-ring-status");
+    this.btnAdoptWyze = document.getElementById("btn-adopt-wyze");
+    this.btnAdoptRing = document.getElementById("btn-adopt-ring");
+    this.btnAuthWyze = document.getElementById("btn-auth-wyze");
+    this.btnAuthRing = document.getElementById("btn-auth-ring");
+    this.modal2fa = document.getElementById("modal-2fa");
+    this.modal2faClose = document.getElementById("modal-2fa-close");
+    this.modal2faTitle = document.getElementById("modal-2fa-title");
+    this.modal2faDesc = document.getElementById("modal-2fa-desc");
+    this.code2faInput = document.getElementById("code-2fa");
+    this.btnVerify2fa = document.getElementById("btn-verify-2fa");
+    this.btnCancel2fa = document.getElementById("btn-cancel-2fa");
+    this.btnResend2fa = document.getElementById("btn-resend-2fa");
+    this.countdown2fa = document.getElementById("countdown-2fa");
+    this.status2fa = document.getElementById("status-2fa");
+    this.active2faProvider = null;
+    this.active2faSessionId = null;
+    this.countdownTimer = null;
+
     // Step 3: Residents & Pets
     this.residentNameInput = document.getElementById("resident-name");
     this.residentIdInput = document.getElementById("resident-id");
@@ -219,6 +240,36 @@ export class SetupWizard {
       this.camNameInput.value = "";
       this.camUrlInput.value = "";
     });
+
+    // Sidecar bridge & 2FA events
+    if (this.btnAuthWyze) {
+      this.btnAuthWyze.addEventListener("click", () => this.startAuth("wyze"));
+    }
+    if (this.btnAuthRing) {
+      this.btnAuthRing.addEventListener("click", () => this.startAuth("ring"));
+    }
+    if (this.btnAdoptWyze) {
+      this.btnAdoptWyze.addEventListener("click", () =>
+        this.adoptBridgeStream("wyze", "rtsp://localhost:8554/wyze_cam", "wyze-camera", "Wyze Cam Bridge")
+      );
+    }
+    if (this.btnAdoptRing) {
+      this.btnAdoptRing.addEventListener("click", () =>
+        this.adoptBridgeStream("ring", "ring://doorbell_1", "ring-doorbell", "Ring Doorbell")
+      );
+    }
+    if (this.btnVerify2fa) {
+      this.btnVerify2fa.addEventListener("click", () => this.submit2fa());
+    }
+    if (this.btnCancel2fa) {
+      this.btnCancel2fa.addEventListener("click", () => this.close2faModal());
+    }
+    if (this.modal2faClose) {
+      this.modal2faClose.addEventListener("click", () => this.close2faModal());
+    }
+    if (this.btnResend2fa) {
+      this.btnResend2fa.addEventListener("click", () => this.resend2fa());
+    }
 
     // Step 3: Face Upload
     if (this.faceDropzone && this.faceFileInput) {
@@ -380,6 +431,10 @@ export class SetupWizard {
     this.btnNext.style.display = this.currentStep === this.totalSteps ? "none" : "inline-flex";
     this.btnFinalize.style.display = this.currentStep === this.totalSteps ? "inline-flex" : "none";
 
+    if (this.currentStep === 2) {
+      this.checkSidecars();
+    }
+
     if (this.currentStep === 5) {
       this.gatherStepData();
       // Ensure at least one default camera exists if none was added
@@ -431,7 +486,183 @@ export class SetupWizard {
       this.btnFinalize.textContent = "Finalize & Launch";
     }
   }
+
+  async checkSidecars() {
+    try {
+      const res = await fetch(resolveUrl("/api/auth/status"));
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (this.badgeWyzeStatus && data.wyze) {
+        if (data.wyze.status === "pre_authenticated") {
+          this.badgeWyzeStatus.textContent = "Connected (Pre-authenticated)";
+          this.badgeWyzeStatus.style.background = "#10b981";
+          this.badgeWyzeStatus.style.color = "#ffffff";
+        } else if (data.wyze.status === "authenticated") {
+          this.badgeWyzeStatus.textContent = "Connected (Authenticated)";
+          this.badgeWyzeStatus.style.background = "#10b981";
+          this.badgeWyzeStatus.style.color = "#ffffff";
+        } else {
+          this.badgeWyzeStatus.textContent = "Unconfigured";
+          this.badgeWyzeStatus.style.background = "var(--bg-subtle)";
+          this.badgeWyzeStatus.style.color = "var(--text-muted)";
+        }
+      }
+
+      if (this.badgeRingStatus && data.ring) {
+        if (data.ring.status === "pre_authenticated") {
+          this.badgeRingStatus.textContent = "Connected (Pre-authenticated)";
+          this.badgeRingStatus.style.background = "#10b981";
+          this.badgeRingStatus.style.color = "#ffffff";
+        } else if (data.ring.status === "authenticated") {
+          this.badgeRingStatus.textContent = "Connected (Authenticated)";
+          this.badgeRingStatus.style.background = "#10b981";
+          this.badgeRingStatus.style.color = "#ffffff";
+        } else {
+          this.badgeRingStatus.textContent = "Unconfigured";
+          this.badgeRingStatus.style.background = "var(--bg-subtle)";
+          this.badgeRingStatus.style.color = "var(--text-muted)";
+        }
+      }
+    } catch (err) {
+      console.warn("Could not probe sidecar status:", err);
+    }
+  }
+
+  async startAuth(provider) {
+    const creds = { email: `${provider}_user@example.com`, password: "password123" };
+    try {
+      const res = await fetch(resolveUrl(`/api/auth/${provider}/login`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(creds),
+      });
+      const data = await res.json();
+      if (data.status === "2fa_required") {
+        this.open2faModal(provider, data.session_id, data.message);
+      } else if (data.status === "authenticated") {
+        alert(`${provider.toUpperCase()} authenticated successfully.`);
+        await this.checkSidecars();
+      }
+    } catch (err) {
+      alert(`Login failed: ${err.message}`);
+    }
+  }
+
+  open2faModal(provider, sessionId, message) {
+    this.active2faProvider = provider;
+    this.active2faSessionId = sessionId;
+    if (this.modal2faTitle) {
+      this.modal2faTitle.textContent = `${provider === "wyze" ? "Wyze" : "Ring"} 2FA Verification`;
+    }
+    if (this.modal2faDesc && message) {
+      this.modal2faDesc.textContent = message;
+    }
+    if (this.code2faInput) {
+      this.code2faInput.value = "";
+    }
+    if (this.status2fa) {
+      this.status2fa.textContent = "";
+      this.status2fa.style.color = "inherit";
+    }
+    if (this.modal2fa) {
+      this.modal2fa.style.display = "flex";
+    }
+
+    // Start 60s countdown
+    let timeLeft = 60;
+    if (this.countdownTimer) clearInterval(this.countdownTimer);
+    if (this.countdown2fa) this.countdown2fa.textContent = `Expires in: ${timeLeft}s`;
+    this.countdownTimer = setInterval(() => {
+      timeLeft -= 1;
+      if (this.countdown2fa) {
+        this.countdown2fa.textContent = timeLeft > 0 ? `Expires in: ${timeLeft}s` : "Code expired";
+      }
+      if (timeLeft <= 0) {
+        clearInterval(this.countdownTimer);
+      }
+    }, 1000);
+  }
+
+  close2faModal() {
+    if (this.modal2fa) {
+      this.modal2fa.style.display = "none";
+    }
+    if (this.countdownTimer) {
+      clearInterval(this.countdownTimer);
+    }
+  }
+
+  async resend2fa() {
+    if (this.status2fa) {
+      this.status2fa.textContent = "Resending 2FA code...";
+    }
+    await this.startAuth(this.active2faProvider || "wyze");
+  }
+
+  async submit2fa() {
+    const code = this.code2faInput ? this.code2faInput.value.trim() : "";
+    if (!code) {
+      if (this.status2fa) {
+        this.status2fa.textContent = "Please enter the 6-digit code";
+        this.status2fa.style.color = "#ef4444";
+      }
+      return;
+    }
+
+    if (this.btnVerify2fa) {
+      this.btnVerify2fa.disabled = true;
+      this.btnVerify2fa.textContent = "Verifying...";
+    }
+
+    try {
+      const res = await fetch(resolveUrl(`/api/auth/${this.active2faProvider}/verify`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: this.active2faSessionId,
+          code: code,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.status === "authenticated") {
+        if (this.status2fa) {
+          this.status2fa.textContent = "Verification successful!";
+          this.status2fa.style.color = "#10b981";
+        }
+        setTimeout(() => {
+          this.close2faModal();
+          this.checkSidecars();
+        }, 600);
+      } else {
+        if (this.status2fa) {
+          this.status2fa.textContent = data.message || "Invalid verification code";
+          this.status2fa.style.color = "#ef4444";
+        }
+      }
+    } catch (err) {
+      if (this.status2fa) {
+        this.status2fa.textContent = `Verification error: ${err.message}`;
+        this.status2fa.style.color = "#ef4444";
+      }
+    } finally {
+      if (this.btnVerify2fa) {
+        this.btnVerify2fa.disabled = false;
+        this.btnVerify2fa.textContent = "Verify Code";
+      }
+    }
+  }
+
+  adoptBridgeStream(provider, defaultUrl, defaultId, defaultName) {
+    if (this.camIdInput) this.camIdInput.value = defaultId;
+    if (this.camNameInput) this.camNameInput.value = defaultName;
+    if (this.camUrlInput) this.camUrlInput.value = defaultUrl;
+    if (this.camTypeSelect) this.camTypeSelect.value = provider;
+    if (this.btnAddCam) this.btnAddCam.click();
+  }
 }
+
 
 document.addEventListener("DOMContentLoaded", () => {
   new SetupWizard();

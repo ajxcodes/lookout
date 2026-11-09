@@ -21,8 +21,10 @@ from lookout.adapters.light_ml import (
     SpatialZoneEvaluator,
 )
 from lookout.adapters.memory import InMemoryEventRepository
+from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
 from lookout.adapters.web.broadcast import SSEBroadcastHub
 from lookout.adapters.web.routes import (
+    auth_router,
     cameras_router,
     entities_router,
     events_router,
@@ -142,6 +144,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Lookout web application starting up")
+        if app.state.config is not None:
+            try:
+                SidecarConfigSynchronizer().sync_all(app.state.config)
+            except Exception as exc:
+                logger.warning("Sidecar configuration synchronization error: %s", exc)
         yield
         logger.info("Lookout web application shutting down")
 
@@ -195,6 +202,7 @@ def create_app(
     app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
     app.include_router(setup_router, prefix="/api")
+    app.include_router(auth_router, prefix="/api")
 
     # Static assets and media files
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
