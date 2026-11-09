@@ -33,6 +33,10 @@ export class LivePlayer {
     this.iceCandidateQueue = [];
     this.hasRemoteDescription = false;
     this.snapshotInterval = null;
+    this.durationBadge = document.getElementById("live-duration-badge");
+    this.durationTimer = document.getElementById("live-duration-timer");
+    this.sessionStartTime = null;
+    this.durationInterval = null;
   }
 
   setCamera(camera) {
@@ -81,6 +85,16 @@ export class LivePlayer {
   async startLive() {
     if (!this.activeCamera) return;
 
+    if (
+      this.activeCamera &&
+      this.activeCamera.timestamp_overlay !== false &&
+      (this.activeCamera.provider_badge === "ring" ||
+        this.activeCamera.camera_type === "ring" ||
+        this.activeCamera.timestamp_overlay === true)
+    ) {
+      this.startDurationTimer();
+    }
+
     // Keep snapshot overlay visible while WebRTC is negotiating to prevent black screen
     if (this.overlay) {
       this.overlay.style.display = "flex";
@@ -90,6 +104,15 @@ export class LivePlayer {
       const hideOverlayWhenReady = () => {
         if (this.overlay) {
           this.overlay.style.display = "none";
+        }
+        if (
+          this.activeCamera &&
+          this.activeCamera.timestamp_overlay !== false &&
+          (this.activeCamera.provider_badge === "ring" ||
+            this.activeCamera.camera_type === "ring" ||
+            this.activeCamera.timestamp_overlay === true)
+        ) {
+          this.startDurationTimer();
         }
       };
       this.video.onplaying = hideOverlayWhenReady;
@@ -116,7 +139,9 @@ export class LivePlayer {
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "connected") {
-          if (this.overlay) this.overlay.style.display = "none";
+          if (this.video && this.video.currentTime > 0) {
+            if (this.overlay) this.overlay.style.display = "none";
+          }
         } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
           if (this.overlay) this.overlay.style.display = "flex";
           this.showSnapshotFallback();
@@ -276,8 +301,35 @@ export class LivePlayer {
       this.video.srcObject = null;
       this.video.removeAttribute("src");
     }
+    this.stopDurationTimer();
     this.hasRemoteDescription = false;
     this.iceCandidateQueue = [];
     this.isLive = false;
+  }
+
+  startDurationTimer() {
+    this.stopDurationTimer();
+    if (!this.durationBadge || !this.durationTimer) return;
+    this.sessionStartTime = Date.now();
+    this.durationTimer.textContent = "00:00:00";
+    this.durationBadge.style.display = "inline-flex";
+
+    this.durationInterval = setInterval(() => {
+      const elapsedSec = Math.floor((Date.now() - this.sessionStartTime) / 1000);
+      const hrs = Math.floor(elapsedSec / 3600);
+      const mins = Math.floor((elapsedSec % 3600) / 60);
+      const secs = elapsedSec % 60;
+      this.durationTimer.textContent = `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }, 1000);
+  }
+
+  stopDurationTimer() {
+    if (this.durationInterval) {
+      clearInterval(this.durationInterval);
+      this.durationInterval = null;
+    }
+    if (this.durationBadge) {
+      this.durationBadge.style.display = "none";
+    }
   }
 }

@@ -69,6 +69,11 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
 
     stream_mode = cam.stream_mode or inferred_stream_mode
     icon = infer_camera_icon(cam.name or cam.location)
+    timestamp_overlay = (
+        cam.timestamp_overlay
+        if cam.timestamp_overlay is not None
+        else (provider_badge == "ring" or "ring" in (cam.provider or "").lower())
+    )
 
     return {
         "id": cam.id,
@@ -82,4 +87,5 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "provider_badge": provider_badge,
         "stream_mode": stream_mode,
         "event_count": event_count,
+        "timestamp_overlay": timestamp_overlay,
     }

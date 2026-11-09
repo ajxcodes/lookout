@@ -103,6 +103,16 @@ class LookoutApp {
       onSelectCamera: (cam) => {
         this.activeCamera = cam;
         this.livePlayer.setCamera(cam);
+        const isLiveRtc =
+          cam.stream_mode === "live_rtc" ||
+          cam.provider_badge === "wyze" ||
+          cam.camera_type === "wyze" ||
+          (cam.stream_mode !== "on_demand" &&
+            cam.provider_badge !== "ring" &&
+            cam.camera_type !== "ring");
+        if (isLiveRtc) {
+          this.livePlayer.startLive();
+        }
         this.fetchEvents();
       },
       onSelectionChange: (cameraIds) => {
@@ -253,14 +263,22 @@ class LookoutApp {
     if (this.viewFocusBtn) this.viewFocusBtn.classList.add("active");
     this.cameraSwitcher.setMode("focus");
 
-    if (cam) {
-      this.activeCamera = cam;
-      this.cameraSwitcher.setActiveCamera(cam.id);
-      this.livePlayer.setCamera(cam);
-      this.fetchEvents();
-    } else if (this.activeCamera) {
-      this.cameraSwitcher.setActiveCamera(this.activeCamera.id);
-      this.livePlayer.setCamera(this.activeCamera);
+    const targetCam =
+      cam || this.activeCamera || (this.cameras.length > 0 ? this.cameras[0] : null);
+    if (targetCam) {
+      this.activeCamera = targetCam;
+      this.cameraSwitcher.setActiveCamera(targetCam.id);
+      this.livePlayer.setCamera(targetCam);
+      const isLiveRtc =
+        targetCam.stream_mode === "live_rtc" ||
+        targetCam.provider_badge === "wyze" ||
+        targetCam.camera_type === "wyze" ||
+        (targetCam.stream_mode !== "on_demand" &&
+          targetCam.provider_badge !== "ring" &&
+          targetCam.camera_type !== "ring");
+      if (isLiveRtc) {
+        this.livePlayer.startLive();
+      }
       this.fetchEvents();
     }
   }

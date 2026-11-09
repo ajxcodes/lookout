@@ -120,6 +120,10 @@ class CameraConfig(BaseModel):
     record_duration: float = Field(
         default=10.0, gt=0.0, description="Duration in seconds for captured video clips"
     )
+    timestamp_overlay: bool | None = Field(
+        default=None,
+        description="Whether to render session timestamp overlay (auto-enabled for Ring)",
+    )
 
     @field_validator("stream_url")
     @classmethod
@@ -194,6 +198,10 @@ class RingConfig(BaseModel):
         default=False, description="Whether 2FA challenge is currently pending"
     )
     enabled: bool = Field(default=True, description="Whether Ring bridge integration is active")
+    timestamp_overlay: bool = Field(
+        default=True,
+        description="Whether to render an elapsed session timestamp overlay on Ring live streams",
+    )
 
 
 class TranscodeConfig(BaseModel):

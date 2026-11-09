@@ -102,3 +102,48 @@ def test_ntfy_action_buttons_and_deep_links() -> None:
     )
     assert dispatcher.deep_link_base_url == "https://ha.home.ajx.codes/lookout"
     assert event.camera_id == "front_door"
+
+
+def test_ring_timestamp_overlay_and_focus_autoplay() -> None:
+    from lookout.adapters.web.helpers import build_camera_card_data
+    from lookout.config.schema import CameraConfig, RingConfig
+
+    # Ring config flag default
+    ring_cfg = RingConfig()
+    assert ring_cfg.timestamp_overlay is True
+
+    # Camera card metadata auto-infers timestamp_overlay for Ring
+    ring_cam = CameraConfig(
+        id="front_door", name="Front Door", stream_url="rtsp://127.0.0.1:8554/front_door"
+    )
+    ring_data = build_camera_card_data(ring_cam)
+    assert ring_data["timestamp_overlay"] is True
+
+    # Wyze streams have burned-in timestamp, so timestamp_overlay defaults to False
+    wyze_cam = CameraConfig(
+        id="office_cam", name="Office Cam", stream_url="rtsp://127.0.0.1:8554/office_cam"
+    )
+    wyze_data = build_camera_card_data(wyze_cam)
+    assert wyze_data["timestamp_overlay"] is False
+
+    # Explicit override on camera
+    ring_override = CameraConfig(
+        id="front_door",
+        name="Front Door",
+        stream_url="rtsp://127.0.0.1:8554/front_door",
+        timestamp_overlay=False,
+    )
+    assert build_camera_card_data(ring_override)["timestamp_overlay"] is False
+
+    # Check JS files contain duration timer and auto-play logic
+    player_js = Path("src/lookout/adapters/web/static/js/components/live-player.js").read_text(
+        encoding="utf-8"
+    )
+    app_js = Path("src/lookout/adapters/web/static/js/app.js").read_text(encoding="utf-8")
+    index_html = Path("src/lookout/adapters/web/static/index.html").read_text(encoding="utf-8")
+
+    assert "startDurationTimer" in player_js
+    assert "live-duration-badge" in index_html
+    assert "live-duration-timer" in index_html
+    assert "isLiveRtc" in app_js
+    assert "this.livePlayer.startLive()" in app_js
