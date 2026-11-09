@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import inspect
 import logging
@@ -28,6 +29,42 @@ _PRIORITY_MAP: dict[ThreatLevel, str] = {
     ThreatLevel.CRITICAL: "5",
 }
 
+_THREAT_EMOJIS: dict[ThreatLevel, str] = {
+    ThreatLevel.CRITICAL: "🚨",
+    ThreatLevel.HIGH: "⚠️",
+    ThreatLevel.MEDIUM: "🟡",
+    ThreatLevel.LOW: "ℹ️",
+    ThreatLevel.INFO: "🟢",
+}
+
+_OBJECT_ICONS: dict[str, str] = {
+    "person": "👤",
+    "resident": "👤",
+    "visitor": "👤",
+    "unknown_visitor": "👤",
+    "verified_resident": "👤",
+    "vehicle": "🚗",
+    "car": "🚗",
+    "truck": "🚗",
+    "suv": "🚗",
+    "bicycle": "🚲",
+    "dog": "🐕",
+    "cat": "🐈",
+    "pet": "🐾",
+    "known_pet": "🐾",
+    "pet_elimination": "💩",
+    "package": "📦",
+    "box": "📦",
+    "package_event": "📦",
+    "courier_delivery": "🚚",
+    "food_delivery": "🛵",
+    "acoustic_anomaly": "🔊",
+    "alarm": "🚨",
+    "ding": "🔔",
+    "doorbell": "🔔",
+    "false_positive": "🍃",
+}
+
 
 def _is_url(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(("http://", "https://"))
@@ -42,6 +79,13 @@ def _basename(uri: str | None) -> str | None:
         return name or None
     except Exception:  # pragma: no cover - defensive
         return None
+
+
+def _rfc2047_encode(text: str) -> str:
+    if text.isascii():
+        return text
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    return f"=?utf-8?B?{encoded}?="
 
 
 class NtfyDispatcher(NotificationPort):
@@ -66,6 +110,8 @@ class NtfyDispatcher(NotificationPort):
         deep_link_base_url: str | None = None,
         event_base_url: str | None = None,
         app_base_url: str | None = None,
+        media_base_url: str | None = None,
+        use_companion_app: bool = False,
         client: httpx.AsyncClient | None = None,
         http_client: httpx.AsyncClient | None = None,
         async_client: httpx.AsyncClient | None = None,
@@ -162,6 +208,10 @@ class NtfyDispatcher(NotificationPort):
         ):
             deep_base = _DEFAULT_DEEP_LINK_BASE
         self.deep_link_base_url = str(deep_base).rstrip("/")
+        self.media_base_url = str(
+            media_base_url or os.environ.get("LOOKOUT_BASE_URL") or ""
+        ).rstrip("/")
+        self.use_companion_app = bool(use_companion_app or kwargs.pop("use_companion_app", False))
         self.url = self.topic_url
         self.topic = topic if topic is not None else (channel or name or target or destination)
         self.server = self.server_url
@@ -274,9 +324,41 @@ class NtfyDispatcher(NotificationPort):
                 url = self.topic_url if configured else f"{_DEFAULT_NTFY_SERVER}/{target}"
 
         priority = _PRIORITY_MAP.get(event.threat_level, "3")
-        tags = f"{event.category.value},{event.camera_id}"
+        threat_emoji = _THREAT_EMOJIS.get(event.threat_level, "ℹ️")
+        cam_name = event.camera_id.replace("_", " ").title()
+
+        found_labels: list[str] = []
+        if event.metrics and event.metrics.bounding_boxes:
+            for b in event.metrics.bounding_boxes:
+                lbl = b.label.lower()
+                if lbl not in found_labels:
+                    found_labels.append(lbl)
+        if event.matched_entities:
+            for ent in event.matched_entities:
+                if ent.lower() not in [x.lower() for x in found_labels]:
+                    found_labels.append(ent)
+
+        if found_labels:
+            rendered: list[str] = []
+            for lbl in found_labels[:3]:
+                icon = _OBJECT_ICONS.get(lbl.lower(), "")
+                prefix = f"{icon} " if icon else ""
+                rendered.append(f"{prefix}{lbl.title()}")
+            objects_str = " & ".join(rendered)
+        else:
+            cat_key = (
+                event.category.value if hasattr(event.category, "value") else str(event.category)
+            )
+            icon = _OBJECT_ICONS.get(cat_key.lower(), "")
+            prefix = f"{icon} " if icon else ""
+            objects_str = f"{prefix}{cat_key.replace('_', ' ').title()}"
+
+        title = f"{threat_emoji} [{event.threat_level.name}] {objects_str} on {cam_name}"
+
+        tags_list = [event.category.value, event.camera_id]
         if event.zone_id:
-            tags += f",{event.zone_id}"
+            tags_list.append(event.zone_id)
+        tags = ",".join(tags_list)
 
         if message is not None:
             body = message
@@ -292,30 +374,86 @@ class NtfyDispatcher(NotificationPort):
                 if event.zone_id in ("lawn", "Backyard (Lawn)")
                 else (event.zone_id or "yard")
             )
-            body = f"🐶 {pet_name} pooped in {zone_label}"
-        elif event.matched_entities:
-            body = f"Detected {', '.join(event.matched_entities)} on camera {event.camera_id}"
+            body = f"💩 {pet_name} pooped in {zone_label}"
         else:
-            body = f"[{event.threat_level.name}] {event.summary}"
+            body_parts = [event.summary]
+            if event.matched_entities:
+                body_parts.append(f"• **Identified**: {', '.join(event.matched_entities)}")
+            if event.zone_id:
+                body_parts.append(f"• **Zone**: {event.zone_id}")
+            if event.metrics and event.metrics.confidence > 0:
+                body_parts.append(f"• **Confidence**: {int(event.metrics.confidence * 100)}%")
+            body = "\n".join(body_parts)
 
         headers: dict[str, str] = {
-            "Title": f"Lookout: {event.summary}",
+            "Title": _rfc2047_encode(title),
             "Priority": priority,
             "Tags": tags,
             "Markdown": "yes",
+            "X-Sequence-ID": event.id,
+            "Sequence-ID": event.id,
         }
 
-        media_uri = event.media_uri or event.snapshot_uri
-        if media_uri:
+        gif_uri = getattr(event, "gif_url", None) or (
+            event.metadata.get("gif_uri") if event.metadata else None
+        )
+        media_uri = gif_uri or event.snapshot_uri or event.media_uri
+        if (
+            media_uri
+            and not _is_url(media_uri)
+            and media_uri.startswith("/")
+            and self.media_base_url
+        ):
+            media_uri = f"{self.media_base_url}{media_uri}"
+        if media_uri and _is_url(media_uri):
             headers["Attach"] = media_uri
             filename = _basename(media_uri)
             if filename:
                 headers["Filename"] = filename
 
-        event_url = f"{self.deep_link_base_url}/events/{event.id}"
-        stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
-        actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
-        headers["Actions"] = actions
+        if self.use_companion_app:
+            ha_path = (
+                "cameras/events"
+                if "/cameras/events" in self.deep_link_base_url
+                else "lookout/viewer"
+            )
+            ha_app_event = f"homeassistant://navigate/{ha_path}?camera_id={event.camera_id}&event_id={event.id}"
+            ha_app_live = (
+                f"homeassistant://navigate/{ha_path}?camera_id={event.camera_id}&live=true"
+            )
+            browser_base = self.media_base_url or self.deep_link_base_url.rstrip("/")
+            browser_url = (
+                f"{browser_base}/?camera_id={event.camera_id}&event_id={event.id}"
+                if self.media_base_url
+                else f"{self.deep_link_base_url}?camera_id={event.camera_id}&event_id={event.id}"
+            )
+            actions = (
+                f"view, View in App, {ha_app_event}; "
+                f"view, Live Stream, {ha_app_live}; "
+                f"view, Web Browser, {browser_url}"
+            )
+            headers["Actions"] = actions
+            headers["Click"] = ha_app_event
+        else:
+            base_clean = self.deep_link_base_url.rstrip("/")
+            if "?" in self.deep_link_base_url:
+                sep = "&" if "?" in self.deep_link_base_url else "?"
+                event_url = (
+                    f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&event_id={event.id}"
+                )
+                stream_url = f"{self.deep_link_base_url}{sep}camera_id={event.camera_id}&live=true"
+            elif base_clean.endswith(("/lookout", "/lookout/viewer", "/cameras/events")):
+                # Home Assistant panel_iframe / Lovelace view path
+                event_url = (
+                    f"{self.deep_link_base_url}?camera_id={event.camera_id}&event_id={event.id}"
+                )
+                stream_url = f"{self.deep_link_base_url}?camera_id={event.camera_id}&live=true"
+            else:
+                event_url = f"{self.deep_link_base_url}/events/{event.id}"
+                stream_url = f"{self.deep_link_base_url}/cameras/{event.camera_id}/live"
+            actions = f"view, View Event, {event_url}; view, Live Stream, {stream_url}"
+            headers["Actions"] = actions
+            headers["Click"] = event_url
 
         try:
             client = self._get_client()

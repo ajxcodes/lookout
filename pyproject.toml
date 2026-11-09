@@ -16,7 +16,12 @@ dependencies = [
     "uvicorn>=0.28.0",
     "python-multipart>=0.0.9",
     "jinja2>=3.1.0",
+    "aiohttp>=3.14.5",
+    "websockets>=12.0",
 ]
+
+[project.scripts]
+lookout = "lookout.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -53,6 +58,7 @@ warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--ignore=tests/e2e"

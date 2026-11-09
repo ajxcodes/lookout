@@ -265,3 +265,22 @@ def test_providers_have_no_web_framework_cross_coupling() -> None:
                 provider_violations.append(f"{py_file.name} -> {mod}")
 
     assert provider_violations == []
+
+
+def test_npu_adapters_and_hwaccel_maintain_hexagonal_boundaries() -> None:
+    """Verify npu, ffmpeg, and benchmark reside in adapters and do not leak into domain/ports."""
+    domain_dir = LOOKOUT_ROOT / "domain"
+    for py_file in domain_dir.glob("*.py"):
+        imported = _extract_imported_modules(py_file)
+        for mod in imported:
+            assert "lookout.adapters.npu" not in mod
+            assert "lookout.adapters.ffmpeg" not in mod
+            assert "lookout.adapters.benchmark" not in mod
+
+    ports_dir = LOOKOUT_ROOT / "ports"
+    for py_file in ports_dir.glob("*.py"):
+        imported = _extract_imported_modules(py_file)
+        for mod in imported:
+            assert "lookout.adapters.npu" not in mod
+            assert "lookout.adapters.ffmpeg" not in mod
+            assert "lookout.adapters.benchmark" not in mod

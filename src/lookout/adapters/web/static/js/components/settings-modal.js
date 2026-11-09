@@ -11,7 +11,7 @@ export class SettingsModal {
 
     this.aiSelect = this.modal ? this.modal.querySelector("#setting-ai-mode") : null;
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
-    this.facesContainer = this.modal ? this.modal.querySelector("#faces-grid") : null;
+    this.facesContainer = this.modal ? (this.modal.querySelector("#face-gallery-list") || this.modal.querySelector("#faces-grid")) : null;
     this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
     this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
@@ -45,6 +45,63 @@ export class SettingsModal {
 
     if (this.triggerEvictionBtn) {
       this.triggerEvictionBtn.addEventListener("click", () => this.triggerEviction());
+    }
+
+    const applyProfileBtn = this.modal.querySelector("#apply-hardware-profile-btn");
+    const profileSelect = this.modal.querySelector("#setting-hardware-profile");
+    const runBenchBtn = this.modal.querySelector("#run-benchmark-btn");
+    const benchFeedback = this.modal.querySelector("#benchmark-feedback");
+
+    if (applyProfileBtn && profileSelect) {
+      applyProfileBtn.addEventListener("click", async () => {
+        const profile = profileSelect.value;
+        try {
+          const res = await fetch(resolveUrl("/api/system/profile"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profile }),
+          });
+          if (benchFeedback) {
+            benchFeedback.style.display = "block";
+            if (res.ok) {
+              benchFeedback.innerHTML = `<span style="color:#34d399;">✓ Preset <strong>${profile}</strong> applied successfully.</span>`;
+            } else {
+              benchFeedback.innerHTML = `<span style="color:#ef4444;">Failed to apply preset.</span>`;
+            }
+          }
+        } catch (e) {
+          if (benchFeedback) {
+            benchFeedback.style.display = "block";
+            benchFeedback.innerHTML = `<span style="color:#ef4444;">Network error: ${e.message}</span>`;
+          }
+        }
+      });
+    }
+
+    if (runBenchBtn) {
+      runBenchBtn.addEventListener("click", async () => {
+        if (benchFeedback) {
+          benchFeedback.style.display = "block";
+          benchFeedback.textContent = "Running empirical hardware diagnostics...";
+        }
+        try {
+          const res = await fetch(resolveUrl("/api/system/benchmark"));
+          if (res.ok) {
+            const data = await res.json();
+            if (benchFeedback) {
+              benchFeedback.innerHTML = `
+                <div><strong>Transcode FPS:</strong> ${data.transcode_fps} fps | <strong>Edge ML Latency:</strong> ${data.inference_latency_ms} ms | <strong>IOPS:</strong> ${data.sqlite_iops}</div>
+                <div style="margin-top:4px;"><strong>Recommended Max Cameras:</strong> ${data.recommended_max_cameras} continuous feeds</div>
+                <ul style="margin:4px 0 0 16px;padding:0;">${(data.sizing_recommendations || []).map((r) => `<li>${r}</li>`).join("")}</ul>
+              `;
+            }
+          }
+        } catch (e) {
+          if (benchFeedback) {
+            benchFeedback.innerHTML = `<span style="color:#ef4444;">Benchmark error: ${e.message}</span>`;
+          }
+        }
+      });
     }
 
     const dismissWarningBtn = document.querySelector("#dismiss-storage-warning");

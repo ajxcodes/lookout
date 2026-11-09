@@ -180,9 +180,13 @@ KNOWN_MAPPED_FIELDS = {
     "media_uri",
     "video_path",
     "clip_uri",
+    "clip_url",
+    "video_url",
     "snapshot_uri",
     "snapshot_path",
+    "snapshot_url",
     "image_uri",
+    "gif_url",
     "metadata",
 }
 
@@ -211,8 +215,29 @@ def _convert_raw_entry(raw: dict[str, Any], default_id: str | None = None) -> Ca
 
     resident_id = raw.get("resident_id")
     pet_id = raw.get("pet_id")
-    media_uri = raw.get("media_uri") or raw.get("video_path") or raw.get("clip_uri")
-    snapshot_uri = raw.get("snapshot_uri") or raw.get("snapshot_path") or raw.get("image_uri")
+    media_uri = (
+        raw.get("media_uri")
+        or raw.get("video_path")
+        or raw.get("clip_uri")
+        or raw.get("clip_url")
+        or raw.get("video_url")
+    )
+    if media_uri and isinstance(media_uri, str) and "/local/snapshots/events/" in media_uri:
+        media_uri = f"/media/events/{Path(media_uri).name}"
+
+    snapshot_uri = (
+        raw.get("snapshot_uri")
+        or raw.get("snapshot_path")
+        or raw.get("image_uri")
+        or raw.get("snapshot_url")
+        or raw.get("gif_url")
+    )
+    if (
+        snapshot_uri
+        and isinstance(snapshot_uri, str)
+        and "/local/snapshots/events/" in snapshot_uri
+    ):
+        snapshot_uri = f"/media/events/{Path(snapshot_uri).name}"
 
     # Preserve all unmapped fields in metadata["legacy"]
     metadata = dict(raw.get("metadata", {})) if isinstance(raw.get("metadata"), dict) else {}

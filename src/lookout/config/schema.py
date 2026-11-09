@@ -106,13 +106,34 @@ class CameraConfig(BaseModel):
     camera_type: str = Field(
         default="generic", description="Camera adapter type (e.g., generic, ring, go2rtc)"
     )
+    provider: str | None = Field(
+        default=None, description="Camera provider brand (e.g. ring, wyze, generic)"
+    )
+    stream_mode: str | None = Field(
+        default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
+    )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
+    mqtt_id: str | None = Field(
+        default=None,
+        description="Device id used on MQTT bridge topics (e.g. ring-mqtt device id)",
+    )
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Detection trigger sensitivity"
     )
     record_duration: float = Field(
         default=10.0, gt=0.0, description="Duration in seconds for captured video clips"
+    )
+    record_audio: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to include and transcode audio in event recordings "
+            "(None inherits transcode.record_audio)"
+        ),
+    )
+    timestamp_overlay: bool | None = Field(
+        default=None,
+        description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
 
     @field_validator("stream_url")
@@ -188,6 +209,10 @@ class RingConfig(BaseModel):
         default=False, description="Whether 2FA challenge is currently pending"
     )
     enabled: bool = Field(default=True, description="Whether Ring bridge integration is active")
+    timestamp_overlay: bool = Field(
+        default=True,
+        description="Whether to render an elapsed session timestamp overlay on Ring live streams",
+    )
 
 
 class TranscodeConfig(BaseModel):
@@ -199,6 +224,18 @@ class TranscodeConfig(BaseModel):
     ffprobe_path: str = Field(default="ffprobe", description="Path to ffprobe executable")
     use_stream_copy: bool = Field(
         default=True, description="Attempt direct stream-copy remux before re-encoding"
+    )
+    hwaccel: str = Field(
+        default="none",
+        pattern="^(auto|vaapi|qsv|videotoolbox|nvenc|v4l2m2m|none)$",
+        description=(
+            "Hardware acceleration offload method "
+            "(auto, vaapi, qsv, videotoolbox, nvenc, v4l2m2m, none)"
+        ),
+    )
+    hwaccel_device: str | None = Field(
+        default=None,
+        description="Path to hardware device for acceleration (e.g. /dev/dri/renderD128)",
     )
     max_threads: int = Field(
         default=2, ge=1, description="Maximum CPU threads allowed for transcode subprocesses"
@@ -215,6 +252,10 @@ class TranscodeConfig(BaseModel):
     )
     gif_duration: float = Field(
         default=2.5, gt=0.0, description="Maximum duration in seconds for preview GIF"
+    )
+    record_audio: bool = Field(
+        default=True,
+        description="Whether to include and transcode audio (AAC) in event MP4 recordings",
     )
     thumbnail_count: int = Field(
         default=5, ge=1, description="Number of scrubbed thumbnail images to extract"
@@ -345,7 +386,7 @@ class GeminiConfig(BaseModel):
         description="Gemini API base endpoint",
     )
     model: str = Field(default="gemini-3.5-flash-lite", description="Gemini model name")
-    timeout_seconds: float = Field(default=8.0, gt=0.0, description="Request timeout in seconds")
+    timeout_seconds: float = Field(default=15.0, gt=0.0, description="Request timeout in seconds")
     enabled: bool = Field(default=True, description="Whether Gemini inference is active")
 
 
@@ -371,6 +412,12 @@ class CascadeConfig(BaseModel):
     fallback_category: EventCategory = Field(
         default=EventCategory.UNKNOWN_VISITOR,
         description="Default fallback category when all tiers fail",
+    )
+    min_confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence required to accept tier result before cascading",
     )
 
 
@@ -422,12 +469,33 @@ class AudioClassifierConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether audio classification is active")
 
 
+class MqttConfig(BaseModel):
+    """Configuration for native MQTT camera-bridge event ingestion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Whether MQTT event ingestion is active")
+    host: str = Field(default="127.0.0.1", description="MQTT broker host")
+    port: int = Field(default=1883, ge=1, le=65535, description="MQTT broker port")
+    username: str | None = Field(default=None, description="MQTT username")
+    password: str | None = Field(default=None, description="MQTT password")
+    ring_topic: str = Field(default="ring", description="ring-mqtt base topic")
+    wyze_topic: str = Field(default="wyzebridge", description="wyze-bridge base topic")
+    cooldown_seconds: float = Field(
+        default=30.0, ge=0.0, description="Minimum seconds between events per camera"
+    )
+
+
 class LookoutConfig(BaseModel):
     """Top-level configuration schema for Lookout."""
 
     model_config = ConfigDict(extra="forbid")
 
     system_name: str = Field(default="Lookout", description="System installation name")
+    hardware_profile: str | None = Field(
+        default=None,
+        description="Declarative edge hardware sizing profile name (e.g. intel-n100-mini-pc)",
+    )
     residents: list[ResidentConfig] = Field(default_factory=list)
     pets: list[PetConfig] = Field(default_factory=list)
     cameras: list[CameraConfig] = Field(default_factory=list)
@@ -447,6 +515,14 @@ class LookoutConfig(BaseModel):
     vehicles: list[VehicleConfig] = Field(default_factory=list)
     zones: list[PolygonZoneConfig] = Field(default_factory=list)
     light_ml: LightMLConfig = Field(default_factory=LightMLConfig)
+    mqtt: MqttConfig = Field(default_factory=MqttConfig)
+    public_url: str | None = Field(
+        default=None, description="Public base URL of Lookout (used for notification links/media)"
+    )
+    home_assistant_url: str | None = Field(
+        default=None,
+        description="Home Assistant base URL; when set, notification links open its Lookout panel",
+    )
 
     @model_validator(mode="after")
     def validate_cross_field_invariants(self) -> "LookoutConfig":
