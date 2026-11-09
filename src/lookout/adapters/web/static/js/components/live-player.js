@@ -25,6 +25,7 @@ export class LivePlayer {
   constructor({ videoElement, overlayElement, onLiveStateChange }) {
     this.video = videoElement;
     this.overlay = overlayElement;
+    this.startBtn = document.getElementById("start-live-btn");
     this.onLiveStateChange = onLiveStateChange;
     this.peerConnection = null;
     this.websocket = null;
@@ -45,8 +46,27 @@ export class LivePlayer {
     this.showSnapshotFallback();
   }
 
+  _resetStartButton() {
+    if (this.startBtn) {
+      this.startBtn.disabled = false;
+      this.startBtn.textContent = "▶ Start Live Stream";
+    }
+  }
+
+  _shouldShowTimestampOverlay() {
+    if (!this.activeCamera) return false;
+    if (this.activeCamera.timestamp_overlay === false) return false;
+    return (
+      this.activeCamera.provider_badge === "ring" ||
+      this.activeCamera.camera_type === "ring" ||
+      this.activeCamera.timestamp_overlay === true
+    );
+  }
+
   showSnapshotFallback() {
     this.isLive = false;
+    this.stopDurationTimer();
+    this._resetStartButton();
     if (this.video) {
       this.video.style.display = "none";
       this.video.srcObject = null;
@@ -86,15 +106,11 @@ export class LivePlayer {
     if (!this.activeCamera) return;
 
     this.stopSnapshotPolling();
+    this.stopDurationTimer();
 
-    if (
-      this.activeCamera &&
-      this.activeCamera.timestamp_overlay !== false &&
-      (this.activeCamera.provider_badge === "ring" ||
-        this.activeCamera.camera_type === "ring" ||
-        this.activeCamera.timestamp_overlay === true)
-    ) {
-      this.startDurationTimer();
+    if (this.startBtn) {
+      this.startBtn.disabled = true;
+      this.startBtn.textContent = "⏳ Connecting Live Stream...";
     }
 
     // Keep snapshot overlay visible while WebRTC is negotiating to prevent black screen
@@ -104,16 +120,14 @@ export class LivePlayer {
     if (this.video) {
       this.video.style.display = "block";
       const hideOverlayWhenReady = () => {
+        if (!this.video || (this.video.readyState < 2 && this.video.currentTime === 0)) {
+          return;
+        }
         if (this.overlay) {
           this.overlay.style.display = "none";
         }
-        if (
-          this.activeCamera &&
-          this.activeCamera.timestamp_overlay !== false &&
-          (this.activeCamera.provider_badge === "ring" ||
-            this.activeCamera.camera_type === "ring" ||
-            this.activeCamera.timestamp_overlay === true)
-        ) {
+        this._resetStartButton();
+        if (this._shouldShowTimestampOverlay() && !this.durationInterval) {
           this.startDurationTimer();
         }
       };
@@ -183,7 +197,7 @@ export class LivePlayer {
           if (this.overlay) this.overlay.style.display = "flex";
           this.showSnapshotFallback();
           reject(new Error("WebRTC WebSocket signaling timeout"));
-        }, 8000);
+        }, 15000);
 
         ws.onopen = () => {
           ws.send(JSON.stringify({ type: "webrtc/offer", value: offer.sdp }));
@@ -289,6 +303,7 @@ export class LivePlayer {
 
   stopLive() {
     this.stopSnapshotPolling();
+    this._resetStartButton();
     if (this.websocket) {
       try {
         this.websocket.close();
@@ -309,19 +324,26 @@ export class LivePlayer {
     this.isLive = false;
   }
 
+  _formatCurrentClock() {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  }
+
   startDurationTimer() {
-    this.stopDurationTimer();
+    if (this.durationInterval) return;
     if (!this.durationBadge || !this.durationTimer) return;
     this.sessionStartTime = Date.now();
-    this.durationTimer.textContent = "00:00:00";
+    this.durationTimer.textContent = this._formatCurrentClock();
     this.durationBadge.style.display = "inline-flex";
 
     this.durationInterval = setInterval(() => {
-      const elapsedSec = Math.floor((Date.now() - this.sessionStartTime) / 1000);
-      const hrs = Math.floor(elapsedSec / 3600);
-      const mins = Math.floor((elapsedSec % 3600) / 60);
-      const secs = elapsedSec % 60;
-      this.durationTimer.textContent = `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+      this.durationTimer.textContent = this._formatCurrentClock();
     }, 1000);
   }
 

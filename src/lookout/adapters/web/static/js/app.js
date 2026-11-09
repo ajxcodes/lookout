@@ -236,6 +236,13 @@ class LookoutApp {
         this.eventPlayer.downloadCurrent();
       });
     }
+
+    // Listen for cross-origin deep-link messages from Home Assistant parent window
+    window.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "lookout:deep-link" && typeof e.data.search === "string") {
+        this.checkDeepLink(e.data.search);
+      }
+    });
   }
 
   switchToGrid() {
@@ -254,7 +261,7 @@ class LookoutApp {
     this.fetchEvents();
   }
 
-  switchToFocus(cam = null) {
+  switchToFocus(cam = null, { autoStartLive = true, fetchTimeline = true } = {}) {
     this.viewMode = "focus";
     if (this.liveGridSection) this.liveGridSection.style.display = "none";
     if (this.focusStage) this.focusStage.style.display = "flex";
@@ -276,21 +283,26 @@ class LookoutApp {
         (targetCam.stream_mode !== "on_demand" &&
           targetCam.provider_badge !== "ring" &&
           targetCam.camera_type !== "ring");
-      if (isLiveRtc) {
+      if (autoStartLive && isLiveRtc) {
         this.livePlayer.startLive();
       }
-      this.fetchEvents();
+      if (fetchTimeline) {
+        this.fetchEvents();
+      }
     }
   }
 
-  playEvent(eventItem) {
+  async playEvent(eventItem) {
     const cam = this.cameras.find((c) => c.id === eventItem.camera_id) || {
       id: eventItem.camera_id,
       name: eventItem.camera_id,
     };
+    const cameraChanged = !this.activeCamera || this.activeCamera.id !== cam.id;
+    const modeChanged = this.viewMode !== "focus";
     this.activeCamera = cam;
-    this.switchToFocus(cam);
     this.currentEventItem = eventItem;
+
+    this.switchToFocus(cam, { autoStartLive: false, fetchTimeline: false });
     this.livePlayer.stopLive();
 
     if (this.snapshotOverlay) this.snapshotOverlay.style.display = "none";
@@ -298,7 +310,20 @@ class LookoutApp {
     if (this.eventVideo) this.eventVideo.style.display = "block";
 
     this.eventPlayer.loadEvent(eventItem);
+
+    if (cameraChanged || modeChanged) {
+      await this.fetchEvents();
+    }
     this.timeline.setSelectedEvent(eventItem.id);
+    if (this.timelineEl) {
+      const selectedCard = this.timelineEl.querySelector(
+        `.event-card[data-event-id="${eventItem.id}"], .event-card[data-id="${eventItem.id}"]`
+      );
+      if (selectedCard && typeof selectedCard.scrollIntoView === "function") {
+        selectedCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+
     this.acousticVis.start();
     if (eventItem.metrics && eventItem.metrics.audio_decibels) {
       this.acousticVis.setAudioDecibels(eventItem.metrics.audio_decibels);
@@ -373,6 +398,9 @@ class LookoutApp {
 
       this.events = events;
       this.timeline.setEvents(this.events);
+      if (this.currentEventItem) {
+        this.timeline.setSelectedEvent(this.currentEventItem.id);
+      }
       if (this.scrubber) this.scrubber.setEvents(this.events);
 
       // Compute counts per camera
@@ -413,13 +441,32 @@ class LookoutApp {
     };
   }
 
-  checkDeepLink() {
-    let search = window.location.search;
-    try {
-      if (window.parent && window.parent !== window && window.parent.location.search) {
-        search = window.parent.location.search;
-      }
-    } catch (_) {}
+  _matchEventByTarget(eventsList, targetEventId, targetCamId = null) {
+    if (!targetEventId || !Array.isArray(eventsList)) return null;
+    const cleanTarget = targetEventId.replace(/\.(jpg|jpeg|mp4|gif)$/i, "");
+    return (
+      eventsList.find((e) => {
+        if (e.id === targetEventId || e.id === cleanTarget) return true;
+        if (e.snapshot_uri && (e.snapshot_uri.includes(targetEventId) || e.snapshot_uri.includes(cleanTarget))) {
+          return true;
+        }
+        if (e.media_uri && (e.media_uri.includes(targetEventId) || e.media_uri.includes(cleanTarget))) {
+          return true;
+        }
+        return false;
+      }) || null
+    );
+  }
+
+  checkDeepLink(customSearch = null) {
+    let search = customSearch !== null ? customSearch : window.location.search;
+    if (!search) {
+      try {
+        if (window.parent && window.parent !== window && window.parent.location.search) {
+          search = window.parent.location.search;
+        }
+      } catch (_) {}
+    }
 
     const urlParams = new URLSearchParams(search);
     const eventId = urlParams.get("event_id") || urlParams.get("event");
@@ -434,14 +481,21 @@ class LookoutApp {
     const targetCamId = camId || (camMatch ? camMatch[1] : null);
 
     if (targetEventId) {
-      const found = this.events.find((e) => e.id === targetEventId);
+      const found = this._matchEventByTarget(this.events, targetEventId, targetCamId);
       if (found) {
         this.playEvent(found);
       } else {
         fetch(resolveUrl(`/api/events/${encodeURIComponent(targetEventId)}`))
           .then((r) => (r.ok ? r.json() : null))
           .then((ev) => {
-            if (ev) this.playEvent(ev);
+            if (ev) {
+              this.playEvent(ev);
+            } else if (targetCamId) {
+              const cam = this.cameras.find((c) => c.id === targetCamId);
+              if (cam) {
+                this.switchToFocus(cam, { autoStartLive: false, fetchTimeline: true });
+              }
+            }
           })
           .catch(() => {});
       }

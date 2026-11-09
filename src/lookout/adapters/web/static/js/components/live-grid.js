@@ -182,6 +182,15 @@ export class LiveGrid {
         overlay.appendChild(liveBtn);
       }
 
+      const clockBadge = document.createElement("div");
+      clockBadge.className = "live-duration-badge tile-clock-badge";
+      clockBadge.style.display = "none";
+      const clockSpan = document.createElement("span");
+      clockSpan.className = "duration-timer";
+      clockBadge.innerHTML = `<span class="live-indicator-dot">🔴</span> LIVE `;
+      clockBadge.appendChild(clockSpan);
+      stage.appendChild(clockBadge);
+
       stage.appendChild(overlay);
 
       // Drilldown click action
@@ -203,6 +212,9 @@ export class LiveGrid {
         camera: cam,
         video,
         overlay,
+        clockBadge,
+        clockSpan,
+        clockInterval: null,
         pc: null,
         ws: null,
         isLive: false,
@@ -216,9 +228,26 @@ export class LiveGrid {
     });
   }
 
+  _formatCurrentClock() {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  }
+
   async startTileLiveWebRTC(cam, video, overlay) {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
+
+    const liveBtn = overlay ? overlay.querySelector(".tile-live-btn") : null;
+    if (liveBtn) {
+      liveBtn.disabled = true;
+      liveBtn.textContent = "⏳ Connecting...";
+    }
 
     // Ensure snapshot overlay is visible initially during WebRTC negotiation
     if (overlay) {
@@ -228,6 +257,17 @@ export class LiveGrid {
     }
 
     const restoreSnapshotFallback = () => {
+      if (record.clockInterval) {
+        clearInterval(record.clockInterval);
+        record.clockInterval = null;
+      }
+      if (record.clockBadge) {
+        record.clockBadge.style.display = "none";
+      }
+      if (liveBtn) {
+        liveBtn.disabled = false;
+        liveBtn.textContent = "▶ Start Live";
+      }
       if (video) video.style.display = "none";
       if (overlay) {
         overlay.style.display = "flex";
@@ -236,12 +276,38 @@ export class LiveGrid {
       }
     };
 
+    const showClockIfNeeded = () => {
+      const shouldShow =
+        cam.timestamp_overlay !== false &&
+        (cam.provider_badge === "ring" ||
+          cam.camera_type === "ring" ||
+          cam.timestamp_overlay === true);
+      if (shouldShow && record.clockBadge && record.clockSpan && !record.clockInterval) {
+        record.clockSpan.textContent = this._formatCurrentClock();
+        record.clockBadge.style.display = "inline-flex";
+        record.clockInterval = setInterval(() => {
+          record.clockSpan.textContent = this._formatCurrentClock();
+        }, 1000);
+      }
+    };
+
     if (video) {
       const hideOverlayWhenReady = () => {
+        if (!video || (video.readyState < 2 && video.currentTime === 0)) return;
         if (overlay) overlay.style.display = "none";
+        if (liveBtn) {
+          liveBtn.disabled = false;
+          liveBtn.textContent = "▶ Start Live";
+        }
+        showClockIfNeeded();
       };
       video.onplaying = hideOverlayWhenReady;
       video.onloadeddata = hideOverlayWhenReady;
+      video.ontimeupdate = () => {
+        if (video && video.currentTime > 0) {
+          hideOverlayWhenReady();
+        }
+      };
       video.onerror = restoreSnapshotFallback;
     }
 
@@ -284,7 +350,7 @@ export class LiveGrid {
       const timeoutId = setTimeout(() => {
         try { ws.close(); } catch {}
         restoreSnapshotFallback();
-      }, 8000);
+      }, 15000);
 
       const iceCandidates = [];
       let hasRemote = false;
@@ -400,6 +466,10 @@ export class LiveGrid {
 
   cleanup() {
     this.streamPlayers.forEach((record) => {
+      if (record.clockInterval) {
+        clearInterval(record.clockInterval);
+        record.clockInterval = null;
+      }
       if (record.ws) {
         try { record.ws.close(); } catch {}
       }

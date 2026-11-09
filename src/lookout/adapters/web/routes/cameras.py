@@ -70,32 +70,49 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         if snapshot_file.exists():
             return FileResponse(snapshot_file, media_type="image/jpeg")
 
-        # 2. Dynamic live frame from go2rtc
-        go2rtc_api = "http://127.0.0.1:1984"
-        if hasattr(config, "go2rtc") and config.go2rtc.api_url:
-            go2rtc_api = config.go2rtc.api_url.rstrip("/")
-            if "lookout" in go2rtc_api:
-                go2rtc_api = "http://127.0.0.1:1984"
+        cam_obj = next((c for c in config.cameras if c.id == camera_id), None)
+        card_data = build_camera_card_data(cam_obj) if cam_obj is not None else {}
+        is_on_demand = card_data.get("stream_mode") == "on_demand"
 
-        frame_url = f"{go2rtc_api}/api/frame.jpeg?src={camera_id}"
-        try:
-            import httpx
+        # 2. Check for latest recorded event snapshot on disk before hitting live stream
+        event_snap_dirs = [
+            base_path / "snapshots" / "events",
+            Path("/snapshots/events"),
+            Path("/tmp/lookout_snapshots"),
+        ]
+        for snap_dir in event_snap_dirs:
+            if snap_dir.is_dir():
+                matches = sorted(snap_dir.glob(f"{camera_id}_*.jpg"))
+                if matches:
+                    return FileResponse(matches[-1], media_type="image/jpeg")
 
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(frame_url)
-                if (
-                    resp.status_code == 200
-                    and len(resp.content) > 150
-                    and resp.content.startswith(b"\xff\xd8")
-                    and resp.content.endswith(b"\xff\xd9")
-                ):
-                    return Response(
-                        content=resp.content,
-                        media_type="image/jpeg",
-                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-                    )
-        except Exception:
-            pass
+        # 3. Dynamic live frame from go2rtc (only for continuous live_rtc streams)
+        if not is_on_demand:
+            go2rtc_api = "http://127.0.0.1:1984"
+            if hasattr(config, "go2rtc") and config.go2rtc.api_url:
+                go2rtc_api = config.go2rtc.api_url.rstrip("/")
+                if "lookout" in go2rtc_api:
+                    go2rtc_api = "http://127.0.0.1:1984"
+
+            frame_url = f"{go2rtc_api}/api/frame.jpeg?src={camera_id}"
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.get(frame_url)
+                    if (
+                        resp.status_code == 200
+                        and len(resp.content) > 150
+                        and resp.content.startswith(b"\xff\xd8")
+                        and resp.content.endswith(b"\xff\xd9")
+                    ):
+                        return Response(
+                            content=resp.content,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+            except Exception:
+                pass
 
     return Response(content=TINY_JPEG, media_type="image/jpeg")
 
