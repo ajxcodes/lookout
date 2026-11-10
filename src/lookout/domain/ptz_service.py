@@ -335,7 +335,7 @@ class PtzControlService:
                     p.write_text(
                         yaml.safe_dump(self.config.model_dump(mode="json"), sort_keys=False)
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
         await self._audit("manual_update_settings", camera_id, settings, "ok")
         return camera

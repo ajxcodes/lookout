@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import httpx
+
 from .const import CONF_API_KEY, CONF_HOST, CONF_PORT, DEFAULT_HOST, DEFAULT_PORT, DOMAIN, PLATFORMS
 from .coordinator import LookoutDataUpdateCoordinator
 
@@ -29,8 +31,6 @@ async def async_setup_entry(hass: Any, entry: Any) -> bool:
     base_url = f"http://{host}:{port}"
 
     async def _call(path: str, payload: dict | None = None, method: str = "POST") -> None:
-        import httpx
-
         url = f"{base_url}/api{path}"
         headers = {}
         if api_key:
