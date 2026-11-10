@@ -10,6 +10,7 @@ from lookout.domain.models import (
     StorageStatus,
     ThreatLevel,
 )
+from lookout.domain.ptz_service import PtzControlService
 from lookout.domain.service import EventProcessingService
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "DetectionMetrics",
     "EventCategory",
     "EventProcessingService",
+    "PtzControlService",
     "EvictionResult",
     "InferenceProvenance",
     "StorageStatus",

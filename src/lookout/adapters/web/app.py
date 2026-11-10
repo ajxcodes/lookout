@@ -18,6 +18,8 @@ from lookout.adapters.ai_cascade import CascadeVisionAdapter
 from lookout.adapters.audio_classifier import YamnetAudioClassifierAdapter
 from lookout.adapters.entity_matcher import EntityCatalogMatcher
 from lookout.adapters.face_recognition import FaceRecognitionAdapter
+from lookout.adapters.go2rtc import Go2RtcAdapter
+from lookout.adapters.go2rtc_ptz import Go2RtcPtzAdapter
 from lookout.adapters.light_ml import (
     LightMLObjectDetector,
     PetPostureClassifier,
@@ -25,8 +27,10 @@ from lookout.adapters.light_ml import (
 )
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.mqtt_ingest import MqttEventIngestor
+from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
 from lookout.adapters.ntfy import NtfyDispatcher
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
+from lookout.adapters.sqlite.audit import AuditLogger
 from lookout.adapters.sqlite.repository import SqliteEventRepository
 from lookout.adapters.storage_service import StorageService
 from lookout.adapters.web.broadcast import SSEBroadcastHub
@@ -44,6 +48,7 @@ from lookout.adapters.web.routes import (
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, StorageConfig
 from lookout.domain.models import ThreatLevel
+from lookout.domain.ptz_service import PtzControlService
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import EventRepositoryPort
 
@@ -233,7 +238,7 @@ def create_app(
         active_repo = repository
     elif (
         active_config is not None
-        and hasattr(active_config, "storage")
+        and getattr(active_config, "storage", None) is not None
         and active_config.storage.database_path
     ):
         try:
@@ -264,7 +269,7 @@ def create_app(
 
     media_dir = (
         Path(active_config.storage.base_path)
-        if (active_config and hasattr(active_config, "storage"))
+        if (active_config and getattr(active_config, "storage", None) is not None)
         else Path("/data/media")
         if Path("/data").is_dir()
         else Path("./data")
@@ -393,16 +398,55 @@ def create_app(
     app.state.broadcast_hub = SSEBroadcastHub()
     app.state.custom_entities = {}
 
+    audit_db = ":memory:"
+    if (
+        active_config
+        and getattr(active_config, "storage", None) is not None
+        and active_config.storage.database_path
+    ):
+        audit_db = active_config.storage.database_path
+    app.state.audit_logger = AuditLogger(db_path=audit_db)
+    # Build per-camera PTZ adapters based on configured protocol
+    ptz_adapters: dict[str, Any] = {}
+    default_ptz_adapter = Go2RtcPtzAdapter(config=(active_config.go2rtc if active_config else None))
+    cam_name_map = {}
+    if active_config is not None:
+        for cam in active_config.cameras:
+            proto = getattr(cam, "ptz_protocol", "none")
+            bridge_name = getattr(cam, "ptz_cam_name", None) or cam.id
+            cam_name_map[cam.id] = bridge_name
+            if proto == "mqtt-wyze":
+                ptz_adapters[cam.id] = MqttWyzePtzAdapter(
+                    config=active_config.mqtt, cam_name_map={cam.id: bridge_name}
+                )
+            elif proto in ("go2rtc-wyze", "go2rtc-onvif"):
+                ptz_adapters[cam.id] = Go2RtcPtzAdapter(
+                    config=(active_config.go2rtc if active_config else None)
+                )
+    app.state.ptz_service = PtzControlService(
+        cameras=(active_config.cameras if active_config else []),
+        ptz_adapter=default_ptz_adapter,
+        ptz_adapters=ptz_adapters,
+        audit_logger=app.state.audit_logger,
+        video_recorder=Go2RtcAdapter(config=(active_config.go2rtc if active_config else None)),
+        config=active_config,
+        config_path=resolved_config_path,
+    )
+
     from lookout.adapters.sqlite.members import HouseholdMembersRepository
 
     db_path = ":memory:"
-    if active_config and hasattr(active_config, "storage") and active_config.storage.database_path:
+    if (
+        active_config
+        and getattr(active_config, "storage", None) is not None
+        and active_config.storage.database_path
+    ):
         db_path = active_config.storage.database_path
     app.state.members_repo = HouseholdMembersRepository(db_path=db_path)
 
     storage_cfg = (
         active_config.storage
-        if (active_config and hasattr(active_config, "storage"))
+        if (active_config and getattr(active_config, "storage", None) is not None)
         else StorageConfig()
     )
     storage_svc = StorageService(config=storage_cfg, repository=active_repo)
@@ -453,7 +497,7 @@ def create_app(
 
         # 2. Warm archive tier
         cfg = getattr(app.state, "config", None)
-        if cfg and hasattr(cfg, "storage") and cfg.storage.archive_path:
+        if cfg and getattr(cfg, "storage", None) is not None and cfg.storage.archive_path:
             archive_base = Path(cfg.storage.archive_path).resolve()
             candidate_paths.extend(
                 [

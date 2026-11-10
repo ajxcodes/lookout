@@ -15,6 +15,20 @@ registry = ProviderRegistry()
 router = APIRouter(prefix="/providers", tags=["providers"])
 
 
+@router.get("/status")
+async def providers_status(request: Request) -> dict[str, Any]:
+    active_config = getattr(request.app.state, "config", None)
+    manifests = []
+    for d in registry.list_drivers() if hasattr(registry, "list_drivers") else []:
+        try:
+            manifests.append(
+                {"id": d.provider_id, "status": d.probe_existing(active_config).model_dump()}
+            )
+        except Exception as exc:
+            manifests.append({"id": getattr(d, "provider_id", "?"), "error": str(exc)})
+    return {"providers": manifests}
+
+
 @router.get("")
 @router.get("/")
 async def list_providers() -> dict[str, Any]:

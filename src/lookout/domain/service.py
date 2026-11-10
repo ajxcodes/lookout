@@ -21,6 +21,11 @@ from lookout.ports.egress import (
 )
 from lookout.ports.ingress import EventIngressPort
 
+try:
+    from lookout.domain.ptz_service import PtzControlService as PtzControlService
+except Exception:  # pragma: no cover
+    PtzControlService = None  # type: ignore
+
 
 class EventProcessingService(EventIngressPort):
     """Core domain orchestrator coordinating ingress, inference, evaluation, and dispatch."""
