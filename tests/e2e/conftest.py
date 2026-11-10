@@ -372,6 +372,8 @@ def configured_server(
                 stream_url="rtsp://localhost:8554/backyard",
                 camera_type="generic",
                 enabled=True,
+                ptz_enabled=True,
+                ptz_protocol="go2rtc-wyze",
             ),
         ],
     )

@@ -193,6 +193,46 @@ export class LiveGrid {
 
       stage.appendChild(overlay);
 
+      // Manual + PTZ controls (gated on ptz_enabled for PTZ)
+      const controls = document.createElement("div");
+      controls.className = "tile-controls";
+      controls.style.display = "flex";
+      controls.style.gap = "4px";
+      controls.style.padding = "4px";
+      controls.style.flexWrap = "wrap";
+
+      const mkBtn = (label, onClick) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.style.fontSize = "0.7rem";
+        b.style.padding = "2px 6px";
+        b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+        return b;
+      };
+
+      const ptzPost = (body) => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/ptz`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // Manual snapshot/record for all cameras
+      controls.appendChild(mkBtn("📸", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot`), { method: "POST" })));
+      controls.appendChild(mkBtn("⏺", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/record`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ duration: cam.record_duration || 10 }) })));
+
+      if (cam.ptz_enabled) {
+        controls.appendChild(mkBtn("◀", () => ptzPost({ action: "step", direction: "left" })));
+        controls.appendChild(mkBtn("▲", () => ptzPost({ action: "step", direction: "up" })));
+        controls.appendChild(mkBtn("▼", () => ptzPost({ action: "step", direction: "down" })));
+        controls.appendChild(mkBtn("▶", () => ptzPost({ action: "step", direction: "right" })));
+        controls.appendChild(mkBtn("➕", () => ptzPost({ action: "step", direction: "zoom_in" })));
+        controls.appendChild(mkBtn("➖", () => ptzPost({ action: "step", direction: "zoom_out" })));
+        controls.appendChild(mkBtn("⏹", () => ptzPost({ action: "stop" })));
+      }
+
+      tile.appendChild(controls);
+
       // Drilldown click action
       tile.addEventListener("click", () => {
         if (this.onFocusCamera) {

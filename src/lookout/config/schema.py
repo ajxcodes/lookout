@@ -1,6 +1,6 @@
 """Pydantic configuration schemas with strict cross-field validation."""
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -95,6 +95,17 @@ class LightMLConfig(BaseModel):
     )
 
 
+class PtzPresetConfig(BaseModel):
+    """Seed preset configuration for a PTZ camera."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="Preset name")
+    pan: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized pan position")
+    tilt: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized tilt position")
+    zoom: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized zoom position")
+
+
 class CameraConfig(BaseModel):
     """Configuration for an ingested camera feed."""
 
@@ -113,6 +124,9 @@ class CameraConfig(BaseModel):
         default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
     )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
+    notifications_muted: bool = Field(
+        default=False, description="Whether camera notifications are muted"
+    )
     mqtt_id: str | None = Field(
         default=None,
         description="Device id used on MQTT bridge topics (e.g. ring-mqtt device id)",
@@ -135,6 +149,18 @@ class CameraConfig(BaseModel):
         default=None,
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
+    ptz_enabled: bool = Field(default=False, description="Whether PTZ control is enabled")
+    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "none"] = Field(
+        default="none", description="PTZ control protocol"
+    )
+    ptz_cam_name: str | None = Field(
+        default=None,
+        description="Bridge camera name for PTZ topic (defaults to camera id)",
+    )
+    ptz_max_speed: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="Maximum normalized PTZ speed"
+    )
+    ptz_presets: list[PtzPresetConfig] = Field(default_factory=list, description="Seed PTZ presets")
 
     @field_validator("stream_url")
     @classmethod

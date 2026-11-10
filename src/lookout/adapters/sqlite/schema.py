@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS household_members (
 
 CREATE INDEX IF NOT EXISTS idx_household_members_type ON household_members(member_type);
 
+-- PTZ presets table
+CREATE TABLE IF NOT EXISTS ptz_presets (
+    camera_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    pan REAL NOT NULL DEFAULT 0.0,
+    tilt REAL NOT NULL DEFAULT 0.0,
+    zoom REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (camera_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ptz_presets_camera_id ON ptz_presets(camera_id);
+
 -- Structured audit logging table
 CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY,

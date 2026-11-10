@@ -1,9 +1,12 @@
 """Ingress port definitions for incoming events and API queries."""
 
-from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from __future__ import annotations
 
-from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
 
 
 @runtime_checkable
