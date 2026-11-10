@@ -71,7 +71,7 @@ class MqttWyzePtzAdapter(PtzControlPort):
         logger.debug("MQTT publish %s = %r", topic, payload)
 
     async def _run(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     def _record_speed(self, speed: float) -> None:

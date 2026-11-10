@@ -9,7 +9,6 @@ from typing import Any
 
 import httpx
 
-from lookout.adapters.tempfile import TempMediaManager
 from lookout.config.schema import Go2RtcConfig
 from lookout.ports.egress import PtzControlPort
 
@@ -45,7 +44,6 @@ class Go2RtcPtzAdapter(PtzControlPort):
         self._external_client = client
         self.protocol = protocol
         self.last_speed: float | None = None
-        self.temp_manager = TempMediaManager()
 
     @property
     def go2rtc_base(self) -> str:
