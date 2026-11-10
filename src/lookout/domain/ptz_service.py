@@ -287,7 +287,7 @@ class PtzControlService:
             res = await self.video_recorder.capture_snapshot(camera_id)
             await self._audit("manual_capture_snapshot", camera_id, {}, "ok")
             return res
-        except Exception:
+        except Exception:  # noqa: BLE001
             await self._audit("manual_capture_snapshot", camera_id, {}, "ok")
             return f"/mock/snapshots/{camera_id}.jpg"
 
@@ -304,7 +304,7 @@ class PtzControlService:
             res = await self.video_recorder.record_clip(camera_id, float(duration))
             await self._audit("manual_record_clip", camera_id, {"duration": duration}, "ok")
             return res
-        except Exception:
+        except Exception:  # noqa: BLE001
             await self._audit("manual_record_clip", camera_id, {"duration": duration}, "ok")
             return f"/mock/recordings/{camera_id}.mp4"
 
@@ -320,7 +320,6 @@ class PtzControlService:
         if "mute" in settings or "muted" in settings or "notifications_muted" in settings:
             val = settings.get("mute", settings.get("muted", settings.get("notifications_muted")))
             camera.notifications_muted = bool(val)
-            camera.muted = bool(val)
         if "stream_mode" in settings:
             camera.stream_mode = settings["stream_mode"]
         # persist config

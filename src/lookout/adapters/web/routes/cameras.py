@@ -150,7 +150,6 @@ class CameraSettingsRequest(BaseModel):
     enabled: bool | None = None
     sensitivity: float | None = None
     mute: bool | None = None
-    muted: bool | None = None
     notifications_muted: bool | None = None
     stream_mode: str | None = None
 

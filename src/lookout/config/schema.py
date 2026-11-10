@@ -124,7 +124,6 @@ class CameraConfig(BaseModel):
         default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
     )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
-    muted: bool = Field(default=False, description="Whether camera notifications are muted")
     notifications_muted: bool = Field(
         default=False, description="Whether camera notifications are muted"
     )
