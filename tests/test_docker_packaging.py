@@ -54,37 +54,24 @@ def test_docker_compose_standalone_validity() -> None:
 
 
 def test_docker_compose_sidecar_validity() -> None:
-    """TR-6: Verify sidecar configures idisposable wyze-bridge and healthcheck."""
+    """TR-6: Verify sidecar compose runs Lookout standalone (no external sidecars)."""
     sidecar_path = Path("docker-compose.sidecar.yml")
     assert sidecar_path.is_file()
     with sidecar_path.open("r", encoding="utf-8") as f:
         sidecar_data = yaml.safe_load(f)
-    assert (
-        "idisposable" in sidecar_data["services"]["wyze-bridge"]["image"]
-        and "healthcheck" in sidecar_data["services"]["lookout"]
-    )
+    assert "lookout" in sidecar_data["services"]
+    assert "healthcheck" in sidecar_data["services"]["lookout"]
+    assert "wyze-bridge" not in sidecar_data["services"]
+    assert "ring-mqtt" not in sidecar_data["services"]
+    assert "go2rtc" not in sidecar_data["services"]
 
 
 def test_docker_compose_sidecar_env_files() -> None:
-    """TR-16: Verify sidecar compose configures optional env_file mounts
-    for wyze-bridge and ring-mqtt.
-    """
+    """TR-16: Native mode requires no sidecar env_file mounts."""
     sidecar_path = Path("docker-compose.sidecar.yml")
     assert sidecar_path.is_file()
     with sidecar_path.open("r", encoding="utf-8") as f:
         sidecar_data = yaml.safe_load(f)
-    wyze_env = sidecar_data["services"]["wyze-bridge"].get("env_file", [])
-    ring_env = sidecar_data["services"]["ring-mqtt"].get("env_file", [])
-
-    assert any(
-        isinstance(item, dict)
-        and "./data/sidecars/wyze-bridge.env" in item.get("path", "")
-        and item.get("required") is False
-        for item in wyze_env
-    )
-    assert any(
-        isinstance(item, dict)
-        and "./data/sidecars/ring-mqtt.env" in item.get("path", "")
-        and item.get("required") is False
-        for item in ring_env
-    )
+    services = sidecar_data.get("services", {})
+    for name in ("wyze-bridge", "ring-mqtt", "go2rtc"):
+        assert name not in services

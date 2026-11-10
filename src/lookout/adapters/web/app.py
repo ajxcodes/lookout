@@ -28,6 +28,7 @@ from lookout.adapters.light_ml import (
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.mqtt_ingest import MqttEventIngestor
 from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
+from lookout.adapters.native_stream_manager import NativeStreamManager
 from lookout.adapters.ntfy import NtfyDispatcher
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
 from lookout.adapters.sqlite.audit import AuditLogger
@@ -39,12 +40,15 @@ from lookout.adapters.web.routes import (
     cameras_router,
     entities_router,
     events_router,
+    native_alias_router,
+    native_router,
     providers_router,
     settings_router,
     setup_router,
     storage_router,
     system_router,
 )
+from lookout.adapters.wyze_native import WyzeTutkPtzAdapter
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, StorageConfig
 from lookout.domain.models import ThreatLevel
@@ -419,6 +423,10 @@ def create_app(
                 ptz_adapters[cam.id] = MqttWyzePtzAdapter(
                     config=active_config.mqtt, cam_name_map={cam.id: bridge_name}
                 )
+            elif proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
+                ptz_adapters[cam.id] = WyzeTutkPtzAdapter(
+                    config=(active_config.wyze if active_config else None)
+                )
             elif proto in ("go2rtc-wyze", "go2rtc-onvif"):
                 ptz_adapters[cam.id] = Go2RtcPtzAdapter(
                     config=(active_config.go2rtc if active_config else None)
@@ -432,6 +440,7 @@ def create_app(
         config=active_config,
         config_path=resolved_config_path,
     )
+    app.state.native_stream_manager = NativeStreamManager(config=active_config)
 
     from lookout.adapters.sqlite.members import HouseholdMembersRepository
 
@@ -454,6 +463,8 @@ def create_app(
 
     # Mount REST API routers
     app.include_router(events_router, prefix="/api")
+    app.include_router(native_router, prefix="/api")
+    app.include_router(native_alias_router, prefix="/api")
     app.include_router(cameras_router, prefix="/api")
     app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")

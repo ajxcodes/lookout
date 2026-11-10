@@ -26,6 +26,13 @@ try:
 except Exception:  # pragma: no cover
     PtzControlService = None  # type: ignore
 
+try:
+    from lookout.domain.native_ingestion_service import (
+        NativeIngestionService as NativeIngestionService,
+    )
+except Exception:  # pragma: no cover
+    NativeIngestionService = None  # type: ignore
+
 
 class EventProcessingService(EventIngressPort):
     """Core domain orchestrator coordinating ingress, inference, evaluation, and dispatch."""

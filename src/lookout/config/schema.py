@@ -161,6 +161,12 @@ class CameraConfig(BaseModel):
         default=0.5, ge=0.0, le=1.0, description="Maximum normalized PTZ speed"
     )
     ptz_presets: list[PtzPresetConfig] = Field(default_factory=list, description="Seed PTZ presets")
+    native_provider: str | None = Field(
+        default=None, description="Native ingestion provider (wyze/ring) for this camera"
+    )
+    native_device_id: str | None = Field(
+        default=None, description="Native provider device id for this camera"
+    )
 
     @field_validator("stream_url")
     @classmethod
@@ -208,6 +214,15 @@ class WyzeConfig(BaseModel):
         default=None, description="External docker-wyze-bridge RTSP endpoint"
     )
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
+    native_ingestion: bool = Field(
+        default=False, description="Whether native Wyze ingestion is enabled"
+    )
+    native_device_ids: list[str] = Field(
+        default_factory=list, description="Discovered native Wyze device ids"
+    )
+    discovery_enabled: bool = Field(
+        default=True, description="Whether native Wyze device discovery is enabled"
+    )
 
 
 class RingConfig(BaseModel):
@@ -235,6 +250,15 @@ class RingConfig(BaseModel):
         default=False, description="Whether 2FA challenge is currently pending"
     )
     enabled: bool = Field(default=True, description="Whether Ring bridge integration is active")
+    native_ingestion: bool = Field(
+        default=False, description="Whether native Ring ingestion is enabled"
+    )
+    native_device_ids: list[str] = Field(
+        default_factory=list, description="Discovered native Ring device ids"
+    )
+    discovery_enabled: bool = Field(
+        default=True, description="Whether native Ring device discovery is enabled"
+    )
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
