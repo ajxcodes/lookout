@@ -331,15 +331,13 @@ async def camera_stream_toggle(camera_id: str, request: Request) -> dict[str, An
         body = await request.json()
     except Exception:
         body = {}
+    service: Any = getattr(request.app.state, "ptz_service", None)
     cam = _get_camera(config, camera_id)
     if cam is not None and "stream_mode" in body:
-        cam.stream_mode = body.get("stream_mode", cam.stream_mode)
-        audit = getattr(request.app.state, "audit_logger", None)
-        if audit is not None:
-            await audit.log(
-                action="manual_stream_toggle",
-                entity_type="camera",
-                entity_id=camera_id,
-                details={"stream_mode": cam.stream_mode},
-            )
+        new_mode = body.get("stream_mode", cam.stream_mode)
+        if service is not None:
+            await service.update_settings(camera_id, {"stream_mode": new_mode})
+        else:
+            cam.stream_mode = new_mode
+        cam = _get_camera(config, camera_id)
     return {"status": "ok", "stream_mode": getattr(cam, "stream_mode", None)}

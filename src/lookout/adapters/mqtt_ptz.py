@@ -7,6 +7,8 @@ import contextlib
 import logging
 from typing import Any
 
+from fastapi import HTTPException
+
 from lookout.config.schema import MqttConfig
 from lookout.ports.egress import PtzControlPort
 
@@ -14,13 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _mqtt_exception(status_code: int, detail: str) -> Exception:
-    try:
-        fastapi = __import__("fastapi")
-        return fastapi.HTTPException(status_code=status_code, detail=detail)  # type: ignore[no-any-return]
-    except Exception:  # pragma: no cover
-        exc = Exception(detail)
-        exc.status_code = status_code  # type: ignore[attr-defined]
-        return exc
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 class MqttWyzePtzAdapter(PtzControlPort):
