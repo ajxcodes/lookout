@@ -2,10 +2,10 @@
   "id": "ring",
   "name": "ring",
   "display_name": "Ring Video Doorbell",
-  "description": "Integration with Ring cameras and doorbells via ring-mqtt sidecar",
+  "description": "Native Ring cloud integration with embedded go2rtc streaming (ring-mqtt sidecar optional)",
   "icon": "bell",
   "brand_color": "#0078ca",
-  "badge": "Ring MQTT",
+  "badge": "Ring Native",
   "default_ports": {
     "http": 55123,
     "rtsp": 8555

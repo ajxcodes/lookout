@@ -2,10 +2,10 @@
   "id": "wyze",
   "name": "wyze",
   "display_name": "Wyze Cam Bridge",
-  "description": "Integration with Wyze cameras via docker-wyze-bridge WebRTC/RTSP sidecar",
+  "description": "Native Wyze cloud integration with embedded go2rtc streaming (docker-wyze-bridge sidecar optional)",
   "icon": "camera",
   "brand_color": "#00bfa5",
-  "badge": "Wyze Bridge",
+  "badge": "Wyze Native",
   "default_ports": {
     "http": 5000,
     "rtsp": 8554

@@ -150,8 +150,8 @@ class CameraConfig(BaseModel):
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
     ptz_enabled: bool = Field(default=False, description="Whether PTZ control is enabled")
-    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "none"] = Field(
-        default="none", description="PTZ control protocol"
+    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "native-wyze", "none"] = (
+        Field(default="none", description="PTZ control protocol")
     )
     ptz_cam_name: str | None = Field(
         default=None,
@@ -172,11 +172,17 @@ class CameraConfig(BaseModel):
     @classmethod
     def validate_stream_url(cls, v: str) -> str:
         parsed = urlparse(v)
-        if parsed.scheme not in ("rtsp", "rtsps", "http", "https", "ring"):
+        if parsed.scheme not in ("rtsp", "rtsps", "http", "https", "ring", "wyze"):
             raise ValueError(
                 f"Invalid stream URL scheme '{parsed.scheme}'. "
-                "Must be rtsp, rtsps, http, https, or ring."
+                "Must be rtsp, rtsps, http, https, ring, or wyze."
             )
+        if parsed.scheme in ("ring", "wyze"):
+            # Native go2rtc sources carry their parameters in the query string and
+            # may legitimately omit a netloc/path (e.g. ring:?camera_id=...).
+            if not (parsed.netloc or parsed.path or parsed.query):
+                raise ValueError("Invalid native stream URL: missing device or query parameters.")
+            return v
         if not parsed.netloc and not parsed.path:
             raise ValueError("Invalid stream URL: missing host or network location.")
         return v
@@ -192,6 +198,20 @@ class Go2RtcConfig(BaseModel):
     )
     timeout_seconds: float = Field(
         default=10.0, gt=0.0, description="HTTP request and stream timeout in seconds"
+    )
+    binary_path: str | None = Field(
+        default=None,
+        description="Path to the go2rtc binary used for embedded native streaming",
+    )
+    native_api_port: int = Field(
+        default=11984,
+        gt=0,
+        le=65535,
+        description="Preferred loopback port for the embedded go2rtc API",
+    )
+    native_runtime_dir: str | None = Field(
+        default=None,
+        description="Directory for the embedded go2rtc config/log files",
     )
 
 
