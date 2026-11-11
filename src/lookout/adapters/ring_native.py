@@ -69,12 +69,6 @@ def _as_utc(value: datetime) -> datetime:
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
-    if isinstance(value, (int, float)):
-        seconds = value / 1000.0 if abs(value) > 1e12 else float(value)
-        try:
-            return datetime.fromtimestamp(seconds, tz=UTC)
-        except (ValueError, OSError, OverflowError):
-            return None
     if isinstance(value, datetime):
         return _as_utc(value)
     if isinstance(value, str):

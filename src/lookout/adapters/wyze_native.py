@@ -40,13 +40,8 @@ class WyzeStreamSourceError(RuntimeError):
     """Raised when a Wyze device lacks the fields required to build a go2rtc source."""
 
 
-def _as_utc(value: Any) -> datetime:
-    """Normalize a datetime (or epoch ms/sec int/float) to timezone-aware UTC."""
-    if isinstance(value, (int, float)):
-        seconds = value / 1000.0 if abs(value) > 1e12 else float(value)
-        return datetime.fromtimestamp(seconds, tz=UTC)
-    if value is None:
-        return datetime.now(UTC)
+def _as_utc(value: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC."""
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
