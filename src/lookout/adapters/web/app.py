@@ -18,6 +18,8 @@ from lookout.adapters.ai_cascade import CascadeVisionAdapter
 from lookout.adapters.audio_classifier import YamnetAudioClassifierAdapter
 from lookout.adapters.entity_matcher import EntityCatalogMatcher
 from lookout.adapters.face_recognition import FaceRecognitionAdapter
+from lookout.adapters.go2rtc import Go2RtcAdapter
+from lookout.adapters.go2rtc_ptz import Go2RtcPtzAdapter
 from lookout.adapters.light_ml import (
     LightMLObjectDetector,
     PetPostureClassifier,
@@ -25,8 +27,17 @@ from lookout.adapters.light_ml import (
 )
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.mqtt_ingest import MqttEventIngestor
+from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
+from lookout.adapters.native_event_poller import NativeEventPoller
+from lookout.adapters.native_stream_manager import (
+    Go2RtcUnavailableError,
+    NativeAwareRecorder,
+    NativeStreamManager,
+)
 from lookout.adapters.ntfy import NtfyDispatcher
+from lookout.adapters.ring_native import RingNativeAdapter
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
+from lookout.adapters.sqlite.audit import AuditLogger
 from lookout.adapters.sqlite.repository import SqliteEventRepository
 from lookout.adapters.storage_service import StorageService
 from lookout.adapters.web.broadcast import SSEBroadcastHub
@@ -35,15 +46,19 @@ from lookout.adapters.web.routes import (
     cameras_router,
     entities_router,
     events_router,
+    native_alias_router,
+    native_router,
     providers_router,
     settings_router,
     setup_router,
     storage_router,
     system_router,
 )
+from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
 from lookout.config.loader import load_config
-from lookout.config.schema import LookoutConfig, StorageConfig
+from lookout.config.schema import LookoutConfig, RingConfig, StorageConfig, WyzeConfig
 from lookout.domain.models import ThreatLevel
+from lookout.domain.ptz_service import PtzControlService
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import EventRepositoryPort
 
@@ -233,7 +248,7 @@ def create_app(
         active_repo = repository
     elif (
         active_config is not None
-        and hasattr(active_config, "storage")
+        and getattr(active_config, "storage", None) is not None
         and active_config.storage.database_path
     ):
         try:
@@ -264,7 +279,7 @@ def create_app(
 
     media_dir = (
         Path(active_config.storage.base_path)
-        if (active_config and hasattr(active_config, "storage"))
+        if (active_config and getattr(active_config, "storage", None) is not None)
         else Path("/data/media")
         if Path("/data").is_dir()
         else Path("./data")
@@ -295,8 +310,46 @@ def create_app(
         ingestor = getattr(app.state, "mqtt_ingestor", None)
         if ingestor is not None:
             ingestor.start()
+
+        native_manager = getattr(app.state, "native_stream_manager", None)
+        native_cameras = (
+            [c for c in active_config.cameras if getattr(c, "native_provider", None)]
+            if active_config is not None
+            else []
+        )
+        native_enabled = bool(
+            native_cameras
+            or (active_config is not None and active_config.wyze.native_ingestion)
+            or (active_config is not None and active_config.ring.native_ingestion)
+        )
+        if native_enabled and native_manager is not None:
+            try:
+                await native_manager.start()
+            except Go2RtcUnavailableError as exc:
+                logger.warning("Native streaming unavailable: %s", exc)
+            except Exception as exc:
+                logger.warning("Failed to start native stream manager: %s", exc)
+            native_poller = NativeEventPoller(
+                config=active_config,
+                wyze=getattr(app.state, "wyze_native", None),
+                ring=getattr(app.state, "ring_native", None),
+                ingest=active_event_service.ingest_raw_event,
+                on_event=_broadcast_event,
+            )
+            app.state.native_event_poller = native_poller
+            native_poller.start()
         yield
         logger.info("Lookout web application shutting down")
+        shutdown_poller = getattr(app.state, "native_event_poller", None)
+        if shutdown_poller is not None:
+            await shutdown_poller.stop()
+        ring_native = getattr(app.state, "ring_native", None)
+        if ring_native is not None:
+            with suppress(Exception):
+                await ring_native.close()
+        if native_manager is not None:
+            with suppress(Exception):
+                await native_manager.stop()
         if ingestor is not None:
             await ingestor.stop()
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
@@ -393,16 +446,83 @@ def create_app(
     app.state.broadcast_hub = SSEBroadcastHub()
     app.state.custom_entities = {}
 
+    audit_db = ":memory:"
+    if (
+        active_config
+        and getattr(active_config, "storage", None) is not None
+        and active_config.storage.database_path
+    ):
+        audit_db = active_config.storage.database_path
+    app.state.audit_logger = AuditLogger(db_path=audit_db)
+
+    # Native ingestion: one embedded go2rtc manager shared by all native adapters.
+    native_manager = NativeStreamManager(config=active_config)
+    app.state.native_stream_manager = native_manager
+    wyze_native_config = active_config.wyze if active_config is not None else WyzeConfig()
+    ring_native_config = active_config.ring if active_config is not None else RingConfig()
+    app.state.wyze_native = WyzeNativeAdapter(
+        config=wyze_native_config,
+        stream_manager=native_manager,
+        cameras=(active_config.cameras if active_config is not None else []),
+    )
+    app.state.ring_native = RingNativeAdapter(
+        config=ring_native_config,
+        stream_manager=native_manager,
+        cameras=(active_config.cameras if active_config is not None else []),
+    )
+
+    # Build per-camera PTZ adapters based on configured protocol
+    ptz_adapters: dict[str, Any] = {}
+    default_ptz_adapter = Go2RtcPtzAdapter(config=(active_config.go2rtc if active_config else None))
+    cam_name_map = {}
+    if active_config is not None:
+        for cam in active_config.cameras:
+            proto = getattr(cam, "ptz_protocol", "none")
+            bridge_name = getattr(cam, "ptz_cam_name", None) or cam.id
+            cam_name_map[cam.id] = bridge_name
+            if proto == "mqtt-wyze":
+                ptz_adapters[cam.id] = MqttWyzePtzAdapter(
+                    config=active_config.mqtt, cam_name_map={cam.id: bridge_name}
+                )
+            elif proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
+                ptz_adapters[cam.id] = WyzeTutkPtzAdapter(
+                    config=wyze_native_config,
+                    client=app.state.wyze_native,
+                    stream_manager=native_manager,
+                )
+            elif proto in ("go2rtc-wyze", "go2rtc-onvif"):
+                ptz_adapters[cam.id] = Go2RtcPtzAdapter(
+                    config=(active_config.go2rtc if active_config else None)
+                )
+    app.state.ptz_service = PtzControlService(
+        cameras=(active_config.cameras if active_config else []),
+        ptz_adapter=default_ptz_adapter,
+        ptz_adapters=ptz_adapters,
+        audit_logger=app.state.audit_logger,
+        video_recorder=NativeAwareRecorder(
+            config=active_config,
+            wyze=app.state.wyze_native,
+            ring=app.state.ring_native,
+            fallback=Go2RtcAdapter(config=(active_config.go2rtc if active_config else None)),
+        ),
+        config=active_config,
+        config_path=resolved_config_path,
+    )
+
     from lookout.adapters.sqlite.members import HouseholdMembersRepository
 
     db_path = ":memory:"
-    if active_config and hasattr(active_config, "storage") and active_config.storage.database_path:
+    if (
+        active_config
+        and getattr(active_config, "storage", None) is not None
+        and active_config.storage.database_path
+    ):
         db_path = active_config.storage.database_path
     app.state.members_repo = HouseholdMembersRepository(db_path=db_path)
 
     storage_cfg = (
         active_config.storage
-        if (active_config and hasattr(active_config, "storage"))
+        if (active_config and getattr(active_config, "storage", None) is not None)
         else StorageConfig()
     )
     storage_svc = StorageService(config=storage_cfg, repository=active_repo)
@@ -410,6 +530,8 @@ def create_app(
 
     # Mount REST API routers
     app.include_router(events_router, prefix="/api")
+    app.include_router(native_router, prefix="/api")
+    app.include_router(native_alias_router, prefix="/api")
     app.include_router(cameras_router, prefix="/api")
     app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
@@ -453,7 +575,7 @@ def create_app(
 
         # 2. Warm archive tier
         cfg = getattr(app.state, "config", None)
-        if cfg and hasattr(cfg, "storage") and cfg.storage.archive_path:
+        if cfg and getattr(cfg, "storage", None) is not None and cfg.storage.archive_path:
             archive_base = Path(cfg.storage.archive_path).resolve()
             candidate_paths.extend(
                 [

@@ -10,7 +10,8 @@ from lookout.domain.models import (
     StorageStatus,
     ThreatLevel,
 )
-from lookout.domain.service import EventProcessingService
+from lookout.domain.ptz_service import PtzControlService
+from lookout.domain.service import EventProcessingService, NativeIngestionService
 
 __all__ = [
     "BoundingBox",
@@ -18,6 +19,8 @@ __all__ = [
     "DetectionMetrics",
     "EventCategory",
     "EventProcessingService",
+    "NativeIngestionService",
+    "PtzControlService",
     "EvictionResult",
     "InferenceProvenance",
     "StorageStatus",

@@ -173,3 +173,21 @@ def test_standalone_sidecar_2fa_modal_interaction(
     expect(page.locator("#modal-2fa")).to_be_visible(timeout=5000)
     expect(page.locator("#btn-verify-2fa")).to_be_visible(timeout=5000)
     assert page.locator("#modal-2fa").is_visible() and page.locator("#btn-verify-2fa").is_visible()
+
+
+def test_standalone_ptz_controls_gated_on_ptz_enabled(page: Page, standalone_base_url: str) -> None:
+    """Verify PTZ controls render only for ptz_enabled cameras."""
+    page.goto(standalone_base_url)
+
+    expect(page.locator(".brand-logo")).to_be_visible()
+
+    # Backyard camera is ptz_enabled -> its tile should expose PTZ controls
+    backyard_tile = page.locator('.camera-grid-tile[data-camera-id="backyard"]')
+    expect(backyard_tile).to_be_visible()
+    # PTZ d-pad buttons present (stop button uses stop symbol)
+    expect(backyard_tile.locator("button", has_text="⏹")).to_be_visible()
+
+    # Front-porch camera is NOT ptz_enabled -> no PTZ stop button
+    front_tile = page.locator('.camera-grid-tile[data-camera-id="front-porch"]')
+    expect(front_tile).to_be_visible()
+    expect(front_tile.locator("button", has_text="⏹")).to_have_count(0)

@@ -1,18 +1,21 @@
 """Egress port definitions for media recording, AI inference, persistence, and notifications."""
 
+from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from lookout.domain.models import (
-    CameraEvent,
-    DetectionMetrics,
-    EventCategory,
-    EvictionResult,
-    InferenceProvenance,
-    StorageStatus,
-    ThreatLevel,
-)
+if TYPE_CHECKING:
+    from lookout.domain.models import (
+        CameraEvent,
+        DetectionMetrics,
+        EventCategory,
+        EvictionResult,
+        InferenceProvenance,
+        StorageStatus,
+        ThreatLevel,
+    )
 
 
 @runtime_checkable
@@ -173,4 +176,41 @@ class MediaArchivalPort(Protocol):
 
     async def on_pre_evict(self, event: CameraEvent, file_paths: list[Path]) -> None:
         """Hook invoked before permanent media file unlinking."""
+        ...
+
+
+@runtime_checkable
+class PtzControlPort(Protocol):
+    """Port for PTZ (pan/tilt/zoom) camera control with normalized speed (0.0-1.0)."""
+
+    async def move(
+        self, camera_id: str, pan: float, tilt: float, zoom: float, speed: float = 0.5
+    ) -> Any:
+        """Continuous move with pan/tilt/zoom deltas and normalized speed."""
+        ...
+
+    async def stop(self, camera_id: str, pan_tilt: bool = True, zoom: bool = True) -> Any:
+        """Stop movement; pan_tilt and zoom independently controllable."""
+        ...
+
+    async def step(
+        self, camera_id: str, direction: str, amount: float = 0.1, speed: float = 0.5
+    ) -> Any:
+        """Step (nudge) in a direction by amount at normalized speed."""
+        ...
+
+    async def goto_preset(self, camera_id: str, preset: str, speed: float = 0.5) -> Any:
+        """Move to a named preset at normalized speed."""
+        ...
+
+    async def set_preset(self, camera_id: str, name: str) -> Any:
+        """Save current position as a named preset."""
+        ...
+
+    async def list_presets(self, camera_id: str) -> Any:
+        """List available presets for a camera."""
+        ...
+
+    async def get_position(self, camera_id: str) -> Any:
+        """Get current pan/tilt/zoom position."""
         ...

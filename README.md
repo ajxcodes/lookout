@@ -152,7 +152,12 @@ docker compose up -d
 ```
 
 ### Sidecar Camera Ecosystem
-For multi-container camera deployments, use `docker-compose.sidecar.yml`. This links Lookout with real-time stream ingestors:
+Native Wyze and Ring ingestion is the default: Lookout talks directly to the vendor cloud APIs
+and streams media through an embedded go2rtc process that ships with the container. No sidecar
+is required, and `go2rtc.binary_path` / `LOOKOUT_GO2RTC_BINARY` can point at another binary.
+
+Sidecars remain supported as an optional fallback for deployments that already run them. Use
+`docker-compose.sidecar.yml` to link Lookout with external stream ingestors:
 - **alexxit/go2rtc**: WebRTC gateway and low-latency media hub.
 - **idisposable/docker-wyze-bridge**: Wyze local RTSP bridge (using the `idisposable` fork with host networking).
 - **tsightler/ring-mqtt**: Ring RTSP and MQTT bridge.
