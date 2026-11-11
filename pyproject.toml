@@ -19,6 +19,8 @@ dependencies = [
     "aiohttp>=3.14.5",
     "websockets>=12.0",
     "paho-mqtt>=2.0",
+    "wyze-sdk>=2.3.16; python_version >= '3.12'",
+    "ring-doorbell>=0.9.14",
 ]
 
 [project.scripts]

@@ -150,8 +150,8 @@ class CameraConfig(BaseModel):
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
     ptz_enabled: bool = Field(default=False, description="Whether PTZ control is enabled")
-    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "none"] = Field(
-        default="none", description="PTZ control protocol"
+    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "native-wyze", "none"] = (
+        Field(default="none", description="PTZ control protocol")
     )
     ptz_cam_name: str | None = Field(
         default=None,
@@ -161,16 +161,28 @@ class CameraConfig(BaseModel):
         default=0.5, ge=0.0, le=1.0, description="Maximum normalized PTZ speed"
     )
     ptz_presets: list[PtzPresetConfig] = Field(default_factory=list, description="Seed PTZ presets")
+    native_provider: str | None = Field(
+        default=None, description="Native ingestion provider (wyze/ring) for this camera"
+    )
+    native_device_id: str | None = Field(
+        default=None, description="Native provider device id for this camera"
+    )
 
     @field_validator("stream_url")
     @classmethod
     def validate_stream_url(cls, v: str) -> str:
         parsed = urlparse(v)
-        if parsed.scheme not in ("rtsp", "rtsps", "http", "https", "ring"):
+        if parsed.scheme not in ("rtsp", "rtsps", "http", "https", "ring", "wyze"):
             raise ValueError(
                 f"Invalid stream URL scheme '{parsed.scheme}'. "
-                "Must be rtsp, rtsps, http, https, or ring."
+                "Must be rtsp, rtsps, http, https, ring, or wyze."
             )
+        if parsed.scheme in ("ring", "wyze"):
+            # Native go2rtc sources carry their parameters in the query string and
+            # may legitimately omit a netloc/path (e.g. ring:?camera_id=...).
+            if not (parsed.netloc or parsed.path or parsed.query):
+                raise ValueError("Invalid native stream URL: missing device or query parameters.")
+            return v
         if not parsed.netloc and not parsed.path:
             raise ValueError("Invalid stream URL: missing host or network location.")
         return v
@@ -186,6 +198,20 @@ class Go2RtcConfig(BaseModel):
     )
     timeout_seconds: float = Field(
         default=10.0, gt=0.0, description="HTTP request and stream timeout in seconds"
+    )
+    binary_path: str | None = Field(
+        default=None,
+        description="Path to the go2rtc binary used for embedded native streaming",
+    )
+    native_api_port: int = Field(
+        default=11984,
+        gt=0,
+        le=65535,
+        description="Preferred loopback port for the embedded go2rtc API",
+    )
+    native_runtime_dir: str | None = Field(
+        default=None,
+        description="Directory for the embedded go2rtc config/log files",
     )
 
 
@@ -208,6 +234,15 @@ class WyzeConfig(BaseModel):
         default=None, description="External docker-wyze-bridge RTSP endpoint"
     )
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
+    native_ingestion: bool = Field(
+        default=False, description="Whether native Wyze ingestion is enabled"
+    )
+    native_device_ids: list[str] = Field(
+        default_factory=list, description="Discovered native Wyze device ids"
+    )
+    discovery_enabled: bool = Field(
+        default=True, description="Whether native Wyze device discovery is enabled"
+    )
 
 
 class RingConfig(BaseModel):
@@ -235,6 +270,15 @@ class RingConfig(BaseModel):
         default=False, description="Whether 2FA challenge is currently pending"
     )
     enabled: bool = Field(default=True, description="Whether Ring bridge integration is active")
+    native_ingestion: bool = Field(
+        default=False, description="Whether native Ring ingestion is enabled"
+    )
+    native_device_ids: list[str] = Field(
+        default_factory=list, description="Discovered native Ring device ids"
+    )
+    discovery_enabled: bool = Field(
+        default=True, description="Whether native Ring device discovery is enabled"
+    )
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
