@@ -15,6 +15,48 @@ registry = ProviderRegistry()
 router = APIRouter(prefix="/providers", tags=["providers"])
 
 
+@router.get("/status")
+async def providers_status(request: Request) -> dict[str, Any]:
+    active_config = getattr(request.app.state, "config", None)
+    manifests = []
+    for d in registry.list_drivers() if hasattr(registry, "list_drivers") else []:
+        try:
+            manifests.append(
+                {"id": d.provider_id, "status": d.probe_existing(active_config).model_dump()}
+            )
+        except Exception as exc:
+            manifests.append({"id": getattr(d, "provider_id", "?"), "error": str(exc)})
+
+    native_block: dict[str, Any] = {
+        "wyze": {
+            "native_ingestion": bool(
+                getattr(getattr(active_config, "wyze", None), "native_ingestion", False)
+            ),
+            "configured": bool(
+                getattr(getattr(active_config, "wyze", None), "auth_token", None)
+                or getattr(getattr(active_config, "wyze", None), "refresh_token", None)
+                or getattr(getattr(active_config, "wyze", None), "email", None)
+            ),
+        },
+        "ring": {
+            "native_ingestion": bool(
+                getattr(getattr(active_config, "ring", None), "native_ingestion", False)
+            ),
+            "configured": bool(
+                getattr(getattr(active_config, "ring", None), "refresh_token", None)
+                or getattr(getattr(active_config, "ring", None), "auth_token", None)
+            ),
+        },
+    }
+    manager = getattr(request.app.state, "native_stream_manager", None)
+    if manager is not None:
+        native_block["stream_manager"] = await manager.status()
+    poller = getattr(request.app.state, "native_event_poller", None)
+    native_block["event_poller_running"] = bool(getattr(poller, "running", False))
+
+    return {"providers": manifests, "native": native_block}
+
+
 @router.get("")
 @router.get("/")
 async def list_providers() -> dict[str, Any]:

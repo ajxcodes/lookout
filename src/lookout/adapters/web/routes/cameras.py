@@ -1,10 +1,14 @@
 """REST API endpoints for camera discovery, snapshot serving, and WebRTC metadata."""
 
+import inspect
+import os
+import secrets
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_icon
 
@@ -62,17 +66,58 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
     if config is not None and hasattr(config, "cameras"):
         cam_ids = {c.id for c in config.cameras}
         if camera_id not in cam_ids:
-            raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
-
-        # 1. Check for cached motion snapshot on disk
-        base_path = Path(config.storage.base_path)
-        snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
-        if snapshot_file.exists():
-            return FileResponse(snapshot_file, media_type="image/jpeg")
+            raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
 
         cam_obj = next((c for c in config.cameras if c.id == camera_id), None)
         card_data = build_camera_card_data(cam_obj) if cam_obj is not None else {}
         is_on_demand = card_data.get("stream_mode") == "on_demand"
+
+        native_provider = str(getattr(cam_obj, "native_provider", "") or "").lower()
+        is_native = native_provider in ("wyze", "ring")
+
+        base_path = Path(config.storage.base_path)
+        snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
+
+        # Native-aware: prefer a fresh live frame from the native stream/adapter
+        # before stale on-disk snapshots.
+        if is_native:
+            manager = getattr(request.app.state, "native_stream_manager", None)
+            if manager is not None and camera_id in getattr(manager, "streams", {}):
+                try:
+                    frame_result = manager.frame(camera_id)
+                    if inspect.isawaitable(frame_result):
+                        frame_result = await frame_result
+                    content = bytes(frame_result)
+                    if content.startswith(b"\xff\xd8") and len(content) > 150:
+                        return Response(
+                            content=content,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+                except Exception:  # noqa: BLE001 - fall through to next source
+                    pass
+
+            adapter = None
+            if native_provider == "wyze":
+                adapter = getattr(request.app.state, "wyze_native", None)
+            elif native_provider == "ring":
+                adapter = getattr(request.app.state, "ring_native", None)
+            if adapter is not None and hasattr(adapter, "capture_snapshot"):
+                try:
+                    path = await adapter.capture_snapshot(camera_id)
+                    captured = Path(path).read_bytes()
+                    if captured.startswith(b"\xff\xd8") and len(captured) > 150:
+                        return Response(
+                            content=captured,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+                except Exception:  # noqa: BLE001 - fall through to next source
+                    pass
+
+        # 1. Check for cached motion snapshot on disk
+        if snapshot_file.exists():
+            return FileResponse(snapshot_file, media_type="image/jpeg")
 
         # 2. Check for latest recorded event snapshot on disk before hitting live stream
         event_snap_dirs = [
@@ -111,7 +156,7 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
                             media_type="image/jpeg",
                             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
                         )
-            except Exception:
+            except Exception:  # noqa: SIM105
                 pass
 
     return Response(content=TINY_JPEG, media_type="image/jpeg")
@@ -130,3 +175,210 @@ async def get_camera_webrtc_metadata(camera_id: str, request: Request) -> dict[s
         "webrtc_url": f"/api/webrtc/{camera_id}/ws",
         "go2rtc_url": f"{go2rtc_api}/api/ws?src={camera_id}",
     }
+
+
+class PtzActionRequest(BaseModel):
+    action: str = Field(..., description="PTZ action")
+    pan: float | None = None
+    tilt: float | None = None
+    zoom: float | None = None
+    speed: float | None = None
+    preset: str | None = None
+    direction: str | None = None
+    amount: float | None = None
+
+
+class CameraSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    sensitivity: float | None = None
+    mute: bool | None = None
+    notifications_muted: bool | None = None
+    stream_mode: str | None = None
+
+
+def _require_api_key(request: Request) -> None:
+    auth = request.headers.get("authorization") or request.headers.get("x-api-key")
+    token = None
+    if auth:
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth.strip()
+    configured = getattr(request.app.state, "api_key", None) or os.getenv("LOOKOUT_API_KEY")
+    if not token:
+        raise HTTPException(status_code=401, detail="API key required") from None
+    if configured and not secrets.compare_digest(str(token), str(configured)):
+        raise HTTPException(status_code=401, detail="Invalid API key") from None
+
+
+def _camera_exists(config: Any, camera_id: str) -> bool:
+    if config is None or not hasattr(config, "cameras"):
+        return False
+    return any(getattr(c, "id", None) == camera_id for c in config.cameras)
+
+
+def _get_camera(config: Any, camera_id: str) -> Any:
+    if config is not None and hasattr(config, "cameras"):
+        for c in config.cameras:
+            if getattr(c, "id", None) == camera_id:
+                return c
+    return None
+
+
+@router.post("/cameras/{camera_id}/ptz")
+@router.post("/v1/cameras/{camera_id}/ptz")
+async def camera_ptz(camera_id: str, payload: PtzActionRequest, request: Request) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    cam = _get_camera(config, camera_id)
+    if not getattr(cam, "ptz_enabled", False):
+        raise HTTPException(status_code=403, detail="PTZ disabled") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    action = (payload.action or "").lower()
+    try:
+        if action == "move":
+            res = await service.move(
+                camera_id,
+                pan=payload.pan if payload.pan is not None else 0.0,
+                tilt=payload.tilt if payload.tilt is not None else 0.0,
+                zoom=payload.zoom if payload.zoom is not None else 0.0,
+                speed=payload.speed if payload.speed is not None else 0.5,
+            )
+        elif action == "stop":
+            res = await service.stop(camera_id, pan_tilt=True, zoom=True)
+        elif action == "step":
+            res = await service.step(
+                camera_id,
+                direction=payload.direction or "left",
+                amount=payload.amount if payload.amount is not None else 0.1,
+                speed=payload.speed if payload.speed is not None else 0.5,
+            )
+        elif action == "goto_preset":
+            res = await service.goto_preset(
+                camera_id,
+                preset=payload.preset or "",
+                speed=payload.speed if payload.speed is not None else 0.5,
+            )
+        elif action == "set_preset":
+            res = await service.set_preset(camera_id, name=payload.preset or "")
+        elif action == "list_presets":
+            res = await service.list_presets(camera_id)
+        elif action == "get_position":
+            res = await service.get_position(camera_id)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown action") from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        # httpx status
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            raise HTTPException(status_code=int(resp.status_code), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {
+        "status": "ok",
+        "result": res if not hasattr(res, "status_code") else {"status_code": res.status_code},
+    }
+
+
+@router.post("/cameras/{camera_id}/snapshot")
+@router.post("/v1/cameras/{camera_id}/snapshot")
+async def camera_snapshot(camera_id: str, request: Request) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    try:
+        res = await service.capture_snapshot(camera_id)
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {"status": "ok", "result": res}
+
+
+@router.post("/cameras/{camera_id}/record")
+@router.post("/v1/cameras/{camera_id}/record")
+async def camera_record(camera_id: str, request: Request) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    duration = body.get("duration") if isinstance(body, dict) else None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    try:
+        res = await service.record_clip(camera_id, duration=duration)
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {"status": "ok", "result": res}
+
+
+@router.patch("/cameras/{camera_id}/settings")
+@router.patch("/v1/cameras/{camera_id}/settings")
+async def camera_settings(
+    camera_id: str, payload: CameraSettingsRequest, request: Request
+) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    settings = payload.model_dump(exclude_none=True)
+    try:
+        cam = await service.update_settings(camera_id, settings)
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {
+        "status": "ok",
+        "enabled": getattr(cam, "enabled", None),
+        "camera": {"id": camera_id, "enabled": getattr(cam, "enabled", None)},
+    }
+
+
+@router.post("/cameras/{camera_id}/stream/restart")
+@router.post("/v1/cameras/{camera_id}/stream/restart")
+async def camera_stream_restart(camera_id: str, request: Request) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    return {"status": "ok"}
+
+
+@router.post("/cameras/{camera_id}/stream/toggle")
+@router.post("/v1/cameras/{camera_id}/stream/toggle")
+async def camera_stream_toggle(camera_id: str, request: Request) -> dict[str, Any]:
+    _require_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    cam = _get_camera(config, camera_id)
+    if cam is not None and "stream_mode" in body:
+        new_mode = body.get("stream_mode", cam.stream_mode)
+        if service is not None:
+            await service.update_settings(camera_id, {"stream_mode": new_mode})
+        else:
+            cam.stream_mode = new_mode
+        cam = _get_camera(config, camera_id)
+    return {"status": "ok", "stream_mode": getattr(cam, "stream_mode", None)}

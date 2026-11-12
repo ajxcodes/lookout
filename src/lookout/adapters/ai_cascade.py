@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from io import BytesIO
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -240,6 +241,34 @@ class TierVisionProvider(Protocol):
         ...
 
 
+def _downscale_image(image_bytes: bytes, max_side: int = 640) -> bytes:
+    """Return a JPEG whose longest side is at most ``max_side`` pixels.
+
+    Larger inputs are resized and re-encoded as JPEG; invalid or already-small
+    inputs are returned unchanged.
+    """
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - optional dependency guard
+        return image_bytes
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            width, height = img.size
+            if max(width, height) <= max_side:
+                return image_bytes
+            scale = max_side / float(max(width, height))
+            new_size = (
+                max(1, int(round(width * scale))),
+                max(1, int(round(height * scale))),
+            )
+            resized = img.convert("RGB").resize(new_size)
+            out = BytesIO()
+            resized.save(out, format="JPEG")
+            return out.getvalue()
+    except Exception:  # noqa: BLE001 - invalid images pass through unchanged
+        return image_bytes
+
+
 class OllamaVisionProvider:
     """Tier 1: Local Ollama LAN vision inference provider."""
 
@@ -255,6 +284,7 @@ class OllamaVisionProvider:
         self, image_bytes: bytes, prompt: str | None = None
     ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
         start = time.perf_counter()
+        image_bytes = _downscale_image(image_bytes)
         b64_image = base64.b64encode(image_bytes).decode("ascii")
         url = f"{self.config.host.rstrip('/')}/api/generate"
         payload = {

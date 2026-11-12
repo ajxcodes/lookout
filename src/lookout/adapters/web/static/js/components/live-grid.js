@@ -177,7 +177,11 @@ export class LiveGrid {
         liveBtn.type = "button";
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          this.startTileLiveWebRTC(cam, video, overlay);
+          if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
+            this.startRingLive(cam, video, overlay, liveBtn);
+          } else {
+            this.startTileLiveWebRTC(cam, video, overlay);
+          }
         });
         overlay.appendChild(liveBtn);
       }
@@ -192,6 +196,46 @@ export class LiveGrid {
       stage.appendChild(clockBadge);
 
       stage.appendChild(overlay);
+
+      // Manual + PTZ controls (gated on ptz_enabled for PTZ)
+      const controls = document.createElement("div");
+      controls.className = "tile-controls";
+      controls.style.display = "flex";
+      controls.style.gap = "4px";
+      controls.style.padding = "4px";
+      controls.style.flexWrap = "wrap";
+
+      const mkBtn = (label, onClick) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.style.fontSize = "0.7rem";
+        b.style.padding = "2px 6px";
+        b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+        return b;
+      };
+
+      const ptzPost = (body) => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/ptz`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // Manual snapshot/record for all cameras
+      controls.appendChild(mkBtn("📸", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot`), { method: "POST" })));
+      controls.appendChild(mkBtn("⏺", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/record`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ duration: cam.record_duration || 10 }) })));
+
+      if (cam.ptz_enabled) {
+        controls.appendChild(mkBtn("◀", () => ptzPost({ action: "step", direction: "left" })));
+        controls.appendChild(mkBtn("▲", () => ptzPost({ action: "step", direction: "up" })));
+        controls.appendChild(mkBtn("▼", () => ptzPost({ action: "step", direction: "down" })));
+        controls.appendChild(mkBtn("▶", () => ptzPost({ action: "step", direction: "right" })));
+        controls.appendChild(mkBtn("➕", () => ptzPost({ action: "step", direction: "zoom_in" })));
+        controls.appendChild(mkBtn("➖", () => ptzPost({ action: "step", direction: "zoom_out" })));
+        controls.appendChild(mkBtn("⏹", () => ptzPost({ action: "stop" })));
+      }
+
+      tile.appendChild(controls);
 
       // Drilldown click action
       tile.addEventListener("click", () => {
@@ -239,6 +283,39 @@ export class LiveGrid {
     return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
   }
 
+  startRingLive(cam, video, overlay, liveBtn) {
+    const record = this.streamPlayers.get(cam.id);
+    if (!record) return;
+    if (record.snapshotPoll) {
+      clearInterval(record.snapshotPoll);
+      record.snapshotPoll = null;
+      if (liveBtn) {
+        liveBtn.disabled = false;
+        liveBtn.textContent = "▶ Start Live";
+      }
+      if (overlay) {
+        overlay.style.display = "flex";
+        const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+        overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+      if (video) video.style.display = "none";
+      return;
+    }
+    if (liveBtn) {
+      liveBtn.disabled = false;
+      liveBtn.textContent = "⏹ Stop";
+    }
+    if (video) video.style.display = "none";
+    if (overlay) overlay.style.display = "flex";
+    const poll = () => {
+      if (!overlay) return;
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+      overlay.style.backgroundImage = `url("${snapUrl}")`;
+    };
+    poll();
+    record.snapshotPoll = setInterval(poll, 1000);
+  }
+
   async startTileLiveWebRTC(cam, video, overlay) {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
@@ -257,6 +334,7 @@ export class LiveGrid {
     }
 
     const restoreSnapshotFallback = () => {
+      if (record) record.isLive = false;
       if (record.clockInterval) {
         clearInterval(record.clockInterval);
         record.clockInterval = null;
@@ -273,6 +351,12 @@ export class LiveGrid {
         overlay.style.display = "flex";
         const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
         overlay.style.backgroundImage = `url("${snapUrl}")`;
+        if (record.snapshotPoll) clearInterval(record.snapshotPoll);
+        record.snapshotPoll = setInterval(() => {
+          if (!overlay) return;
+          const nextUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+          overlay.style.backgroundImage = `url("${nextUrl}")`;
+        }, 2000);
       }
     };
 
@@ -294,11 +378,16 @@ export class LiveGrid {
     if (video) {
       const hideOverlayWhenReady = () => {
         if (!video || (video.readyState < 2 && video.currentTime === 0)) return;
+        if (record && record.snapshotPoll) {
+          clearInterval(record.snapshotPoll);
+          record.snapshotPoll = null;
+        }
         if (overlay) overlay.style.display = "none";
         if (liveBtn) {
           liveBtn.disabled = false;
           liveBtn.textContent = "▶ Start Live";
         }
+        if (record) record.isLive = true;
         showClockIfNeeded();
       };
       video.onplaying = hideOverlayWhenReady;
@@ -429,7 +518,7 @@ export class LiveGrid {
         }
       };
 
-      record.isLive = true;
+      // Do not claim live success until media actually plays (H265/WebRTC may fail).
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
       restoreSnapshotFallback();

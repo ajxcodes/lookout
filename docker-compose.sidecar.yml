@@ -23,50 +23,6 @@ services:
     networks:
       - home_net
 
-  go2rtc:
-    image: alexxit/go2rtc:latest
-    container_name: go2rtc
-    restart: unless-stopped
-    ports:
-      - "1984:1984"
-      - "8554:8554"
-      - "8555:8555/tcp"
-      - "8555:8555/udp"
-    volumes:
-      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
-    networks:
-      - home_net
-
-  wyze-bridge:
-    image: idisposable/docker-wyze-bridge:latest
-    container_name: wyze-bridge
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    env_file:
-      - path: ./data/sidecars/wyze-bridge.env
-        required: false
-    environment:
-      - ON_DEMAND=True
-      - WB_IP=0.0.0.0
-    networks:
-      - home_net
-
-  ring-mqtt:
-    image: tsightler/ring-mqtt:latest
-    container_name: ring-mqtt
-    restart: unless-stopped
-    env_file:
-      - path: ./data/sidecars/ring-mqtt.env
-        required: false
-    environment:
-      - MQTTHOST=localhost
-      - MQTTPORT=1883
-    networks:
-      - home_net
-
-
 networks:
   home_net:
     driver: bridge

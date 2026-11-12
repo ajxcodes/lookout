@@ -88,4 +88,7 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "stream_mode": stream_mode,
         "event_count": event_count,
         "timestamp_overlay": timestamp_overlay,
+        "ptz_enabled": getattr(cam, "ptz_enabled", False),
+        "ptz_protocol": getattr(cam, "ptz_protocol", "none"),
+        "ptz_max_speed": getattr(cam, "ptz_max_speed", 0.5),
     }
