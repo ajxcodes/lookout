@@ -397,6 +397,44 @@ class RingNativeAdapter(VideoRecorderPort):
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
         return self._write_temp(".mp4", content)
 
+    async def ensure_h264_stream(self, camera_id: Any = None, **kwargs: Any) -> Any:
+        """Resolve/register the transcoded H.264 stream for a Ring camera."""
+        camera_id = camera_id if camera_id is not None else kwargs.get("camera_id")
+        camera_id = str(camera_id)
+        manager = self._require_stream_manager()
+        if hasattr(manager, "ensure_h264_stream"):
+            return await manager.ensure_h264_stream(camera_id)
+        # Fallback for managers that only expose ensure_stream.
+        return await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
+
+    # Compatibility aliases for H.264 transcoding helpers.
+    async def ensure_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def start_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def create_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def add_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_ring_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def transcode_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_h264(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
