@@ -87,6 +87,8 @@ class NativeStreamManager(VideoRecorderPort):
         self.last_error: str | None = None
         # camera_id -> go2rtc source URL
         self.streams: dict[str, str] = {}
+        # last stream primed via frame() (consumer priming)
+        self.last_primed: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -324,6 +326,39 @@ class NativeStreamManager(VideoRecorderPort):
                 await self._start_process()
             await self._ensure_stream_locked(str(camera_id), str(source))
 
+    async def ensure_live_stream(
+        self, camera_id: str, live_source: str | None = None, **kwargs: Any
+    ) -> None:
+        cid = str(camera_id).strip() if camera_id is not None else ""
+        if not cid:
+            raise MediaCaptureError("No camera id provided for live stream")
+        if live_source is None:
+            live_source = (
+                kwargs.get("live_source")
+                or kwargs.get("source")
+                or kwargs.get("url")
+                or kwargs.get("stream_url")
+            )
+        live_name = f"{cid}_live"
+        source = live_source
+        if not source:
+            source = self.streams.get(live_name)
+        if not source:
+            raise MediaCaptureError(f"No live stream source configured for camera '{cid}'")
+        await self.ensure_stream(live_name, str(source))
+        self.last_primed = live_name
+        with contextlib.suppress(MediaCaptureError):
+            await self.negotiate_consumer(live_name)
+
+    async def ensure_ring_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
+    async def register_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
+    async def start_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
     async def remove_stream(self, camera_id: str) -> None:
         """Remove a stream from go2rtc; unknown streams are a clean no-op."""
         async with self._lock:
@@ -393,6 +428,7 @@ class NativeStreamManager(VideoRecorderPort):
 
     async def frame(self, camera_id: str) -> bytes:
         """Capture a JPEG frame from a go2rtc stream."""
+        self.last_primed = str(camera_id)
         content = await self._request_media(
             "/api/frame.jpeg", {"src": str(camera_id)}, error_context="Snapshot"
         )
@@ -408,6 +444,7 @@ class NativeStreamManager(VideoRecorderPort):
         Calls :meth:`frame` and propagates :class:`MediaCaptureError` on failure.
         Safe to call when the stream is already registered.
         """
+        self.last_primed = str(camera_id)
         await self.frame(str(camera_id))
 
     async def clip(self, camera_id: str, duration_seconds: float, retries: int = 3) -> bytes:
@@ -546,3 +583,30 @@ class NativeAwareRecorder(VideoRecorderPort):
 
     async def record_clip(self, camera_id: str, duration_seconds: float) -> str:
         return await self._pick(camera_id).record_clip(camera_id, duration_seconds)
+
+    async def ensure_live_stream(self, camera_id: str, *args: Any, **kwargs: Any) -> None:
+        target = self._pick(camera_id)
+        if hasattr(target, "ensure_live_stream"):
+            await target.ensure_live_stream(camera_id, *args, **kwargs)
+        else:
+            ensure_stream = getattr(target, "ensure_stream", None)
+            if callable(ensure_stream):
+                await ensure_stream(f"{camera_id}_live", *args, **kwargs)
+
+    async def ensure_ring_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = args[0] if args else kwargs.get("camera_id")
+        if camera_id is None:
+            raise MediaCaptureError("No camera id provided for live stream")
+        return await self.ensure_live_stream(camera_id, *args[1:], **kwargs)
+
+    async def register_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = args[0] if args else kwargs.get("camera_id")
+        if camera_id is None:
+            raise MediaCaptureError("No camera id provided for live stream")
+        return await self.ensure_live_stream(camera_id, *args[1:], **kwargs)
+
+    async def start_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = args[0] if args else kwargs.get("camera_id")
+        if camera_id is None:
+            raise MediaCaptureError("No camera id provided for live stream")
+        return await self.ensure_live_stream(camera_id, *args[1:], **kwargs)

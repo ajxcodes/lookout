@@ -101,7 +101,7 @@ def test_config_generation_contains_loopback_listeners(tmp_path: Any) -> None:
     text = (tmp_path / "go2rtc.yaml").read_text(encoding="utf-8")
 
     assert 'api:\n  listen: "127.0.0.1:' in text
-    assert 'rtsp:\n  listen: ""' in text
+    assert 'rtsp:\n  listen: "127.0.0.1:' in text
     assert 'webrtc:\n  listen: ""' in text
     assert 'streams:\n  "cam1": "rtsp://example/cam1"' in text
 

@@ -167,6 +167,10 @@ class CameraConfig(BaseModel):
     native_device_id: str | None = Field(
         default=None, description="Native provider device id for this camera"
     )
+    live_stream_url: str | None = Field(
+        default=None,
+        description="Optional RTSP/HTTP H.264 source used for Ring true live view",
+    )
 
     @field_validator("stream_url")
     @classmethod
@@ -282,6 +286,10 @@ class RingConfig(BaseModel):
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
+    )
+    live_rtsp_url: str | None = Field(
+        default=None,
+        description="Optional RTSP URL for Ring live H.264 streams (ring-mqtt style)",
     )
 
 
