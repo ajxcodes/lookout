@@ -484,8 +484,84 @@ class MqttEventIngestor:
         return None
 
     async def _sample_clip_frames(self, clip_path: str, max_frames: int = 5) -> list[bytes]:
-        """Best-effort extraction of evenly spaced frames from a saved MP4 clip."""
-        return []
+        """Best-effort extraction of evenly spaced frames from a saved MP4 clip.
+
+        Returns a list of JPEG-encoded frame bytes. Any failure (missing ffmpeg,
+        unreadable clip, etc.) yields an empty list so clip enrichment degrades
+        gracefully.
+        """
+        if not max_frames or max_frames <= 0:
+            return []
+
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        if shutil.which("ffmpeg") is None:
+            return []
+
+        tmpdir = tempfile.mkdtemp(prefix="clip_frames_")
+        try:
+            # Probe duration to space samples evenly across the clip.
+            duration = 10.0
+            try:
+                probe = await asyncio.create_subprocess_exec(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    clip_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await probe.communicate()
+                if probe.returncode == 0:
+                    parsed = float(stdout.decode("utf-8", errors="replace").strip())
+                    if parsed > 0:
+                        duration = parsed
+            except (ValueError, TypeError, OSError):
+                duration = 10.0
+
+            interval = max(duration / float(max_frames), 0.1)
+            pattern = str(Path(tmpdir) / "frame_%03d.jpg")
+
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                clip_path,
+                "-vf",
+                f"fps=1/{interval:.4f}",
+                "-vframes",
+                str(max_frames),
+                "-q:v",
+                "2",
+                "-threads",
+                "1",
+                pattern,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode != 0:
+                return []
+
+            frames: list[bytes] = []
+            for path in sorted(Path(tmpdir).glob("frame_*.jpg"))[:max_frames]:
+                try:
+                    data = path.read_bytes()
+                except OSError:
+                    continue
+                if data.startswith(b"\xff\xd8"):
+                    frames.append(data)
+            return frames
+        except Exception:  # pragma: no cover - best effort
+            return []
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _save_snapshot(self, camera_id: str, kind: str, image: bytes) -> str:
         stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
