@@ -86,7 +86,7 @@ export class LivePlayer {
   startSnapshotPolling(intervalMs = 3000) {
     if (this.snapshotInterval) clearInterval(this.snapshotInterval);
     this.snapshotInterval = setInterval(() => {
-      if (!this.isLive && this.activeCamera && this.overlay) {
+      if (this.activeCamera && this.overlay) {
         const snapUrl = resolveUrl(
           `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`
         );
@@ -104,6 +104,41 @@ export class LivePlayer {
 
   async startLive() {
     if (!this.activeCamera) return;
+
+    const isRing =
+      this.activeCamera.provider_badge === "ring" ||
+      this.activeCamera.camera_type === "ring";
+
+    if (this.isLive) {
+      this.stopLive();
+      return;
+    }
+
+    if (isRing) {
+      // Ring streams are H.265 and cannot be played as WebRTC/MSE in browsers.
+      // Use near-live snapshot polling instead (issue #44).
+      this.stopSnapshotPolling();
+      this.stopDurationTimer();
+      if (this.startBtn) {
+        this.startBtn.disabled = false;
+        this.startBtn.textContent = "⏹ Stop Live Stream";
+      }
+      if (this.video) {
+        this.video.style.display = "none";
+        this.video.srcObject = null;
+      }
+      if (this.overlay) {
+        this.overlay.style.display = "flex";
+        const snapUrl = resolveUrl(
+          `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`
+        );
+        this.overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+      this.isLive = true;
+      this.startSnapshotPolling(1000);
+      if (this.onLiveStateChange) this.onLiveStateChange(true);
+      return;
+    }
 
     this.stopSnapshotPolling();
     this.stopDurationTimer();

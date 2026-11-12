@@ -177,7 +177,11 @@ export class LiveGrid {
         liveBtn.type = "button";
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          this.startTileLiveWebRTC(cam, video, overlay);
+          if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
+            this.startRingLive(cam, video, overlay, liveBtn);
+          } else {
+            this.startTileLiveWebRTC(cam, video, overlay);
+          }
         });
         overlay.appendChild(liveBtn);
       }
@@ -277,6 +281,39 @@ export class LiveGrid {
     const min = String(now.getMinutes()).padStart(2, "0");
     const ss = String(now.getSeconds()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  }
+
+  startRingLive(cam, video, overlay, liveBtn) {
+    const record = this.streamPlayers.get(cam.id);
+    if (!record) return;
+    if (record.snapshotPoll) {
+      clearInterval(record.snapshotPoll);
+      record.snapshotPoll = null;
+      if (liveBtn) {
+        liveBtn.disabled = false;
+        liveBtn.textContent = "▶ Start Live";
+      }
+      if (overlay) {
+        overlay.style.display = "flex";
+        const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+        overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+      if (video) video.style.display = "none";
+      return;
+    }
+    if (liveBtn) {
+      liveBtn.disabled = false;
+      liveBtn.textContent = "⏹ Stop";
+    }
+    if (video) video.style.display = "none";
+    if (overlay) overlay.style.display = "flex";
+    const poll = () => {
+      if (!overlay) return;
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+      overlay.style.backgroundImage = `url("${snapUrl}")`;
+    };
+    poll();
+    record.snapshotPoll = setInterval(poll, 1000);
   }
 
   async startTileLiveWebRTC(cam, video, overlay) {
