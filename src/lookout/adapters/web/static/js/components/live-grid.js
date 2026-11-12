@@ -178,7 +178,7 @@ export class LiveGrid {
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
-            this.startRingLive(cam, video, overlay, liveBtn);
+            this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_h264`);
           } else {
             this.startTileLiveWebRTC(cam, video, overlay);
           }
@@ -316,7 +316,7 @@ export class LiveGrid {
     record.snapshotPoll = setInterval(poll, 1000);
   }
 
-  async startTileLiveWebRTC(cam, video, overlay) {
+  async startTileLiveWebRTC(cam, video, overlay, streamSrc = null) {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
 
@@ -431,7 +431,8 @@ export class LiveGrid {
       await pc.setLocalDescription(offer);
 
       // Prefer substream if available to conserve bandwidth
-      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(cam.id)}`);
+      const streamId = streamSrc || cam.id;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamId)}`);
 
       const ws = new WebSocket(wsUrl);
       record.ws = ws;

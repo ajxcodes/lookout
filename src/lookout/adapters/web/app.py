@@ -408,25 +408,58 @@ def create_app(
         await app.state.broadcast_hub.broadcast_event(evt)
 
     async def _on_clip_ready(evt: Any) -> None:
-        if active_repo is not None:
-            await active_repo.save(evt)
-        await app.state.broadcast_hub.broadcast_event(evt)
-        if (
-            active_event_service is not None
-            and active_event_service.notification is not None
-            and hasattr(evt, "threat_level")
-            and evt.threat_level >= active_event_service.notification_threshold
-        ):
-            try:
-                # Dispatch in-place notification update via X-Sequence-ID
-                target = active_event_service.notification_target or "default"
-                await active_event_service.notification.send_notification(event=evt, target=target)
-            except Exception as notify_err:
-                logger.warning(
-                    "Second-pass notification update failed for %s: %s",
-                    getattr(evt, "id", "?"),
-                    notify_err,
-                )
+        try:
+            if active_repo is not None:
+                await active_repo.save(evt)
+            await app.state.broadcast_hub.broadcast_event(evt)
+
+            updated = evt
+            frame_samples: list[Any] = []
+            if isinstance(getattr(evt, "metadata", None), dict):
+                frame_samples = evt.metadata.get("clip_frame_samples") or []
+            enrichment_succeeded = False
+            if active_event_service is not None:
+                try:
+                    evt_id = str(getattr(evt, "id", "") or "")
+                    enriched = await active_event_service.enrich_event_from_media(
+                        evt_id, frame_samples
+                    )
+                    if enriched is not None:
+                        updated = enriched
+                        enrichment_succeeded = True
+                        if active_repo is not None:
+                            await active_repo.save(updated)
+                        await app.state.broadcast_hub.broadcast_event(updated)
+                except Exception as enrich_err:
+                    logger.warning(
+                        "Second-pass enrichment failed for %s: %s",
+                        getattr(evt, "id", "?"),
+                        enrich_err,
+                    )
+                    enrichment_succeeded = False
+
+            if (
+                enrichment_succeeded
+                and active_event_service is not None
+                and active_event_service.notification is not None
+                and hasattr(updated, "threat_level")
+                and updated.threat_level >= active_event_service.notification_threshold
+            ):
+                try:
+                    # Dispatch in-place notification update via X-Sequence-ID
+                    target = active_event_service.notification_target or "default"
+                    message = f"[{updated.threat_level.name}] {updated.summary}"
+                    await active_event_service.notification.send_notification(
+                        event=updated, target=target, message=message
+                    )
+                except Exception as notify_err:
+                    logger.warning(
+                        "Second-pass notification update failed for %s: %s",
+                        getattr(updated, "id", "?"),
+                        notify_err,
+                    )
+        except Exception as clip_err:  # pragma: no cover - defensive
+            logger.warning("Clip-ready handling failed: %s", clip_err)
 
     if active_config is not None and active_config.mqtt.enabled:
         app.state.mqtt_ingestor = MqttEventIngestor(
