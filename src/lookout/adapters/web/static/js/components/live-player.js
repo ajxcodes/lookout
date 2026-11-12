@@ -115,15 +115,29 @@ export class LivePlayer {
     }
 
     if (isRing) {
-      // Prime the H.264 transcoded stream on the backend before WebRTC.
-      try {
-        await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(this.activeCamera.id)}/live`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (e) {
-        console.warn("Live stream preparation failed:", e);
+      // Ring streams are H.265 and cannot be played as WebRTC/MSE in browsers.
+      // Use near-live snapshot polling instead (issue #44).
+      this.stopSnapshotPolling();
+      this.stopDurationTimer();
+      if (this.startBtn) {
+        this.startBtn.disabled = false;
+        this.startBtn.textContent = "⏹ Stop Live Stream";
       }
+      if (this.video) {
+        this.video.style.display = "none";
+        this.video.srcObject = null;
+      }
+      if (this.overlay) {
+        this.overlay.style.display = "flex";
+        const snapUrl = resolveUrl(
+          `/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot?t=${Date.now()}`
+        );
+        this.overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+      this.isLive = true;
+      this.startSnapshotPolling(1000);
+      if (this.onLiveStateChange) this.onLiveStateChange(true);
+      return;
     }
 
     this.stopSnapshotPolling();
