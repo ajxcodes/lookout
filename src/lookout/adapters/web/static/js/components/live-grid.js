@@ -297,6 +297,7 @@ export class LiveGrid {
     }
 
     const restoreSnapshotFallback = () => {
+      if (record) record.isLive = false;
       if (record.clockInterval) {
         clearInterval(record.clockInterval);
         record.clockInterval = null;
@@ -339,6 +340,7 @@ export class LiveGrid {
           liveBtn.disabled = false;
           liveBtn.textContent = "▶ Start Live";
         }
+        if (record) record.isLive = true;
         showClockIfNeeded();
       };
       video.onplaying = hideOverlayWhenReady;
@@ -469,7 +471,7 @@ export class LiveGrid {
         }
       };
 
-      record.isLive = true;
+      // Do not claim live success until media actually plays (H265/WebRTC may fail).
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
       restoreSnapshotFallback();

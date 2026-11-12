@@ -1,5 +1,6 @@
 """REST API endpoints for camera discovery, snapshot serving, and WebRTC metadata."""
 
+import inspect
 import os
 import secrets
 from pathlib import Path
@@ -67,15 +68,56 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         if camera_id not in cam_ids:
             raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
 
-        # 1. Check for cached motion snapshot on disk
-        base_path = Path(config.storage.base_path)
-        snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
-        if snapshot_file.exists():
-            return FileResponse(snapshot_file, media_type="image/jpeg")
-
         cam_obj = next((c for c in config.cameras if c.id == camera_id), None)
         card_data = build_camera_card_data(cam_obj) if cam_obj is not None else {}
         is_on_demand = card_data.get("stream_mode") == "on_demand"
+
+        native_provider = str(getattr(cam_obj, "native_provider", "") or "").lower()
+        is_native = native_provider in ("wyze", "ring")
+
+        base_path = Path(config.storage.base_path)
+        snapshot_file = base_path / "snapshots" / f"{camera_id}.jpg"
+
+        # Native-aware: prefer a fresh live frame from the native stream/adapter
+        # before stale on-disk snapshots.
+        if is_native:
+            manager = getattr(request.app.state, "native_stream_manager", None)
+            if manager is not None and camera_id in getattr(manager, "streams", {}):
+                try:
+                    frame_result = manager.frame(camera_id)
+                    if inspect.isawaitable(frame_result):
+                        frame_result = await frame_result
+                    content = bytes(frame_result)
+                    if content.startswith(b"\xff\xd8") and len(content) > 150:
+                        return Response(
+                            content=content,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+                except Exception:  # noqa: BLE001 - fall through to next source
+                    pass
+
+            adapter = None
+            if native_provider == "wyze":
+                adapter = getattr(request.app.state, "wyze_native", None)
+            elif native_provider == "ring":
+                adapter = getattr(request.app.state, "ring_native", None)
+            if adapter is not None and hasattr(adapter, "capture_snapshot"):
+                try:
+                    path = await adapter.capture_snapshot(camera_id)
+                    captured = Path(path).read_bytes()
+                    if captured.startswith(b"\xff\xd8") and len(captured) > 150:
+                        return Response(
+                            content=captured,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+                        )
+                except Exception:  # noqa: BLE001 - fall through to next source
+                    pass
+
+        # 1. Check for cached motion snapshot on disk
+        if snapshot_file.exists():
+            return FileResponse(snapshot_file, media_type="image/jpeg")
 
         # 2. Check for latest recorded event snapshot on disk before hitting live stream
         event_snap_dirs = [

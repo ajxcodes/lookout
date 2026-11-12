@@ -19,6 +19,9 @@ from lookout.adapters.ring_native import (
     decode_ring_token,
     encode_ring_token,
 )
+from lookout.adapters.ring_native import (
+    _parse_datetime as _ring_parse_datetime,
+)
 from lookout.config.schema import CameraConfig, RingConfig
 from lookout.domain.models import EventCategory
 from lookout.ports.egress import VideoRecorderPort
@@ -301,3 +304,8 @@ async def test_ingest_event_builds_camera_event_from_payload() -> None:
     assert event.camera_id == "front_door"
     assert event.category == EventCategory.UNKNOWN_VISITOR
     assert event.metadata["provider"] == "ring"
+
+
+def test_parse_datetime_handles_epoch_millis() -> None:
+    result = _ring_parse_datetime(1700000000000)
+    assert result == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)

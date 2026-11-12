@@ -60,20 +60,51 @@ def encode_ring_token(inner: dict[str, Any]) -> str:
     ).decode("ascii")
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        value = int(value)
     if isinstance(value, datetime):
         return _as_utc(value)
-    if isinstance(value, str):
+    if isinstance(value, (int, float)):
         try:
-            return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            return _as_utc(value)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
         except ValueError:
             return None
     return None
