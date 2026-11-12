@@ -177,7 +177,11 @@ export class LiveGrid {
         liveBtn.type = "button";
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          this.startTileLiveWebRTC(cam, video, overlay);
+          if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
+            this.startRingLive(cam, video, overlay, liveBtn);
+          } else {
+            this.startTileLiveWebRTC(cam, video, overlay);
+          }
         });
         overlay.appendChild(liveBtn);
       }
