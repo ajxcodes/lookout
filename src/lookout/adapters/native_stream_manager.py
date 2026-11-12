@@ -397,21 +397,52 @@ class NativeStreamManager(VideoRecorderPort):
             )
         return content
 
-    async def clip(self, camera_id: str, duration_seconds: float) -> bytes:
-        """Record an MP4 clip from a go2rtc stream."""
-        content = await self._request_media(
-            "/api/stream.mp4",
-            {"src": str(camera_id), "duration": max(1, int(round(duration_seconds)))},
-            error_context="Clip",
+    async def negotiate_consumer(self, camera_id: str) -> None:
+        """Prime an on-demand stream by forcing a frame/keyframe capture.
+
+        Calls :meth:`frame` and propagates :class:`MediaCaptureError` on failure.
+        Safe to call when the stream is already registered.
+        """
+        await self.frame(str(camera_id))
+
+    async def clip(self, camera_id: str, duration_seconds: float, retries: int = 3) -> bytes:
+        """Record an MP4 clip from a go2rtc stream.
+
+        Retries on HTTP 500 / empty / non-MP4 / missing media samples, priming the
+        stream with :meth:`negotiate_consumer` between attempts. Raises
+        :class:`MediaCaptureError` only after all attempts are exhausted.
+        """
+        camera_id = str(camera_id)
+        params: dict[str, Any] = {
+            "src": camera_id,
+            "duration": max(1, int(round(duration_seconds))),
+        }
+        attempts = max(1, int(retries))
+        last_error: MediaCaptureError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                content = await self._request_media("/api/stream.mp4", params, error_context="Clip")
+                if _MP4_FTYP not in content[:64]:
+                    raise MediaCaptureError(
+                        f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)"
+                    )
+                if _MP4_MDAT not in content:
+                    raise MediaCaptureError(
+                        f"Clip for '{camera_id}' contains no media samples ({len(content)} bytes); "
+                        "the source produced no frames"
+                    )
+                return content
+            except MediaCaptureError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    with contextlib.suppress(MediaCaptureError):
+                        await self.negotiate_consumer(camera_id)
+                    await asyncio.sleep(0.1 * attempt)
+        raise (
+            last_error
+            if last_error is not None
+            else MediaCaptureError(f"Clip for '{camera_id}' failed")
         )
-        if _MP4_FTYP not in content[:64]:
-            raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
-        if _MP4_MDAT not in content:
-            raise MediaCaptureError(
-                f"Clip for '{camera_id}' contains no media samples ({len(content)} bytes); "
-                "the source produced no frames"
-            )
-        return content
 
     async def capture_snapshot(self, camera_id: str) -> str:
         """Write a validated JPEG snapshot to a temporary file and return its path."""

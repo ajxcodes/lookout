@@ -281,6 +281,8 @@ async def test_on_demand_clip_recording_retries_and_succeeds(tmp_path: Path) -> 
     attempts = 0
 
     def mock_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/frame.jpeg":
+            return httpx.Response(200, content=JPEG)
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -289,9 +291,13 @@ async def test_on_demand_clip_recording_retries_and_succeeds(tmp_path: Path) -> 
         # Subsequent attempt succeeds once stream settles
         return httpx.Response(200, content=b"\x00" * 4096)
 
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    real_client = httpx.AsyncClient
+
+    def client_factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        return real_client(transport=httpx.MockTransport(mock_handler))
+
     with (
-        patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", return_value=mock_client),
+        patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", side_effect=client_factory),
         patch("asyncio.sleep", AsyncMock()),
     ):
         await ingestor._record_clip_background("front_door", event, duration=5.0)

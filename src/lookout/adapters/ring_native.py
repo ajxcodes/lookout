@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -361,6 +362,11 @@ class RingNativeAdapter(VideoRecorderPort):
         source = self._resolve_source(camera_id, snapshot=False)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
+        # Prime a consumer (frame capture) so on-demand Ring streams negotiate
+        # SPS/dimensions before the MP4 request. Swallow priming failures; the
+        # subsequent clip call still propagates MediaCaptureError on total failure.
+        with contextlib.suppress(MediaCaptureError):
+            await manager.frame(camera_id)
         content = await manager.clip(camera_id, duration_seconds)
         if _MP4_FTYP not in content[:64]:
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")

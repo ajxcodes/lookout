@@ -306,9 +306,13 @@ class MqttEventIngestor:
             )
 
             is_on_demand = bool(cam and cam.mqtt_id)
-            if is_on_demand:
+            if is_on_demand and cam is not None:
                 # Allow on-demand streams (e.g. Ring WebRTC signaling) time to establish producer
                 await asyncio.sleep(2.5)
+                # Prime/negotiate a consumer (frame capture) before requesting the MP4 so
+                # go2rtc has cached SPS/dimensions. Best-effort: never abort the clip path.
+                with contextlib.suppress(Exception):
+                    await self._go2rtc_frame(cam.id)
 
             primary_src = f"ffmpeg:{camera_id}#video=copy#audio=aac" if include_audio else camera_id
             params: dict[str, str | int] = {"src": primary_src, "duration": int(duration)}
