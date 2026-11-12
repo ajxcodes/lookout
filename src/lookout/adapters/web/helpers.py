@@ -91,4 +91,8 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "ptz_enabled": getattr(cam, "ptz_enabled", False),
         "ptz_protocol": getattr(cam, "ptz_protocol", "none"),
         "ptz_max_speed": getattr(cam, "ptz_max_speed", 0.5),
+        "live_stream_url": getattr(cam, "live_stream_url", None),
+        "live_source": getattr(cam, "live_stream_url", None),
+        "has_live_stream": bool(getattr(cam, "live_stream_url", None)),
+        "has_live_source": bool(getattr(cam, "live_stream_url", None)),
     }

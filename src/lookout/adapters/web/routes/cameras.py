@@ -289,11 +289,13 @@ async def camera_live(camera_id: str, request: Request) -> dict[str, Any]:
     # Auth is optional: enforce only when an API key is configured, so the
     # browser (which has no stored key) can prime live streams.
     auth = request.headers.get("authorization") or request.headers.get("x-api-key")
-    token = auth[7:].strip() if (auth and auth.lower().startswith("bearer ")) else (auth.strip() if auth else None)
+    if auth and auth.lower().startswith("bearer "):
+        token: str | None = auth[7:].strip()
+    else:
+        token = auth.strip() if auth else None
     configured = getattr(request.app.state, "api_key", None) or os.getenv("LOOKOUT_API_KEY")
-    if configured:
-        if not token or not secrets.compare_digest(str(token), str(configured)):
-            raise HTTPException(status_code=401, detail="Invalid API key") from None
+    if configured and (not token or not secrets.compare_digest(str(token), str(configured))):
+        raise HTTPException(status_code=401, detail="Invalid API key") from None
     config = request.app.state.config
     if not _camera_exists(config, camera_id):
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
@@ -301,10 +303,14 @@ async def camera_live(camera_id: str, request: Request) -> dict[str, Any]:
     provider = getattr(cam, "native_provider", None)
     ring_native = getattr(request.app.state, "ring_native", None)
     if provider == "ring" and ring_native is not None:
-        try:
-            await ring_native.prepare_live_stream(camera_id)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from None
+        live_source = getattr(cam, "live_stream_url", None)
+        if live_source is None:
+            live_source = getattr(ring_native.config, "live_rtsp_url", None)
+        if live_source:
+            try:
+                await ring_native.ensure_live_stream(camera_id)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from None
     return {"status": "ok"}
 
 

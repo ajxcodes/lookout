@@ -109,12 +109,19 @@ export class LivePlayer {
       this.activeCamera.provider_badge === "ring" ||
       this.activeCamera.camera_type === "ring";
 
+    const hasRingLiveStream =
+      isRing &&
+      (this.activeCamera.live_stream_url ||
+        this.activeCamera.live_source ||
+        this.activeCamera.has_live_stream ||
+        this.activeCamera.has_live_source);
+
     if (this.isLive) {
       this.stopLive();
       return;
     }
 
-    if (isRing) {
+    if (isRing && !hasRingLiveStream) {
       // Ring streams are H.265 and cannot be played as WebRTC/MSE in browsers.
       // Use near-live snapshot polling instead (issue #44).
       this.stopSnapshotPolling();
@@ -221,7 +228,10 @@ export class LivePlayer {
       await pc.setLocalDescription(offer);
 
       // Determine WebSocket endpoint
-      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(this.activeCamera.id)}`);
+      const streamSrc = hasRingLiveStream
+        ? `${this.activeCamera.id}_live`
+        : this.activeCamera.id;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamSrc)}`);
 
       await new Promise((resolve, reject) => {
         const ws = new WebSocket(wsUrl);

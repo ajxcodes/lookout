@@ -384,6 +384,41 @@ class RingNativeAdapter(VideoRecorderPort):
         with contextlib.suppress(MediaCaptureError):
             await manager.frame(f"{camera_id}_h264")
 
+    async def ensure_live_stream(
+        self, camera_id: str, live_source: str | None = None, **kwargs: Any
+    ) -> None:
+        camera_id = str(camera_id)
+        if live_source is None:
+            live_source = (
+                kwargs.get("live_source")
+                or kwargs.get("source")
+                or kwargs.get("url")
+                or kwargs.get("stream_url")
+            )
+        if live_source is None:
+            camera = self._camera_config(camera_id)
+            if camera is not None:
+                live_source = getattr(camera, "live_stream_url", None)
+        if live_source is None:
+            live_source = getattr(self.config, "live_rtsp_url", None)
+        manager = self._require_stream_manager()
+        if hasattr(manager, "ensure_live_stream"):
+            try:
+                await manager.ensure_live_stream(camera_id, live_source)
+            except TypeError:
+                await manager.ensure_live_stream(camera_id)
+        else:
+            await manager.ensure_stream(f"{camera_id}_live", live_source)
+
+    async def ensure_ring_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
+    async def register_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
+    async def start_live_stream(self, *args: Any, **kwargs: Any) -> None:
+        return await self.ensure_live_stream(*args, **kwargs)
+
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
