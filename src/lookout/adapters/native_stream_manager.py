@@ -70,6 +70,11 @@ class NativeStreamManager(VideoRecorderPort):
             or Path(tempfile.gettempdir()) / "lookout-go2rtc"
         )
         self.api_port = int(api_port or getattr(go2rtc_cfg, "native_api_port", 11984) or 11984)
+        self.rtsp_port = int(
+            (getattr(go2rtc_cfg, "native_rtsp_port", None) if go2rtc_cfg is not None else None)
+            or os.environ.get("LOOKOUT_GO2RTC_RTSP_PORT")
+            or 19554
+        )
         self.readiness_timeout = readiness_timeout
         self._external_client = client
         self._client: httpx.AsyncClient | None = client
@@ -141,7 +146,7 @@ class NativeStreamManager(VideoRecorderPort):
             "api:",
             f'  listen: "127.0.0.1:{self.api_port}"',
             "rtsp:",
-            '  listen: ""',
+            f'  listen: "127.0.0.1:{self.rtsp_port}"',
             "webrtc:",
             '  listen: ""',
             "streams:",
