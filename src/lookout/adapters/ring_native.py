@@ -372,6 +372,18 @@ class RingNativeAdapter(VideoRecorderPort):
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
         return self._write_temp(".mp4", content)
 
+    async def prepare_live_stream(self, camera_id: str) -> None:
+        camera_id = str(camera_id)
+        source = self._resolve_source(camera_id, snapshot=False)
+        manager = self._require_stream_manager()
+        await manager.ensure_stream(camera_id, source)
+        with contextlib.suppress(MediaCaptureError):
+            await manager.frame(camera_id)
+        # Register the ffmpeg H.264 transcode stream (no ensure_h264_stream helper on this branch).
+        await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
+        with contextlib.suppress(MediaCaptureError):
+            await manager.frame(f"{camera_id}_h264")
+
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------

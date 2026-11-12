@@ -175,10 +175,18 @@ export class LiveGrid {
         liveBtn.className = "tile-live-btn";
         liveBtn.textContent = "▶ Start Live";
         liveBtn.type = "button";
-        liveBtn.addEventListener("click", (e) => {
+        liveBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
-            this.startRingLive(cam, video, overlay, liveBtn);
+            liveBtn.disabled = true;
+            liveBtn.textContent = "⏳ Preparing...";
+            try {
+              await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/live`), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+              });
+            } catch (err) {}
+            this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_h264`);
           } else {
             this.startTileLiveWebRTC(cam, video, overlay);
           }
