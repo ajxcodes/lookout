@@ -314,6 +314,12 @@ export class LiveGrid {
         overlay.style.display = "flex";
         const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
         overlay.style.backgroundImage = `url("${snapUrl}")`;
+        if (record.snapshotPoll) clearInterval(record.snapshotPoll);
+        record.snapshotPoll = setInterval(() => {
+          if (!overlay) return;
+          const nextUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+          overlay.style.backgroundImage = `url("${nextUrl}")`;
+        }, 2000);
       }
     };
 
@@ -335,6 +341,10 @@ export class LiveGrid {
     if (video) {
       const hideOverlayWhenReady = () => {
         if (!video || (video.readyState < 2 && video.currentTime === 0)) return;
+        if (record && record.snapshotPoll) {
+          clearInterval(record.snapshotPoll);
+          record.snapshotPoll = null;
+        }
         if (overlay) overlay.style.display = "none";
         if (liveBtn) {
           liveBtn.disabled = false;
