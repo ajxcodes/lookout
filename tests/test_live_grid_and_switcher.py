@@ -147,3 +147,13 @@ def test_ring_timestamp_overlay_and_focus_autoplay() -> None:
     assert "live-duration-timer" in index_html
     assert "isLiveRtc" in app_js
     assert "this.livePlayer.startLive()" in app_js
+
+
+def test_live_grid_prefers_h264_and_records_fallback_reason() -> None:
+    js = Path("src/lookout/adapters/web/static/js/components/live-grid.js").read_text(
+        encoding="utf-8"
+    )
+    assert "setCodecPreferences" in js
+    assert "H264" in js
+    assert "liveFallbackReason" in js
+    assert "restoreSnapshotFallback" in js

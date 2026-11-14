@@ -24,6 +24,9 @@ _MP4_FTYP = b"ftyp"
 _MP4_MDAT = b"mdat"
 
 
+_VIDEO_CODECS = ("H264", "H265", "VP8", "VP9", "AV1", "MJPEG")
+
+
 class Go2RtcUnavailableError(RuntimeError):
     """Raised when no usable go2rtc binary can be located."""
 
@@ -48,11 +51,15 @@ class NativeStreamManager(VideoRecorderPort):
         binary_path: str | None = None,
         runtime_dir: str | Path | None = None,
         api_port: int | None = None,
+        rtsp_port: int | None = None,
+        webrtc_port: int | None = None,
+        webrtc_candidate: str | None = None,
         client: httpx.AsyncClient | None = None,
         process_factory: Callable[..., Awaitable[Any]] | None = None,
         readiness_timeout: float = 12.0,
         **kwargs: Any,
     ) -> None:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         if config is None and args:
             config = args[0] if hasattr(args[0], "go2rtc") else None
         self.config = config or kwargs.get("config")
@@ -71,9 +78,22 @@ class NativeStreamManager(VideoRecorderPort):
         )
         self.api_port = int(api_port or getattr(go2rtc_cfg, "native_api_port", 11984) or 11984)
         self.rtsp_port = int(
-            (getattr(go2rtc_cfg, "native_rtsp_port", None) if go2rtc_cfg is not None else None)
-            or os.environ.get("LOOKOUT_GO2RTC_RTSP_PORT")
-            or 8554
+            rtsp_port
+            or getattr(go2rtc_cfg, "native_rtsp_port", None)
+            or os.environ.get("LOOKOUT_RTSP_PORT")
+            or 18556
+        )
+        self.webrtc_port = int(
+            webrtc_port
+            or getattr(go2rtc_cfg, "native_webrtc_port", None)
+            or os.environ.get("LOOKOUT_WEBRTC_PORT")
+            or 8556
+        )
+        self.webrtc_candidate = (
+            webrtc_candidate
+            or getattr(go2rtc_cfg, "native_webrtc_candidate", None)
+            or os.environ.get("LOOKOUT_WEBRTC_CANDIDATE")
+            or None
         )
         self.readiness_timeout = readiness_timeout
         self._external_client = client
@@ -148,9 +168,20 @@ class NativeStreamManager(VideoRecorderPort):
             "rtsp:",
             f'  listen: "127.0.0.1:{self.rtsp_port}"',
             "webrtc:",
-            '  listen: ""',
-            "streams:",
+            f'  listen: ":{self.webrtc_port}"',
         ]
+        if self.webrtc_candidate:
+            candidate = self.webrtc_candidate
+            if ":" not in candidate:
+                candidate = f"{candidate}:{self.webrtc_port}"
+            lines.extend(
+                [
+                    "  candidates:",
+                    f'    - "{candidate}"',
+                    f'    - "stun:{self.webrtc_port}"',
+                ]
+            )
+        lines.append("streams:")
         if self.streams:
             for name, source in self.streams.items():
                 escaped = source.replace('"', '\\"')
@@ -238,28 +269,36 @@ class NativeStreamManager(VideoRecorderPort):
             await self.remove_stream(str(camera_id))
             return {"status": "ok", "camera_id": str(camera_id)}
         async with self._lock:
-            process, self._process = self._process, None
-            self._started = False
-            self._api_url = None
-            self.streams.clear()
-            if process is not None:
-                with contextlib.suppress(ProcessLookupError):
-                    process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
-                except TimeoutError:
-                    with contextlib.suppress(ProcessLookupError):
-                        process.kill()
-                    with contextlib.suppress(Exception):
-                        await process.wait()
-            if self._external_client is None and self._client is not None:
-                await self._client.aclose()
-                self._client = None
-            if self._log_handle is not None:
-                with contextlib.suppress(Exception):
-                    self._log_handle.close()
-                self._log_handle = None
+            await self._stop_process_locked(clear_streams=True)
         return {"status": "ok"}
+
+    async def _stop_process_locked(self, *, clear_streams: bool = True) -> None:
+        process, self._process = self._process, None
+        self._started = False
+        self._api_url = None
+        if clear_streams:
+            self.streams.clear()
+        if process is not None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                with contextlib.suppress(Exception):
+                    await process.wait()
+        if self._external_client is None and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+        if self._log_handle is not None:
+            with contextlib.suppress(Exception):
+                self._log_handle.close()
+            self._log_handle = None
+
+    async def _restart_process_locked(self) -> None:
+        await self._stop_process_locked(clear_streams=False)
+        await self._start_process()
 
     async def close(self) -> None:
         """Alias for :meth:`stop` used by application shutdown."""
@@ -281,14 +320,30 @@ class NativeStreamManager(VideoRecorderPort):
             source = args[1]
         return (str(camera_id) if camera_id else None, str(source) if source else None)
 
+    async def _register_via_config_locked(self, camera_id: str, source: str) -> None:
+        self.streams[camera_id] = source
+        await self._restart_process_locked()
+        if not await self._stream_exists(camera_id):
+            raise MediaCaptureError(
+                f"go2rtc did not register stream '{camera_id}' after config reload"
+            )
+
     async def _ensure_stream_locked(self, camera_id: str, source: str) -> None:
         if self.streams.get(camera_id) == source:
+            if await self._stream_exists(camera_id):
+                return
+            logger.info("go2rtc dropped stream '%s'; re-registering", camera_id)
+        if source.startswith("exec:"):
+            await self._register_via_config_locked(camera_id, source)
             return
         client = await self._get_client()
         resp = await client.put(
             f"{self._api_url}/api/streams",
             params={"name": camera_id, "src": source},
         )
+        if resp.status_code == 400 and "insecure producer" in resp.text:
+            await self._register_via_config_locked(camera_id, source)
+            return
         # go2rtc 1.9.x can return 400 while still adding the stream because of a
         # response-serialization quirk; confirm against the live stream map.
         if resp.status_code not in (200, 201, 204, 400):
@@ -312,6 +367,86 @@ class NativeStreamManager(VideoRecorderPort):
         except ValueError:
             return False
         return isinstance(data, dict) and camera_id in data
+
+    async def stream_codecs(self, camera_id: str) -> list[str]:
+        """Return video codec names go2rtc reports for a stream's producers."""
+        client = await self._get_client()
+        resp = await client.get(f"{self._api_url}/api/streams", params={"src": str(camera_id)})
+        if resp.status_code != 200:
+            return []
+        try:
+            data = resp.json()
+        except ValueError:
+            return []
+        if isinstance(data, dict) and "producers" not in data and str(camera_id) in data:
+            data = data[str(camera_id)]
+        codecs: list[str] = []
+        producers = data.get("producers") if isinstance(data, dict) else None
+        for producer in producers or []:
+            if not isinstance(producer, dict):
+                continue
+            entries: list[Any] = list(producer.get("medias") or []) + list(
+                producer.get("codecs") or []
+            )
+            for entry in entries:
+                text = entry if isinstance(entry, str) else str(entry)
+                lowered = text.lower()
+                if isinstance(entry, str) and lowered.lstrip().startswith(("audio", "application")):
+                    continue
+                if isinstance(entry, str):
+                    # e.g. "video, recvonly, H264, H265" or "H264/90000"
+                    for token in text.replace("/", ",").split(","):
+                        name = token.strip().upper()
+                        if name in _VIDEO_CODECS:
+                            codecs.append(name)
+                elif isinstance(entry, dict):
+                    kind = str(entry.get("media") or entry.get("kind") or "video").lower()
+                    name = str(entry.get("codec_name") or "").upper()
+                    if kind == "video" and name in _VIDEO_CODECS:
+                        codecs.append(name)
+        return list(dict.fromkeys(codecs))
+
+    async def has_h264(self, camera_id: str) -> bool:
+        """True only if go2rtc serves an H264 video codec; warns otherwise."""
+        codecs = await self.stream_codecs(camera_id)
+        if "H264" in codecs:
+            return True
+        logger.warning("Stream '%s' does not serve H264 (codecs=%s)", camera_id, codecs)
+        return False
+
+    async def ensure_h264_transcode(self, camera_id: str) -> bool:
+        """Add an ffmpeg H.264 transcoding producer when a stream does not serve H264."""
+        cam_id = str(camera_id)
+        codecs = await self.stream_codecs(cam_id)
+        if "H264" in codecs:
+            return False
+        source = self.streams.get(cam_id)
+        if not source:
+            return False
+        raw_cam_id = f"{cam_id}_raw"
+        transcode_src = (
+            f"ffmpeg:{raw_cam_id}#video=h264#raw=-probesize 5000000 -analyzeduration 5000000"
+        )
+        client = await self._get_client()
+        raw_resp = await client.put(
+            f"{self._api_url}/api/streams",
+            params={"name": raw_cam_id, "src": source},
+        )
+        if raw_resp.status_code not in (200, 201, 204, 400):
+            raise MediaCaptureError(
+                f"go2rtc rejected raw stream for '{cam_id}' "
+                f"(HTTP {raw_resp.status_code}): {raw_resp.text[:200]}"
+            )
+        resp = await client.put(
+            f"{self._api_url}/api/streams",
+            params={"name": cam_id, "src": transcode_src},
+        )
+        if resp.status_code not in (200, 201, 204, 400):
+            raise MediaCaptureError(
+                f"go2rtc rejected H264 transcode for '{cam_id}' "
+                f"(HTTP {resp.status_code}): {resp.text[:200]}"
+            )
+        return True
 
     async def ensure_stream(self, camera_id: str, source: str | None = None) -> None:
         """Register or update a camera stream, starting go2rtc when needed."""

@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
 from lookout.config.schema import RingConfig
@@ -317,15 +317,31 @@ class RingNativeAdapter(VideoRecorderPort):
                     return device
         return None
 
+    def build_bridge_source(self, camera_id: str, refresh_token: str | None = None) -> str:
+        """Build the go2rtc ``exec:`` source using the ring-client-api H.264 bridge."""
+        bridge_path = Path(__file__).resolve().parent / "ring_bridge" / "index.mjs"
+        token = refresh_token if refresh_token is not None else self._token()
+        return f"exec:node {bridge_path} --camera-id {camera_id} --refresh-token {token}"
+
     def _resolve_source(self, camera_id: str, snapshot: bool = False) -> str:
         camera = self._camera_config(camera_id)
         if camera is not None:
             stream_url = getattr(camera, "stream_url", None)
             if stream_url and str(stream_url).startswith("ring:"):
                 source = str(stream_url)
-                if snapshot and "&snapshot" not in source:
-                    source += "&snapshot"
-                return source
+                if snapshot:
+                    if "&snapshot" not in source:
+                        source += "&snapshot"
+                    return source
+                params = parse_qs(urlsplit(source).query)
+                bridge_cam_id = (
+                    params.get("camera_id", [None])[0]
+                    or params.get("device_id", [None])[0]
+                    or getattr(camera, "native_device_id", None)
+                    or camera_id
+                )
+                token = params.get("refresh_token", [None])[0]
+                return self.build_bridge_source(str(bridge_cam_id), refresh_token=token)
         device = None
         if camera is not None:
             device = self._find_cached(str(camera.native_device_id or ""))
@@ -335,7 +351,16 @@ class RingNativeAdapter(VideoRecorderPort):
             raise RingStreamSourceError(
                 f"No Ring device resolved for camera '{camera_id}'. Run native discovery first."
             )
-        return self.build_stream_source(device, snapshot=snapshot)
+        if snapshot:
+            return self.build_stream_source(device, snapshot=True)
+        bridge_cam_id = (
+            device.get("device_api_id")
+            or device.get("camera_id")
+            or device.get("id")
+            or device.get("device_id")
+            or camera_id
+        )
+        return self.build_bridge_source(str(bridge_cam_id))
 
     async def _resolve_ring_device(self, camera_id: str) -> Any:
         camera = self._camera_config(camera_id)

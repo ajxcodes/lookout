@@ -55,7 +55,14 @@ async def list_cameras(request: Request) -> dict[str, Any]:
     if config is None or not hasattr(config, "cameras"):
         return {"cameras": []}
 
-    cameras = [build_camera_card_data(cam) for cam in config.cameras]
+    from lookout.adapters.web.app import _redact_source
+
+    cameras = []
+    for cam in config.cameras:
+        card = build_camera_card_data(cam)
+        if card.get("stream_url"):
+            card["stream_url"] = _redact_source(card["stream_url"])
+        cameras.append(card)
     return {"cameras": cameras}
 
 
