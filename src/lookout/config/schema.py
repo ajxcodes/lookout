@@ -213,6 +213,12 @@ class Go2RtcConfig(BaseModel):
         default=None,
         description="Directory for the embedded go2rtc config/log files",
     )
+    native_rtsp_port: int = Field(
+        default=8554,
+        gt=0,
+        le=65535,
+        description="Loopback RTSP listener port for embedded go2rtc (H.264 transcoding)",
+    )
 
 
 class WyzeConfig(BaseModel):

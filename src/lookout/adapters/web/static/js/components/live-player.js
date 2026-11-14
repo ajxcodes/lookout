@@ -186,7 +186,11 @@ export class LivePlayer {
       await pc.setLocalDescription(offer);
 
       // Determine WebSocket endpoint
-      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(this.activeCamera.id)}`);
+      const streamId =
+        this.activeCamera.provider_badge === "ring" || this.activeCamera.camera_type === "ring"
+          ? `${this.activeCamera.id}_h264`
+          : this.activeCamera.id;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamId)}`);
 
       await new Promise((resolve, reject) => {
         const ws = new WebSocket(wsUrl);

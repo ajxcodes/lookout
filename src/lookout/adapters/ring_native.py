@@ -60,20 +60,51 @@ def encode_ring_token(inner: dict[str, Any]) -> str:
     ).decode("ascii")
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        value = int(value)
     if isinstance(value, datetime):
         return _as_utc(value)
-    if isinstance(value, str):
+    if isinstance(value, (int, float)):
         try:
-            return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            return _as_utc(value)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
         except ValueError:
             return None
     return None
@@ -390,6 +421,44 @@ class RingNativeAdapter(VideoRecorderPort):
         if _MP4_FTYP not in content[:64]:
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
         return self._write_temp(".mp4", content)
+
+    async def ensure_h264_stream(self, camera_id: Any = None, **kwargs: Any) -> Any:
+        """Resolve/register the transcoded H.264 stream for a Ring camera."""
+        camera_id = camera_id if camera_id is not None else kwargs.get("camera_id")
+        camera_id = str(camera_id)
+        manager = self._require_stream_manager()
+        if hasattr(manager, "ensure_h264_stream"):
+            return await manager.ensure_h264_stream(camera_id)
+        # Fallback for managers that only expose ensure_stream.
+        return await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
+
+    # Compatibility aliases for H.264 transcoding helpers.
+    async def ensure_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def start_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def create_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def add_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_ring_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def transcode_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_h264(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
 
     # ------------------------------------------------------------------
     # Events

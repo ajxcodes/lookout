@@ -177,7 +177,11 @@ export class LiveGrid {
         liveBtn.type = "button";
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          this.startTileLiveWebRTC(cam, video, overlay);
+          if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
+            this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_h264`);
+          } else {
+            this.startTileLiveWebRTC(cam, video, overlay);
+          }
         });
         overlay.appendChild(liveBtn);
       }
@@ -279,7 +283,40 @@ export class LiveGrid {
     return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
   }
 
-  async startTileLiveWebRTC(cam, video, overlay) {
+  startRingLive(cam, video, overlay, liveBtn) {
+    const record = this.streamPlayers.get(cam.id);
+    if (!record) return;
+    if (record.snapshotPoll) {
+      clearInterval(record.snapshotPoll);
+      record.snapshotPoll = null;
+      if (liveBtn) {
+        liveBtn.disabled = false;
+        liveBtn.textContent = "▶ Start Live";
+      }
+      if (overlay) {
+        overlay.style.display = "flex";
+        const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+        overlay.style.backgroundImage = `url("${snapUrl}")`;
+      }
+      if (video) video.style.display = "none";
+      return;
+    }
+    if (liveBtn) {
+      liveBtn.disabled = false;
+      liveBtn.textContent = "⏹ Stop";
+    }
+    if (video) video.style.display = "none";
+    if (overlay) overlay.style.display = "flex";
+    const poll = () => {
+      if (!overlay) return;
+      const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+      overlay.style.backgroundImage = `url("${snapUrl}")`;
+    };
+    poll();
+    record.snapshotPoll = setInterval(poll, 1000);
+  }
+
+  async startTileLiveWebRTC(cam, video, overlay, streamSrc = null) {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
 
@@ -297,6 +334,7 @@ export class LiveGrid {
     }
 
     const restoreSnapshotFallback = (reason) => {
+      if (record) record.isLive = false;
       const why = typeof reason === "string" ? reason : "unknown";
       console.warn(`Live tile ${cam.id} fell back to snapshots: ${why}`);
       if (overlay) overlay.dataset.liveFallbackReason = why;
@@ -317,6 +355,12 @@ export class LiveGrid {
         overlay.style.display = "flex";
         const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
         overlay.style.backgroundImage = `url("${snapUrl}")`;
+        if (record.snapshotPoll) clearInterval(record.snapshotPoll);
+        record.snapshotPoll = setInterval(() => {
+          if (!overlay) return;
+          const nextUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+          overlay.style.backgroundImage = `url("${nextUrl}")`;
+        }, 2000);
       }
     };
 
@@ -338,11 +382,16 @@ export class LiveGrid {
     if (video) {
       const hideOverlayWhenReady = () => {
         if (!video || (video.readyState < 2 && video.currentTime === 0)) return;
+        if (record && record.snapshotPoll) {
+          clearInterval(record.snapshotPoll);
+          record.snapshotPoll = null;
+        }
         if (overlay) overlay.style.display = "none";
         if (liveBtn) {
           liveBtn.disabled = false;
           liveBtn.textContent = "▶ Start Live";
         }
+        if (record) record.isLive = true;
         showClockIfNeeded();
       };
       video.onplaying = hideOverlayWhenReady;
@@ -400,7 +449,8 @@ export class LiveGrid {
       await pc.setLocalDescription(offer);
 
       // Prefer substream if available to conserve bandwidth
-      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(cam.id)}`);
+      const streamId = streamSrc || cam.id;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamId)}`);
 
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
@@ -490,7 +540,7 @@ export class LiveGrid {
         }
       };
 
-      record.isLive = true;
+      // Do not claim live success until media actually plays (H265/WebRTC may fail).
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
       restoreSnapshotFallback("exception");

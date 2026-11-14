@@ -232,6 +232,24 @@ def test_enrich_event_endpoint(client: TestClient) -> None:
     assert res_404.status_code == 404
 
 
+def test_enrich_event_endpoint_second_pass(client: TestClient) -> None:
+    """TR-12: Verify POST /api/events/{event_id}/enrich second pass returns enriched fields."""
+    sample_frames = [
+        "dog pet squatting elimination lawn",
+        "dog pet squatting elimination lawn",
+    ]
+    response = client.post(
+        "/api/events/event-2/enrich",
+        json={"frames": sample_frames},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "event-2"
+    # Enriched fields present in body
+    assert "metadata" in data
+    assert data["metadata"].get("sustained_elimination") is True
+
+
 def test_entity_photo_upload_and_delete(client: TestClient) -> None:
     """Verify entity photo upload and deletion with valid extensions."""
     file_bytes = b"fake-entity-photo-content"

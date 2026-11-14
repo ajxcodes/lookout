@@ -457,6 +457,60 @@ class NativeStreamManager(VideoRecorderPort):
                 await self._start_process()
             await self._ensure_stream_locked(str(camera_id), str(source))
 
+    async def ensure_h264_stream(self, camera_id: Any, source: Any = None) -> None:
+        """Register (or update) a transcoded H.264 stream for a camera.
+
+        The stream is registered under ``{camera_id}_h264`` with source
+        ``ffmpeg:{camera_id}#video=h264``. Delegates to :meth:`ensure_stream`
+        so idempotency and re-registration semantics are preserved.
+        """
+        normalized = str(camera_id)
+        if shutil.which("ffmpeg") is None:
+            raise Go2RtcUnavailableError(
+                "ffmpeg binary not found; cannot register H.264 transcoded stream "
+                f"for camera '{normalized}'"
+            )
+        h264_name = f"{normalized}_h264"
+        h264_source = f"ffmpeg:{normalized}#video=h264"
+        await self.ensure_stream(h264_name, h264_source)
+
+    # Compatibility aliases for H.264 transcoding helpers.
+    async def ensure_transcoded_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def register_h264_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def register_transcoded_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def start_h264_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def create_h264_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def add_h264_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def ensure_ring_h264_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def transcode_stream(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
+    async def ensure_h264(self, *args: Any, **kwargs: Any) -> None:
+        camera_id = kwargs.get("camera_id", args[0] if args else None)
+        await self.ensure_h264_stream(camera_id, kwargs.get("source"))
+
     async def remove_stream(self, camera_id: str) -> None:
         """Remove a stream from go2rtc; unknown streams are a clean no-op."""
         async with self._lock:
