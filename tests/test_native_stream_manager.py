@@ -101,8 +101,8 @@ def test_config_generation_contains_loopback_listeners(tmp_path: Any) -> None:
     text = (tmp_path / "go2rtc.yaml").read_text(encoding="utf-8")
 
     assert 'api:\n  listen: "127.0.0.1:' in text
-    assert 'rtsp:\n  listen: ""' in text
-    assert 'webrtc:\n  listen: ""' in text
+    assert 'rtsp:\n  listen: "127.0.0.1:18556"' in text
+    assert 'webrtc:\n  listen: ":8556"' in text
     assert 'streams:\n  "cam1": "rtsp://example/cam1"' in text
 
 
@@ -308,3 +308,291 @@ async def test_native_aware_recorder_routes_by_provider(tmp_path: Any) -> None:
     assert await recorder.capture_snapshot("rtsp") == "fallback:rtsp.jpg"
     assert wyze.calls == ["office"]
     assert ring.calls == ["door"]
+
+
+async def test_stream_codecs_parses_h264(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/streams" and request.method == "GET" and (
+            "src" in request.url.params
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "producers": [
+                        {"medias": ["video, recvonly, H264", "audio, recvonly, OPUS/48000/2"]}
+                    ]
+                },
+            )
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        assert await manager.stream_codecs("cam1") == ["H264"]
+        assert await manager.has_h264("cam1") is True
+    finally:
+        await client.aclose()
+
+
+async def test_stream_codecs_excludes_audio_dict_entries(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/streams" and "src" in request.url.params:
+            medias = [
+                {"media": "video", "codec_name": "h264"},
+                {"media": "audio", "codec_name": "opus"},
+                {"kind": "audio", "codec_name": "aac"},
+            ]
+            return httpx.Response(200, json={"producers": [{"codecs": medias}]})
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        assert await manager.stream_codecs("cam1") == ["H264"]
+    finally:
+        await client.aclose()
+
+
+async def test_has_h264_false_for_vp8_only_and_logs_warning(
+    tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/streams" and "src" in request.url.params:
+            return httpx.Response(200, json={"producers": [{"medias": ["video, recvonly, VP8"]}]})
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        with caplog.at_level("WARNING"):
+            assert await manager.has_h264("cam1") is False
+        assert "cam1" in caplog.text and "VP8" in caplog.text
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_stream_reregisters_when_go2rtc_dropped_it(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    try:
+        await manager.start()
+        await manager.ensure_stream("cam1", "rtsp://example/cam1")
+        assert len(api.puts) == 1
+        api.streams.clear()
+        await manager.ensure_stream("cam1", "rtsp://example/cam1")
+        assert len(api.puts) == 2
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_h264_transcode_registers_ffmpeg_for_h265_only(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+    put_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT" and request.url.path == "/api/streams":
+            put_urls.append(str(request.url))
+        if (
+            request.method == "GET"
+            and request.url.path == "/api/streams"
+            and "src" in request.url.params
+        ):
+            return httpx.Response(200, json={"producers": [{"medias": ["video, recvonly, H265"]}]})
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        await manager.ensure_stream("ring_cam", "ring://cam?refresh_token=secret")
+        changed = await manager.ensure_h264_transcode("ring_cam")
+        assert changed is True
+        assert any("name=ring_cam_raw" in u for u in put_urls)
+        assert any(
+            "name=ring_cam&" in u
+            and (
+                "ffmpeg%3Aring_cam_raw%23video%3Dh264%23raw%3D-probesize+5000000+-analyzeduration+5000000"
+                in u
+                or "ffmpeg:ring_cam_raw#video=h264#raw=-probesize 5000000 -analyzeduration 5000000"
+                in u
+            )
+            for u in put_urls
+        )
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_h264_transcode_registers_ffmpeg_on_cold_start(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+    put_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT" and request.url.path == "/api/streams":
+            put_urls.append(str(request.url))
+        if (
+            request.method == "GET"
+            and request.url.path == "/api/streams"
+            and "src" in request.url.params
+        ):
+            return httpx.Response(200, json={"producers": []})
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        await manager.ensure_stream("ring_cam", "ring://cam?refresh_token=secret")
+        changed = await manager.ensure_h264_transcode("ring_cam")
+        assert changed is True
+        assert any("name=ring_cam_raw" in u for u in put_urls)
+        assert any(
+            "ffmpeg" in u
+            and "ring_cam_raw" in u
+            and "video%3Dh264" in u
+            and "probesize" in u
+            and "analyzeduration" in u
+            for u in put_urls
+        )
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_h264_transcode_skips_when_h264_present(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    original = api.handler
+    put_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT" and request.url.path == "/api/streams":
+            put_urls.append(str(request.url))
+        if (
+            request.method == "GET"
+            and request.url.path == "/api/streams"
+            and "src" in request.url.params
+        ):
+            return httpx.Response(200, json={"producers": [{"medias": ["video, recvonly, H264"]}]})
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        await manager.ensure_stream("ring_cam", "ring://cam?refresh_token=secret")
+        put_urls.clear()
+        changed = await manager.ensure_h264_transcode("ring_cam")
+        assert changed is False
+        assert put_urls == []
+    finally:
+        await client.aclose()
+
+
+def test_write_config_sets_fixed_webrtc_port_and_candidate(tmp_path: Any) -> None:
+    manager = NativeStreamManager(
+        runtime_dir=tmp_path / "rt",
+        webrtc_port=8556,
+        webrtc_candidate="192.168.1.3:8556",
+    )
+    manager._write_config()
+    cfg = (tmp_path / "rt" / "go2rtc.yaml").read_text(encoding="utf-8")
+    assert '  listen: ":8556"' in cfg
+    assert '    - "192.168.1.3:8556"' in cfg
+    assert '    - "stun:8556"' in cfg
+
+
+async def test_ensure_stream_replaces_snapshot_source_with_live_source(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    snapshot_src = "ring:?camera_id=123&device_id=abc&refresh_token=tok&snapshot"
+    live_src = "ring:?camera_id=123&device_id=abc&refresh_token=tok"
+    try:
+        await manager.start()
+        await manager.ensure_stream("ring_front", snapshot_src)
+        assert manager.streams["ring_front"] == snapshot_src
+        assert api.streams["ring_front"] == snapshot_src
+
+        await manager.ensure_stream("ring_front", live_src)
+        assert manager.streams["ring_front"] == live_src
+        assert api.streams["ring_front"] == live_src
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_stream_registers_exec_source_via_config_and_restart(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    starts = 0
+    exec_src = "exec:python3 -m lookout.adapters.ring_bridge --camera-id 123#rtsp"
+    original_factory = manager._process_factory
+
+    async def tracking_factory(binary: str, config_path: Any) -> Any:
+        nonlocal starts
+        starts += 1
+        config_text = config_path.read_text(encoding="utf-8")
+        if '"front_door":' in config_text:
+            api.streams["front_door"] = exec_src
+        assert original_factory is not None
+        return await original_factory(binary, config_path)
+
+    manager._process_factory = tracking_factory
+    try:
+        await manager.start()
+        assert starts == 1
+
+        await manager.ensure_stream("front_door", exec_src)
+        assert starts == 2
+        assert api.puts == []
+        assert manager.streams["front_door"] == exec_src
+        config_text = (manager.runtime_dir / "go2rtc.yaml").read_text(encoding="utf-8")
+        assert f'"front_door": "{exec_src}"' in config_text
+    finally:
+        await manager.stop()
+        await client.aclose()
+
+
+async def test_prepopulated_exec_streams_are_not_restarted_on_ensure_stream(tmp_path: Any) -> None:
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    starts = 0
+    front_src = "exec:python3 -m lookout.adapters.ring_bridge --camera-id 123#rtsp"
+    back_src = "exec:python3 -m lookout.adapters.ring_bridge --camera-id 456#rtsp"
+    original_factory = manager._process_factory
+
+    async def tracking_factory(binary: str, config_path: Any) -> Any:
+        nonlocal starts
+        starts += 1
+        config_text = config_path.read_text(encoding="utf-8")
+        if '"front_door":' in config_text:
+            api.streams["front_door"] = front_src
+        if '"backyard":' in config_text:
+            api.streams["backyard"] = back_src
+        assert original_factory is not None
+        return await original_factory(binary, config_path)
+
+    manager._process_factory = tracking_factory
+    manager.streams["front_door"] = front_src
+    manager.streams["backyard"] = back_src
+    try:
+        await manager.start()
+        assert starts == 1
+
+        await manager.ensure_stream("front_door", front_src)
+        await manager.ensure_stream("backyard", back_src)
+        assert starts == 1
+        assert api.puts == []
+    finally:
+        await manager.stop()
+        await client.aclose()

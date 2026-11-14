@@ -296,7 +296,11 @@ export class LiveGrid {
       overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
 
-    const restoreSnapshotFallback = () => {
+    const restoreSnapshotFallback = (reason) => {
+      const why = typeof reason === "string" ? reason : "unknown";
+      console.warn(`Live tile ${cam.id} fell back to snapshots: ${why}`);
+      if (overlay) overlay.dataset.liveFallbackReason = why;
+      if (video) video.dataset.liveFallbackReason = why;
       if (record.clockInterval) {
         clearInterval(record.clockInterval);
         record.clockInterval = null;
@@ -348,7 +352,7 @@ export class LiveGrid {
           hideOverlayWhenReady();
         }
       };
-      video.onerror = restoreSnapshotFallback;
+      video.onerror = () => restoreSnapshotFallback("video.onerror");
     }
 
     try {
@@ -372,11 +376,25 @@ export class LiveGrid {
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          restoreSnapshotFallback();
+          restoreSnapshotFallback(`pc ${pc.connectionState}`);
         }
       };
 
-      pc.addTransceiver("video", { direction: "recvonly" });
+      const videoTransceiver = pc.addTransceiver("video", { direction: "recvonly" });
+      try {
+        const caps = window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities
+          ? RTCRtpReceiver.getCapabilities("video")
+          : null;
+        if (caps && caps.codecs && videoTransceiver.setCodecPreferences) {
+          const h264 = caps.codecs.filter((c) => /H264/i.test(c.mimeType));
+          if (h264.length > 0) {
+            const rest = caps.codecs.filter((c) => !/H264/i.test(c.mimeType));
+            videoTransceiver.setCodecPreferences([...h264, ...rest]);
+          }
+        }
+      } catch (codecErr) {
+        console.warn("H264 codec preference unavailable:", codecErr);
+      }
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -387,9 +405,11 @@ export class LiveGrid {
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
 
+      let timedOut = false;
       const timeoutId = setTimeout(() => {
+        timedOut = true;
         try { ws.close(); } catch {}
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("15s timeout");
       }, 15000);
 
       const iceCandidates = [];
@@ -449,11 +469,12 @@ export class LiveGrid {
 
       ws.onerror = (err) => {
         clearTimeout(timeoutId);
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("ws error");
       };
 
       ws.onclose = () => {
         clearTimeout(timeoutId);
+        if (!hasRemote && !timedOut) restoreSnapshotFallback("ws close");
       };
 
       pc.onicecandidate = (e) => {
@@ -472,7 +493,7 @@ export class LiveGrid {
       record.isLive = true;
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
-      restoreSnapshotFallback();
+      restoreSnapshotFallback("exception");
     }
   }
 
