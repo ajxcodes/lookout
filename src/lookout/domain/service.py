@@ -242,10 +242,15 @@ class EventProcessingService(EventIngressPort):
         else:
             threat_level = ThreatLevel.INFO
 
+        event_ts = self._parse_event_timestamp(
+            metadata.get("timestamp")
+            or (payload.get("timestamp") if isinstance(payload, dict) else None)
+        )
+
         event = CameraEvent(
             id=str(uuid4()),
             camera_id=camera_id,
-            timestamp=datetime.now(UTC),
+            timestamp=event_ts,
             category=category,
             threat_level=threat_level,
             summary=summary,
@@ -262,6 +267,39 @@ class EventProcessingService(EventIngressPort):
         )
 
         return await self.process_event(event)
+
+    @staticmethod
+    def _parse_event_timestamp(raw_ts: Any) -> datetime:
+        """Normalize an optional ISO string, epoch number, or datetime to UTC datetime."""
+        if raw_ts is None or isinstance(raw_ts, bool):
+            return datetime.now(UTC)
+        if isinstance(raw_ts, datetime):
+            return raw_ts.replace(tzinfo=UTC) if raw_ts.tzinfo is None else raw_ts.astimezone(UTC)
+        if isinstance(raw_ts, (int, float)):
+            try:
+                num = float(raw_ts)
+                if abs(num) >= 1e12:
+                    num /= 1000.0
+                return datetime.fromtimestamp(num, tz=UTC)
+            except (ValueError, OSError, OverflowError):
+                return datetime.now(UTC)
+        if isinstance(raw_ts, str):
+            stripped = raw_ts.strip()
+            if not stripped:
+                return datetime.now(UTC)
+            try:
+                dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+                return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+            except ValueError:
+                pass
+            try:
+                num = float(stripped)
+                if abs(num) >= 1e12:
+                    num /= 1000.0
+                return datetime.fromtimestamp(num, tz=UTC)
+            except (ValueError, OSError, OverflowError):
+                pass
+        return datetime.now(UTC)
 
     async def process_event(self, event: CameraEvent) -> CameraEvent:
         """Persist event to repository and dispatch notification if threshold met."""

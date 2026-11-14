@@ -102,6 +102,18 @@ export class LivePlayer {
     }
   }
 
+  updateCameraSnapshot(cameraId, snapshotUri = null) {
+    if (!this.activeCamera || this.activeCamera.id !== cameraId) return;
+    const rawUrl = snapshotUri || `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`;
+    const snapUrl = resolveUrl(rawUrl.includes("?") ? rawUrl : `${rawUrl}?t=${Date.now()}`);
+    if (this.video) {
+      this.video.poster = snapUrl;
+    }
+    if (this.overlay && !this.isLive) {
+      this.overlay.style.backgroundImage = `url("${snapUrl}")`;
+    }
+  }
+
   async startLive() {
     if (!this.activeCamera) return;
 

@@ -575,6 +575,19 @@ export class LiveGrid {
     }
   }
 
+  updateCameraSnapshot(cameraId, snapshotUri = null) {
+    const record = this.streamPlayers.get(cameraId);
+    if (!record) return;
+    const rawUrl = snapshotUri || `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`;
+    const snapUrl = resolveUrl(rawUrl.includes("?") ? rawUrl : `${rawUrl}?t=${Date.now()}`);
+    if (record.video) {
+      record.video.poster = snapUrl;
+    }
+    if (record.overlay && !record.isLive) {
+      record.overlay.style.backgroundImage = `url("${snapUrl}")`;
+    }
+  }
+
   cleanup() {
     this.streamPlayers.forEach((record) => {
       if (record.clockInterval) {

@@ -480,3 +480,69 @@ async def test_enrichment_failure_keeps_original_notification(tmp_path: Any) -> 
         await ingestor._record_clip_background("backyard", event, duration=5.0)
 
     assert len(ntfy_calls) == 1
+
+
+async def test_mqtt_resolves_native_stream_manager_for_native_camera_clip(
+    tmp_path: Path,
+) -> None:
+    """TR-7: Verify MqttEventIngestor resolves NativeStreamManager.api_url and updates snapshot."""
+    cfg = LookoutConfig(
+        cameras=[
+            CameraConfig(
+                id="native_wyze",
+                name="Native Wyze",
+                stream_url="wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x",
+                native_provider="wyze",
+            )
+        ],
+        storage={"base_path": str(tmp_path), "database_path": str(tmp_path / "db.sqlite")},
+    )
+    cfg.go2rtc.api_url = "http://127.0.0.1:1984"
+
+    class FakeNativeManager:
+        api_url = "http://127.0.0.1:11984"
+        streams = {"native_wyze": "wyze://10.0.0.2"}
+
+    clip_ready_events: list[CameraEvent] = []
+
+    async def _on_clip(evt: CameraEvent) -> None:
+        clip_ready_events.append(evt)
+
+    ingestor = MqttEventIngestor(
+        config=cfg,
+        ingest=AsyncMock(),
+        on_clip_ready=_on_clip,
+        stream_manager=FakeNativeManager(),
+    )
+
+    # 1. Verify _save_snapshot updates both event snapshot and top-level camera snapshot
+    snap_uri = ingestor._save_snapshot("native_wyze", "motion", JPEG)
+    assert snap_uri.startswith("/media/events/native_wyze_motion_")
+    top_snap = tmp_path / "snapshots" / "native_wyze.jpg"
+    assert top_snap.is_file()
+    assert top_snap.read_bytes() == JPEG
+
+    # 2. Verify _go2rtc_frame and _record_clip_background target port 11984
+    requested_urls: list[str] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/api/frame.jpeg":
+            return httpx.Response(200, content=JPEG)
+        return httpx.Response(200, content=b"\x00" * 2048)
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs: Any) -> httpx.AsyncClient:
+        return real_client(transport=httpx.MockTransport(mock_handler))
+
+    event = _event("native_wyze")
+    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", side_effect=client_factory):
+        frame = await ingestor._go2rtc_frame("native_wyze")
+        await ingestor._record_clip_background("native_wyze", event, duration=10.0)
+
+    assert frame == JPEG
+    assert any("127.0.0.1:11984/api/frame.jpeg" in u for u in requested_urls)
+    assert any("127.0.0.1:11984/api/stream.mp4" in u for u in requested_urls)
+    assert len(clip_ready_events) == 1
+    assert event.media_uri == f"/media/events/native_wyze_{event.id}.mp4"
