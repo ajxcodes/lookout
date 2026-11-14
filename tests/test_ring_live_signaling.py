@@ -198,5 +198,3 @@ def test_redact_source_redacts_bridge_refresh_token() -> None:
     assert redacted is not None
     assert "SECRET123" not in redacted
     assert "--refresh-token [redacted]" in redacted
-
-

@@ -316,8 +316,10 @@ async def test_stream_codecs_parses_h264(tmp_path: Any) -> None:
     original = api.handler
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/streams" and request.method == "GET" and (
-            "src" in request.url.params
+        if (
+            request.url.path == "/api/streams"
+            and request.method == "GET"
+            and ("src" in request.url.params)
         ):
             return httpx.Response(
                 200,

@@ -174,11 +174,13 @@ class NativeStreamManager(VideoRecorderPort):
             candidate = self.webrtc_candidate
             if ":" not in candidate:
                 candidate = f"{candidate}:{self.webrtc_port}"
-            lines.extend([
-                "  candidates:",
-                f'    - "{candidate}"',
-                f'    - "stun:{self.webrtc_port}"',
-            ])
+            lines.extend(
+                [
+                    "  candidates:",
+                    f'    - "{candidate}"',
+                    f'    - "stun:{self.webrtc_port}"',
+                ]
+            )
         lines.append("streams:")
         if self.streams:
             for name, source in self.streams.items():
