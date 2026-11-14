@@ -134,11 +134,10 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         ]
         for snap_dir in event_snap_dirs:
             if snap_dir.is_dir():
-                candidates.extend(
-                    p for p in snap_dir.glob(f"{camera_id}_*.jpg") if p.is_file()
-                )
+                candidates.extend(p for p in snap_dir.glob(f"{camera_id}_*.jpg") if p.is_file())
 
         if candidates:
+
             def _snap_sort_key(p: Path) -> tuple[float, str]:
                 try:
                     return (p.stat().st_mtime, p.name)

@@ -383,5 +383,3 @@ async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse
     assert "clip_frame_samples" not in saved.metadata
     assert saved.metadata.get("clip_frame_samples_count") == 1
     assert not q.empty()
-
-

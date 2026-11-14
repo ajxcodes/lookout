@@ -129,9 +129,7 @@ class NativeEventPoller:
             return Path(base_path)
         return None
 
-    def _persist_snapshot_bytes(
-        self, camera_id: str, kind: str, content: bytes
-    ) -> str | None:
+    def _persist_snapshot_bytes(self, camera_id: str, kind: str, content: bytes) -> str | None:
         base_path = self._storage_base_path()
         if base_path is None or not content:
             return None
@@ -271,9 +269,7 @@ class NativeEventPoller:
     ) -> None:
         """Record a background MP4 clip (Pass 2) and invoke on_clip_ready."""
         event_id = (
-            event.get("id")
-            if isinstance(event, dict)
-            else getattr(event, "id", None)
+            event.get("id") if isinstance(event, dict) else getattr(event, "id", None)
         ) or str(uuid.uuid4())
         clip_bytes: bytes | None = None
         temp_clip_path: Path | None = None
