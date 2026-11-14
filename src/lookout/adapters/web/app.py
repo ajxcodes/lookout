@@ -123,16 +123,23 @@ def _native_provider(app: FastAPI, camera_id: str) -> str | None:
     return None
 
 
+def _base_camera_id(camera_id: str | None) -> str | None:
+    if not camera_id:
+        return camera_id
+    return camera_id[:-5] if camera_id.endswith("_h264") else camera_id
+
+
 def _resolve_go2rtc_target(app: FastAPI, camera_id: str | None) -> str:
     """Pick the go2rtc API base URL that holds the stream for ``camera_id``.
 
     Native-managed cameras live in the embedded go2rtc; everything else uses the
     configured ``go2rtc.api_url``.
     """
+    base_id = _base_camera_id(camera_id)
     manager = getattr(app.state, "native_stream_manager", None)
-    if camera_id and manager is not None and getattr(manager, "api_url", None):
+    if base_id and manager is not None and getattr(manager, "api_url", None):
         streams = getattr(manager, "streams", None) or {}
-        if camera_id in streams or _native_provider(app, camera_id):
+        if camera_id in streams or base_id in streams or _native_provider(app, base_id):
             return str(manager.api_url).rstrip("/")
     cfg = getattr(app.state, "config", None)
     if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
@@ -146,19 +153,20 @@ async def _ensure_native_stream(app: FastAPI, camera_id: str | None) -> bool:
     Returns True when the camera is native-managed (and now registered), False
     when it is not native. Raises when the source cannot be resolved/registered.
     """
-    if not camera_id:
+    base_id = _base_camera_id(camera_id)
+    if not base_id:
         return False
-    provider = _native_provider(app, camera_id)
+    provider = _native_provider(app, base_id)
     manager = getattr(app.state, "native_stream_manager", None)
     if provider is None or manager is None:
         return False
     adapter = getattr(app.state, f"{provider}_native", None)
     if adapter is None:
         return False
-    source = adapter._resolve_source(camera_id)
-    await manager.ensure_stream(camera_id, source)
+    source = adapter._resolve_source(base_id)
+    await manager.ensure_stream(base_id, source)
     if provider == "ring" and hasattr(manager, "ensure_h264_transcode"):
-        await manager.ensure_h264_transcode(camera_id)
+        await manager.ensure_h264_transcode(base_id)
     return True
 
 
