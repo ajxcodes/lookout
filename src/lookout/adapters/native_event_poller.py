@@ -273,6 +273,7 @@ class NativeEventPoller:
         ) or str(uuid.uuid4())
         clip_bytes: bytes | None = None
         temp_clip_path: Path | None = None
+        clip_path: Path | None = None
 
         try:
             manager = self._manager_for(provider)
@@ -301,10 +302,6 @@ class NativeEventPoller:
             clip_path = events_dir / name
             clip_path.write_bytes(clip_bytes)
 
-            if temp_clip_path is not None and temp_clip_path != clip_path:
-                with contextlib.suppress(OSError):
-                    temp_clip_path.unlink(missing_ok=True)
-
             media_uri = f"/media/events/{name}"
             if isinstance(event, dict):
                 event["media_uri"] = media_uri
@@ -320,3 +317,7 @@ class NativeEventPoller:
                 provider,
                 exc,
             )
+        finally:
+            if temp_clip_path is not None and temp_clip_path != clip_path:
+                with contextlib.suppress(OSError):
+                    temp_clip_path.unlink(missing_ok=True)

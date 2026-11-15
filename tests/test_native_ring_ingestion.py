@@ -156,7 +156,7 @@ async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
 
     assert path.endswith(".jpg")
     assert Path(path).read_bytes() == JPEG
-    assert manager.ensured[0][0] == "front_door"
+    assert manager.ensured[0][0] == "front_door_snapshot"
     assert manager.ensured[0][1].endswith("&snapshot")
 
 
