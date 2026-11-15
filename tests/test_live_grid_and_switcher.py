@@ -157,3 +157,25 @@ def test_live_grid_prefers_h264_and_records_fallback_reason() -> None:
     assert "H264" in js
     assert "liveFallbackReason" in js
     assert "restoreSnapshotFallback" in js
+
+
+def test_live_grid_and_timeline_order_latest_snapshots_first() -> None:
+    """TR-11: Verify timeline sorts descending by timestamp and app updates snapshot overlays."""
+    timeline_js = Path("src/lookout/adapters/web/static/js/components/timeline.js").read_text(
+        encoding="utf-8"
+    )
+    live_grid_js = Path("src/lookout/adapters/web/static/js/components/live-grid.js").read_text(
+        encoding="utf-8"
+    )
+    live_player_js = Path("src/lookout/adapters/web/static/js/components/live-player.js").read_text(
+        encoding="utf-8"
+    )
+    app_js = Path("src/lookout/adapters/web/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "new Date(b.timestamp) - new Date(a.timestamp)" in timeline_js
+    assert "updateCameraSnapshot" in live_grid_js
+    assert "updateCameraSnapshot" in live_player_js
+    assert "this.liveGrid.updateCameraSnapshot" in app_js
+    assert "this.livePlayer.updateCameraSnapshot" in app_js
+    assert "this.events = this.timeline.events" in app_js
+    assert "this.eventPlayer.loadEvent(eventData)" in app_js

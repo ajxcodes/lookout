@@ -177,11 +177,7 @@ export class LiveGrid {
         liveBtn.type = "button";
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
-            this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_h264`);
-          } else {
-            this.startTileLiveWebRTC(cam, video, overlay);
-          }
+          this.startTileLiveWebRTC(cam, video, overlay);
         });
         overlay.appendChild(liveBtn);
       }
@@ -572,6 +568,19 @@ export class LiveGrid {
     const record = this.streamPlayers.get(cameraId);
     if (record && record.video && record.isLive && this.isTabVisible) {
       record.video.play().catch(() => {});
+    }
+  }
+
+  updateCameraSnapshot(cameraId, snapshotUri = null) {
+    const record = this.streamPlayers.get(cameraId);
+    if (!record) return;
+    const rawUrl = snapshotUri || `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`;
+    const snapUrl = resolveUrl(rawUrl.includes("?") ? rawUrl : `${rawUrl}?t=${Date.now()}`);
+    if (record.video) {
+      record.video.poster = snapUrl;
+    }
+    if (record.overlay && !record.isLive) {
+      record.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
   }
 

@@ -123,16 +123,23 @@ def _native_provider(app: FastAPI, camera_id: str) -> str | None:
     return None
 
 
+def _base_camera_id(camera_id: str | None) -> str | None:
+    if not camera_id:
+        return camera_id
+    return camera_id[:-5] if camera_id.endswith("_h264") else camera_id
+
+
 def _resolve_go2rtc_target(app: FastAPI, camera_id: str | None) -> str:
     """Pick the go2rtc API base URL that holds the stream for ``camera_id``.
 
     Native-managed cameras live in the embedded go2rtc; everything else uses the
     configured ``go2rtc.api_url``.
     """
+    base_id = _base_camera_id(camera_id)
     manager = getattr(app.state, "native_stream_manager", None)
-    if camera_id and manager is not None and getattr(manager, "api_url", None):
+    if base_id and manager is not None and getattr(manager, "api_url", None):
         streams = getattr(manager, "streams", None) or {}
-        if camera_id in streams or _native_provider(app, camera_id):
+        if camera_id in streams or base_id in streams or _native_provider(app, base_id):
             return str(manager.api_url).rstrip("/")
     cfg = getattr(app.state, "config", None)
     if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
@@ -146,19 +153,20 @@ async def _ensure_native_stream(app: FastAPI, camera_id: str | None) -> bool:
     Returns True when the camera is native-managed (and now registered), False
     when it is not native. Raises when the source cannot be resolved/registered.
     """
-    if not camera_id:
+    base_id = _base_camera_id(camera_id)
+    if not base_id:
         return False
-    provider = _native_provider(app, camera_id)
+    provider = _native_provider(app, base_id)
     manager = getattr(app.state, "native_stream_manager", None)
     if provider is None or manager is None:
         return False
     adapter = getattr(app.state, f"{provider}_native", None)
     if adapter is None:
         return False
-    source = adapter._resolve_source(camera_id)
-    await manager.ensure_stream(camera_id, source)
+    source = adapter._resolve_source(base_id)
+    await manager.ensure_stream(base_id, source)
     if provider == "ring" and hasattr(manager, "ensure_h264_transcode"):
-        await manager.ensure_h264_transcode(camera_id)
+        await manager.ensure_h264_transcode(base_id)
     return True
 
 
@@ -449,6 +457,11 @@ def create_app(
                 ring=getattr(app.state, "ring_native", None),
                 ingest=active_event_service.ingest_raw_event,
                 on_event=_broadcast_event,
+                on_clip_ready=_on_clip_ready,
+                stream_manager=native_manager,
+                record_clip=True,
+                clip_duration=10.0,
+                storage_base_path=media_dir,
             )
             app.state.native_event_poller = native_poller
             native_poller.start()
@@ -523,14 +536,16 @@ def create_app(
 
     async def _on_clip_ready(evt: Any) -> None:
         try:
+            frame_samples: list[Any] = []
+            if isinstance(getattr(evt, "metadata", None), dict):
+                frame_samples = evt.metadata.pop("clip_frame_samples", None) or []
+                if frame_samples:
+                    evt.metadata["clip_frame_samples_count"] = len(frame_samples)
             if active_repo is not None:
                 await active_repo.save(evt)
             await app.state.broadcast_hub.broadcast_event(evt)
 
             updated = evt
-            frame_samples: list[Any] = []
-            if isinstance(getattr(evt, "metadata", None), dict):
-                frame_samples = evt.metadata.get("clip_frame_samples") or []
             enrichment_succeeded = False
             if active_event_service is not None:
                 try:
@@ -539,6 +554,10 @@ def create_app(
                         evt_id, frame_samples
                     )
                     if enriched is not None:
+                        if enriched.media_uri is None and getattr(evt, "media_uri", None):
+                            enriched.media_uri = evt.media_uri
+                        if isinstance(getattr(enriched, "metadata", None), dict):
+                            enriched.metadata.pop("clip_frame_samples", None)
                         updated = enriched
                         enrichment_succeeded = True
                         if active_repo is not None:
@@ -575,14 +594,6 @@ def create_app(
         except Exception as clip_err:  # pragma: no cover - defensive
             logger.warning("Clip-ready handling failed: %s", clip_err)
 
-    if active_config is not None and active_config.mqtt.enabled:
-        app.state.mqtt_ingestor = MqttEventIngestor(
-            active_config,
-            ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
-            on_event=_broadcast_event,
-            on_clip_ready=_on_clip_ready,
-        )
-
     # Attach application state
     app.state.config = active_config
     app.state.config_path = resolved_config_path
@@ -605,6 +616,16 @@ def create_app(
     # Native ingestion: one embedded go2rtc manager shared by all native adapters.
     native_manager = NativeStreamManager(config=active_config)
     app.state.native_stream_manager = native_manager
+
+    if active_config is not None and active_config.mqtt.enabled:
+        app.state.mqtt_ingestor = MqttEventIngestor(
+            active_config,
+            ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
+            on_event=_broadcast_event,
+            on_clip_ready=_on_clip_ready,
+            stream_manager=native_manager,
+        )
+
     wyze_native_config = active_config.wyze if active_config is not None else WyzeConfig()
     ring_native_config = active_config.ring if active_config is not None else RingConfig()
     app.state.wyze_native = WyzeNativeAdapter(
@@ -846,6 +867,23 @@ def create_app(
         event = await svc.ingest_raw_event(camera_id, payload)
         hub: SSEBroadcastHub = app.state.broadcast_hub
         await hub.broadcast_event(event)
+        if event is not None and getattr(event, "media_uri", None) is None:
+            ingestor = getattr(app.state, "mqtt_ingestor", None)
+            if ingestor is not None and hasattr(ingestor, "_record_clip_background"):
+                asyncio.create_task(
+                    ingestor._record_clip_background(camera_id, event, duration=10.0)
+                )
+            elif getattr(app.state, "config", None) is not None:
+                clip_ingestor = MqttEventIngestor(
+                    app.state.config,
+                    ingest=svc.ingest_raw_event,
+                    on_event=_broadcast_event,
+                    on_clip_ready=_on_clip_ready,
+                    stream_manager=getattr(app.state, "native_stream_manager", None),
+                )
+                asyncio.create_task(
+                    clip_ingestor._record_clip_background(camera_id, event, duration=10.0)
+                )
         return {"status": "ok", "event_id": event.id, "id": event.id}
 
     # WebRTC live streaming WebSocket and HTTP signaling proxies to go2rtc

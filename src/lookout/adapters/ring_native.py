@@ -403,8 +403,9 @@ class RingNativeAdapter(VideoRecorderPort):
         camera_id = str(camera_id)
         source = self._resolve_source(camera_id, snapshot=True)
         manager = self._require_stream_manager()
-        await manager.ensure_stream(camera_id, source)
-        content = await manager.frame(camera_id)
+        snap_stream_id = f"{camera_id}_snapshot"
+        await manager.ensure_stream(snap_stream_id, source)
+        content = await manager.frame(snap_stream_id)
         if not content.startswith(_JPEG_MAGIC):
             raise MediaCaptureError(
                 f"Snapshot for '{camera_id}' is not a JPEG ({len(content)} bytes)"

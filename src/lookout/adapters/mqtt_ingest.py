@@ -168,12 +168,14 @@ class MqttEventIngestor:
         on_event: Callable[[CameraEvent], Awaitable[None]] | None = None,
         on_clip_ready: Callable[[CameraEvent], Awaitable[None]] | None = None,
         client_factory: Callable[[], MiniMqttClient] | None = None,
+        stream_manager: Any = None,
     ) -> None:
         self.config = config
         self._ingest = ingest
         self._on_event = on_event
         self._on_clip_ready = on_clip_ready
         self._client_factory = client_factory or self._default_client
+        self.stream_manager = stream_manager
         self._ring_snapshots: dict[str, bytes] = {}
         self._frame_buffers: dict[str, collections.deque[bytes]] = {}
         self._pretrigger_frames: dict[str, list[bytes]] = {}
@@ -331,6 +333,21 @@ class MqttEventIngestor:
         if event is not None and self._on_clip_ready is not None:
             asyncio.create_task(self._record_clip_background(cam.id, event, duration=10.0))
 
+    def _resolve_go2rtc_api_url(self, camera_id: str) -> str:
+        manager = self.stream_manager
+        if manager is not None:
+            cam = self._camera_for(camera_id)
+            provider = str(getattr(cam, "native_provider", "") or "").lower()
+            streams = getattr(manager, "streams", None) or {}
+            if camera_id in streams or provider in ("wyze", "ring"):
+                api_url = getattr(manager, "api_url", None)
+                if api_url:
+                    return str(api_url).rstrip("/")
+                api_port = getattr(manager, "api_port", None)
+                if api_port:
+                    return f"http://127.0.0.1:{int(api_port)}"
+        return self.config.go2rtc.api_url.rstrip("/")
+
     async def _record_clip_background(
         self, camera_id: str, event: CameraEvent, duration: float = 10.0
     ) -> None:
@@ -341,7 +358,7 @@ class MqttEventIngestor:
                 pre_frames = self.drain_pretrigger_frames(camera_id, max_frames=5)
             except Exception:
                 pre_frames = []
-        base = self.config.go2rtc.api_url.rstrip("/")
+        base = self._resolve_go2rtc_api_url(camera_id)
         name = f"{camera_id}_{event.id}.mp4"
         directory = Path(self.config.storage.base_path) / "events"
         try:
@@ -463,7 +480,7 @@ class MqttEventIngestor:
             logger.warning("Background clip recording error for %s: %s", camera_id, exc)
 
     async def _go2rtc_frame(self, camera_id: str) -> bytes | None:
-        base = self.config.go2rtc.api_url.rstrip("/")
+        base = self._resolve_go2rtc_api_url(camera_id)
         cam = self._camera_for(camera_id)
         max_attempts = 2 if (cam and cam.mqtt_id) else 1
         for attempt in range(1, max_attempts + 1):
@@ -564,9 +581,13 @@ class MqttEventIngestor:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _save_snapshot(self, camera_id: str, kind: str, image: bytes) -> str:
-        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         name = f"{camera_id}_{kind}_{stamp}.jpg"
-        directory = Path(self.config.storage.base_path).joinpath(*_EVENT_SNAPSHOT_DIR)
+        base_path = Path(self.config.storage.base_path)
+        directory = base_path.joinpath(*_EVENT_SNAPSHOT_DIR)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / name).write_bytes(image)
+        cam_snap_dir = base_path / "snapshots"
+        cam_snap_dir.mkdir(parents=True, exist_ok=True)
+        (cam_snap_dir / f"{camera_id}.jpg").write_bytes(image)
         return f"/media/events/{name}"

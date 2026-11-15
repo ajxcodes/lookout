@@ -122,11 +122,11 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
                 except Exception:  # noqa: BLE001 - fall through to next source
                     pass
 
-        # 1. Check for cached motion snapshot on disk
-        if snapshot_file.exists():
-            return FileResponse(snapshot_file, media_type="image/jpeg")
+        # 1. Check for newest cached motion or recorded event snapshot on disk (by mtime)
+        candidates: list[Path] = []
+        if snapshot_file.is_file():
+            candidates.append(snapshot_file)
 
-        # 2. Check for latest recorded event snapshot on disk before hitting live stream
         event_snap_dirs = [
             base_path / "snapshots" / "events",
             Path("/snapshots/events"),
@@ -134,9 +134,22 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         ]
         for snap_dir in event_snap_dirs:
             if snap_dir.is_dir():
-                matches = sorted(snap_dir.glob(f"{camera_id}_*.jpg"))
-                if matches:
-                    return FileResponse(matches[-1], media_type="image/jpeg")
+                candidates.extend(p for p in snap_dir.glob(f"{camera_id}_*.jpg") if p.is_file())
+
+        if candidates:
+
+            def _snap_sort_key(p: Path) -> tuple[float, str]:
+                try:
+                    return (p.stat().st_mtime, p.name)
+                except OSError:
+                    return (0.0, p.name)
+
+            newest = max(candidates, key=_snap_sort_key)
+            return FileResponse(
+                newest,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         # 3. Dynamic live frame from go2rtc (only for continuous live_rtc streams)
         if not is_on_demand:
@@ -305,6 +318,29 @@ async def camera_snapshot(camera_id: str, request: Request) -> dict[str, Any]:
         if status is not None:
             raise HTTPException(status_code=int(status), detail=str(exc)) from None
         raise HTTPException(status_code=500, detail=str(exc)) from None
+    if config is not None and getattr(config, "storage", None) is not None:
+        try:
+            snap_src: Path | None = None
+            if isinstance(res, (str, Path)):
+                cand = Path(res)
+                if cand.is_file():
+                    snap_src = cand
+            elif isinstance(res, dict):
+                raw_path = res.get("path") or res.get("snapshot_uri")
+                if isinstance(raw_path, str):
+                    cand = Path(raw_path)
+                    if cand.is_file():
+                        snap_src = cand
+            if snap_src is not None:
+                data = snap_src.read_bytes()
+                if data:
+                    dest_dir = Path(config.storage.base_path) / "snapshots"
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    dest_file = dest_dir / f"{camera_id}.jpg"
+                    if snap_src.resolve() != dest_file.resolve():
+                        dest_file.write_bytes(data)
+        except Exception:  # noqa: BLE001 - best-effort cache update
+            pass
     return {"status": "ok", "result": res}
 
 
