@@ -81,3 +81,37 @@ async def test_audio_classifier_silence_handling() -> None:
 
     assert label == "silence"
     assert confidence >= 0.9
+
+
+async def test_enrich_event_from_media_yamnet_audio_classification() -> None:
+    """TR-12: Verify Pass 2 YAMNet audio enrichment in enrich_event_from_media."""
+    from datetime import UTC, datetime
+
+    from lookout.adapters.audio_classifier import YamnetAudioClassifierAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import CameraEvent, EventCategory, ThreatLevel
+    from lookout.domain.service import EventProcessingService
+
+    repo = InMemoryEventRepository()
+    classifier = YamnetAudioClassifierAdapter()
+    service = EventProcessingService(repository=repo, audio_classifier=classifier)
+
+    event = CameraEvent(
+        id="evt-yamnet-1",
+        camera_id="living_room",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.UNKNOWN_VISITOR,
+        threat_level=ThreatLevel.LOW,
+        summary="Motion on living_room",
+    )
+    await repo.save(event)
+
+    enriched = await service.enrich_event_from_media(
+        event.id,
+        frame_samples=[],
+        audio_bytes=b"sample audio glass_break noise",
+    )
+    assert enriched is not None
+    assert enriched.category == EventCategory.ACOUSTIC_ANOMALY
+    assert enriched.threat_level == ThreatLevel.HIGH
+    assert any(p.provider == "yamnet" for p in enriched.provenance)

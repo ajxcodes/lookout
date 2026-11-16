@@ -86,7 +86,7 @@
       <!-- Sidecar Bridge Integrations -->
       <div style="background:var(--bg-subtle);padding:var(--space-md);border-radius:var(--radius-md);margin-bottom:var(--space-md);">
         <h3 style="font-size:0.875rem;font-weight:600;margin-bottom:var(--space-xs);">Bridge Sidecars & Ecosystem Accounts</h3>
-        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-sm);">Auto-detects running docker-wyze-bridge or ring-mqtt instances, or connect with 2FA.</p>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-sm);">Connect directly via native 2FA cloud authentication and embedded go2rtc streams.</p>
         
         <div id="sidecar-providers-list" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-sm);">
           <!-- Wyze Provider Card -->
@@ -95,7 +95,7 @@
               <span style="font-weight:600;font-size:0.8125rem;">Wyze Cam Bridge</span>
               <span class="badge" id="badge-wyze-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
             </div>
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-wyze">docker-wyze-bridge (RTSP port 8554)</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-wyze">Native Wyze Cloud + embedded go2rtc</div>
             <div style="display:flex;gap:var(--space-xs);">
               <button class="btn btn-sm" id="btn-adopt-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
               <button class="btn btn-sm btn-primary" id="btn-auth-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
@@ -108,7 +108,7 @@
               <span style="font-weight:600;font-size:0.8125rem;">Ring Video Doorbell</span>
               <span class="badge" id="badge-ring-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
             </div>
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-ring">ring-mqtt bridge (SIP/RTSP)</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-ring">Native Ring Cloud + embedded go2rtc</div>
             <div style="display:flex;gap:var(--space-xs);">
               <button class="btn btn-sm" id="btn-adopt-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
               <button class="btn btn-sm btn-primary" id="btn-auth-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>

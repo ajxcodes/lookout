@@ -336,3 +336,52 @@ async def test_poller_preserves_event_timestamp_and_chronological_order() -> Non
 
     found = await repo.find(camera_id="door")
     assert [e.id for e in found] == [newer_event.id, older_event.id]
+
+
+async def test_poller_metadata_fallback_when_snapshot_fails() -> None:
+    """TR-10: Verify NativeEventPoller ingests metadata-only payloads when snapshot fails."""
+    from datetime import UTC, datetime
+
+    from lookout.adapters.native_event_poller import NativeEventPoller
+    from lookout.config.schema import CameraConfig, LookoutConfig
+
+    class FakeRingAdapter:
+        async def poll_events(self, camera_id: str, since=None):
+            return [
+                {
+                    "event_id": "e-ding",
+                    "kind": "ding",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                {
+                    "event_id": "e-motion",
+                    "kind": "motion",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+            ]
+
+        async def capture_snapshot(self, camera_id: str):
+            raise TimeoutError("snapshot timed out")
+
+    cfg = LookoutConfig(
+        cameras=[
+            CameraConfig(
+                id="front_door",
+                name="Front Door",
+                stream_url="ring:?camera_id=front_door",
+                native_provider="ring",
+                native_device_id="front_door",
+            )
+        ]
+    )
+    ingested: list[tuple[str, dict]] = []
+
+    async def fake_ingest(cam_id: str, payload: dict) -> None:
+        ingested.append((cam_id, payload))
+
+    poller = NativeEventPoller(config=cfg, wyze=None, ring=FakeRingAdapter(), ingest=fake_ingest)
+    await poller._tick()
+
+    assert len(ingested) == 2
+    assert ingested[0][1]["metadata"]["kind"] == "ding"
+    assert "image" not in ingested[0][1]

@@ -27,8 +27,6 @@ from lookout.adapters.light_ml import (
     SpatialZoneEvaluator,
 )
 from lookout.adapters.memory import InMemoryEventRepository
-from lookout.adapters.mqtt_ingest import MqttEventIngestor
-from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
 from lookout.adapters.native_event_poller import NativeEventPoller
 from lookout.adapters.native_stream_manager import (
     Go2RtcUnavailableError,
@@ -414,9 +412,6 @@ def create_app(
                 logger.warning("Sidecar configuration synchronization error: %s", exc)
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             app.state.storage_service.start()
-        ingestor = getattr(app.state, "mqtt_ingestor", None)
-        if ingestor is not None:
-            ingestor.start()
 
         native_manager = getattr(app.state, "native_stream_manager", None)
         native_cameras = (
@@ -477,8 +472,6 @@ def create_app(
         if native_manager is not None:
             with suppress(Exception):
                 await native_manager.stop()
-        if ingestor is not None:
-            await ingestor.stop()
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             await app.state.storage_service.stop()
 
@@ -528,6 +521,7 @@ def create_app(
             )
             if active_config
             else None,
+            config=active_config,
         )
     )
 
@@ -575,8 +569,7 @@ def create_app(
                 enrichment_succeeded
                 and active_event_service is not None
                 and active_event_service.notification is not None
-                and hasattr(updated, "threat_level")
-                and updated.threat_level >= active_event_service.notification_threshold
+                and active_event_service.should_notify(updated, pass_num=2)
             ):
                 try:
                     # Dispatch in-place notification update via X-Sequence-ID
@@ -616,15 +609,7 @@ def create_app(
     # Native ingestion: one embedded go2rtc manager shared by all native adapters.
     native_manager = NativeStreamManager(config=active_config)
     app.state.native_stream_manager = native_manager
-
-    if active_config is not None and active_config.mqtt.enabled:
-        app.state.mqtt_ingestor = MqttEventIngestor(
-            active_config,
-            ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
-            on_event=_broadcast_event,
-            on_clip_ready=_on_clip_ready,
-            stream_manager=native_manager,
-        )
+    app.state.on_clip_ready = _on_clip_ready
 
     wyze_native_config = active_config.wyze if active_config is not None else WyzeConfig()
     ring_native_config = active_config.ring if active_config is not None else RingConfig()
@@ -648,11 +633,7 @@ def create_app(
             proto = getattr(cam, "ptz_protocol", "none")
             bridge_name = getattr(cam, "ptz_cam_name", None) or cam.id
             cam_name_map[cam.id] = bridge_name
-            if proto == "mqtt-wyze":
-                ptz_adapters[cam.id] = MqttWyzePtzAdapter(
-                    config=active_config.mqtt, cam_name_map={cam.id: bridge_name}
-                )
-            elif proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
+            if proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
                 ptz_adapters[cam.id] = WyzeTutkPtzAdapter(
                     config=wyze_native_config,
                     client=app.state.wyze_native,
@@ -867,23 +848,6 @@ def create_app(
         event = await svc.ingest_raw_event(camera_id, payload)
         hub: SSEBroadcastHub = app.state.broadcast_hub
         await hub.broadcast_event(event)
-        if event is not None and getattr(event, "media_uri", None) is None:
-            ingestor = getattr(app.state, "mqtt_ingestor", None)
-            if ingestor is not None and hasattr(ingestor, "_record_clip_background"):
-                asyncio.create_task(
-                    ingestor._record_clip_background(camera_id, event, duration=10.0)
-                )
-            elif getattr(app.state, "config", None) is not None:
-                clip_ingestor = MqttEventIngestor(
-                    app.state.config,
-                    ingest=svc.ingest_raw_event,
-                    on_event=_broadcast_event,
-                    on_clip_ready=_on_clip_ready,
-                    stream_manager=getattr(app.state, "native_stream_manager", None),
-                )
-                asyncio.create_task(
-                    clip_ingestor._record_clip_background(camera_id, event, duration=10.0)
-                )
         return {"status": "ok", "event_id": event.id, "id": event.id}
 
     # WebRTC live streaming WebSocket and HTTP signaling proxies to go2rtc

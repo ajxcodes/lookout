@@ -55,3 +55,13 @@ class SidecarConfigSynchronizer:
             if isinstance(res, list) and res
             else (res if isinstance(res, Path) else self.base_dir)
         )
+
+    def sync_wyze_env(self, config: LookoutConfig) -> list[Path]:
+        """Compatibility wrapper for sync_provider('wyze', config)."""
+        res = self.sync_provider("wyze", config)
+        return [res] if isinstance(res, Path) and res.exists() else []
+
+    def sync_ring_env(self, config: LookoutConfig) -> list[Path]:
+        """Compatibility wrapper for sync_provider('ring', config)."""
+        res = self.sync_provider("ring", config)
+        return [res] if isinstance(res, Path) and res.exists() else []
