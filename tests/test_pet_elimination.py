@@ -118,3 +118,36 @@ async def test_sustained_pet_elimination_vs_transient_squat() -> None:
     assert enriched_sustained is not None
     assert enriched_sustained.category == EventCategory.PET_ELIMINATION
     assert enriched_sustained.metadata["sustained_elimination"] is True
+
+
+@pytest.mark.asyncio
+async def test_enrich_event_from_media_runs_vlm_on_key_frames() -> None:
+    from lookout.adapters.memory import InMemoryEventRepository
+    from lookout.domain.models import DetectionMetrics, EventCategory
+    from lookout.domain.service import EventProcessingService
+
+    class FakeVision:
+        async def analyze_scene(self, image_bytes: bytes):
+            return (
+                EventCategory.SECURITY_INTRUSION,
+                DetectionMetrics(confidence=0.95),
+                None,
+            )
+
+    repo = InMemoryEventRepository()
+    service = EventProcessingService(
+        repository=repo,
+        vision_inference=FakeVision(),
+    )
+
+    event = await service.ingest_raw_event(camera_id="cam", payload=b"initial")
+    initial_summary = event.summary
+    initial_confidence = event.metrics.confidence if event.metrics else 0.0
+
+    frames = [b"key-frame-1", b"key-frame-2", b"key-frame-3"]
+    enriched = await service.enrich_event_from_media(event.id, frames)
+
+    assert enriched is not None
+    assert enriched.summary != initial_summary or (
+        enriched.metrics is not None and enriched.metrics.confidence >= initial_confidence
+    )

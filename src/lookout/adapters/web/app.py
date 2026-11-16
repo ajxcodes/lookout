@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator, MutableMapping
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -26,8 +27,6 @@ from lookout.adapters.light_ml import (
     SpatialZoneEvaluator,
 )
 from lookout.adapters.memory import InMemoryEventRepository
-from lookout.adapters.mqtt_ingest import MqttEventIngestor
-from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
 from lookout.adapters.native_event_poller import NativeEventPoller
 from lookout.adapters.native_stream_manager import (
     Go2RtcUnavailableError,
@@ -112,10 +111,69 @@ def _inject_base_href(html_content: str, ingress_path: str) -> str:
     return html_content
 
 
-def _get_go2rtc_ws_url(app: FastAPI, query_params: str = "") -> str:
+def _native_provider(app: FastAPI, camera_id: str) -> str | None:
+    """Return the native provider ('ring'/'wyze') configured for a camera, if any."""
+    cfg = getattr(app.state, "config", None)
+    for camera in getattr(cfg, "cameras", None) or []:
+        if str(getattr(camera, "id", "")) == str(camera_id):
+            provider = (getattr(camera, "native_provider", None) or "").lower()
+            return provider if provider in ("ring", "wyze") else None
+    return None
+
+
+def _base_camera_id(camera_id: str | None) -> str | None:
+    if not camera_id:
+        return camera_id
+    return camera_id[:-5] if camera_id.endswith("_h264") else camera_id
+
+
+def _resolve_go2rtc_target(app: FastAPI, camera_id: str | None) -> str:
+    """Pick the go2rtc API base URL that holds the stream for ``camera_id``.
+
+    Native-managed cameras live in the embedded go2rtc; everything else uses the
+    configured ``go2rtc.api_url``.
+    """
+    base_id = _base_camera_id(camera_id)
+    manager = getattr(app.state, "native_stream_manager", None)
+    if base_id and manager is not None and getattr(manager, "api_url", None):
+        streams = getattr(manager, "streams", None) or {}
+        if camera_id in streams or base_id in streams or _native_provider(app, base_id):
+            return str(manager.api_url).rstrip("/")
+    cfg = getattr(app.state, "config", None)
+    if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
+        return str(cfg.go2rtc.api_url).rstrip("/")
+    return "http://localhost:1984"
+
+
+async def _ensure_native_stream(app: FastAPI, camera_id: str | None) -> bool:
+    """Register the native camera's stream in the embedded go2rtc.
+
+    Returns True when the camera is native-managed (and now registered), False
+    when it is not native. Raises when the source cannot be resolved/registered.
+    """
+    base_id = _base_camera_id(camera_id)
+    if not base_id:
+        return False
+    provider = _native_provider(app, base_id)
+    manager = getattr(app.state, "native_stream_manager", None)
+    if provider is None or manager is None:
+        return False
+    adapter = getattr(app.state, f"{provider}_native", None)
+    if adapter is None:
+        return False
+    source = adapter._resolve_source(base_id)
+    await manager.ensure_stream(base_id, source)
+    if provider == "ring" and hasattr(manager, "ensure_h264_transcode"):
+        await manager.ensure_h264_transcode(base_id)
+    return True
+
+
+def _get_go2rtc_ws_url(app: FastAPI, query_params: str = "", base: str | None = None) -> str:
     cfg = getattr(app.state, "config", None)
     go2rtc_api = "http://localhost:1984"
-    if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
+    if base:
+        go2rtc_api = base.rstrip("/")
+    elif cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
         go2rtc_api = cfg.go2rtc.api_url.rstrip("/")
 
     if go2rtc_api.startswith("https://"):
@@ -131,6 +189,53 @@ def _get_go2rtc_ws_url(app: FastAPI, query_params: str = "") -> str:
     if query_params:
         url = f"{url}?{query_params}"
     return url
+
+
+_SENSITIVE_QUERY_RE = re.compile(
+    r"^(?:uid|enr|mac|did|p2p_id)$|token|password|passwd|pass|key|secret|auth|sig|credential",
+    re.IGNORECASE,
+)
+
+
+_SENSITIVE_CLI_RE = re.compile(
+    r"(--(?:refresh[-_]?token|token|password|secret|key)(?:=|\s+))(\S+)",
+    re.IGNORECASE,
+)
+
+
+def _redact_source(source: str | None) -> str | None:
+    """Return the source with URL userinfo, sensitive query values, and CLI tokens redacted."""
+    if not source:
+        return None
+    parts = urlsplit(str(source))
+    netloc = parts.netloc.rpartition("@")[2]
+    path = _SENSITIVE_CLI_RE.sub(r"\1[redacted]", parts.path)
+    query = "&".join(
+        f"{k}=[redacted]" if _SENSITIVE_QUERY_RE.search(k) else pair
+        for pair in parts.query.split("&")
+        if pair
+        for k in [pair.partition("=")[0]]
+    )
+    return urlunsplit((parts.scheme, netloc, path, query, ""))
+
+
+def _source_scheme(source: str | None) -> str | None:
+    """Return only the URL scheme of a source."""
+    return urlsplit(str(source)).scheme or None if source else None
+
+
+async def _prepare_live_upstream(
+    app: FastAPI, websocket: WebSocket, camera_id: str | None, query_str: str
+) -> str | None:
+    """Register native streams and build the upstream URL; close the socket on failure."""
+    try:
+        await _ensure_native_stream(app, camera_id)
+    except Exception as exc:
+        logger.warning("Native stream registration failed for %s: %s", camera_id, exc)
+        with suppress(Exception):
+            await websocket.close(code=1011)
+        return None
+    return _get_go2rtc_ws_url(app, query_str, base=_resolve_go2rtc_target(app, camera_id))
 
 
 async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream_url: str) -> None:
@@ -307,9 +412,6 @@ def create_app(
                 logger.warning("Sidecar configuration synchronization error: %s", exc)
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             app.state.storage_service.start()
-        ingestor = getattr(app.state, "mqtt_ingestor", None)
-        if ingestor is not None:
-            ingestor.start()
 
         native_manager = getattr(app.state, "native_stream_manager", None)
         native_cameras = (
@@ -323,6 +425,21 @@ def create_app(
             or (active_config is not None and active_config.ring.native_ingestion)
         )
         if native_enabled and native_manager is not None:
+            ring_native = getattr(app.state, "ring_native", None)
+            if ring_native is not None:
+                for cam in native_cameras:
+                    if (
+                        getattr(cam, "native_provider", None) == "ring"
+                        and cam.id not in native_manager.streams
+                    ):
+                        try:
+                            native_manager.streams[cam.id] = ring_native._resolve_source(
+                                cam.id, snapshot=False
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                "Skipping Ring stream pre-population for %s: %s", cam.id, exc
+                            )
             try:
                 await native_manager.start()
             except Go2RtcUnavailableError as exc:
@@ -335,6 +452,11 @@ def create_app(
                 ring=getattr(app.state, "ring_native", None),
                 ingest=active_event_service.ingest_raw_event,
                 on_event=_broadcast_event,
+                on_clip_ready=_on_clip_ready,
+                stream_manager=native_manager,
+                record_clip=True,
+                clip_duration=10.0,
+                storage_base_path=media_dir,
             )
             app.state.native_event_poller = native_poller
             native_poller.start()
@@ -350,8 +472,6 @@ def create_app(
         if native_manager is not None:
             with suppress(Exception):
                 await native_manager.stop()
-        if ingestor is not None:
-            await ingestor.stop()
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             await app.state.storage_service.stop()
 
@@ -401,6 +521,7 @@ def create_app(
             )
             if active_config
             else None,
+            config=active_config,
         )
     )
 
@@ -408,33 +529,63 @@ def create_app(
         await app.state.broadcast_hub.broadcast_event(evt)
 
     async def _on_clip_ready(evt: Any) -> None:
-        if active_repo is not None:
-            await active_repo.save(evt)
-        await app.state.broadcast_hub.broadcast_event(evt)
-        if (
-            active_event_service is not None
-            and active_event_service.notification is not None
-            and hasattr(evt, "threat_level")
-            and evt.threat_level >= active_event_service.notification_threshold
-        ):
-            try:
-                # Dispatch in-place notification update via X-Sequence-ID
-                target = active_event_service.notification_target or "default"
-                await active_event_service.notification.send_notification(event=evt, target=target)
-            except Exception as notify_err:
-                logger.warning(
-                    "Second-pass notification update failed for %s: %s",
-                    getattr(evt, "id", "?"),
-                    notify_err,
-                )
+        try:
+            frame_samples: list[Any] = []
+            if isinstance(getattr(evt, "metadata", None), dict):
+                frame_samples = evt.metadata.pop("clip_frame_samples", None) or []
+                if frame_samples:
+                    evt.metadata["clip_frame_samples_count"] = len(frame_samples)
+            if active_repo is not None:
+                await active_repo.save(evt)
+            await app.state.broadcast_hub.broadcast_event(evt)
 
-    if active_config is not None and active_config.mqtt.enabled:
-        app.state.mqtt_ingestor = MqttEventIngestor(
-            active_config,
-            ingest=lambda cam, payload: active_event_service.ingest_raw_event(cam, payload),
-            on_event=_broadcast_event,
-            on_clip_ready=_on_clip_ready,
-        )
+            updated = evt
+            enrichment_succeeded = False
+            if active_event_service is not None:
+                try:
+                    evt_id = str(getattr(evt, "id", "") or "")
+                    enriched = await active_event_service.enrich_event_from_media(
+                        evt_id, frame_samples
+                    )
+                    if enriched is not None:
+                        if enriched.media_uri is None and getattr(evt, "media_uri", None):
+                            enriched.media_uri = evt.media_uri
+                        if isinstance(getattr(enriched, "metadata", None), dict):
+                            enriched.metadata.pop("clip_frame_samples", None)
+                        updated = enriched
+                        enrichment_succeeded = True
+                        if active_repo is not None:
+                            await active_repo.save(updated)
+                        await app.state.broadcast_hub.broadcast_event(updated)
+                except Exception as enrich_err:
+                    logger.warning(
+                        "Second-pass enrichment failed for %s: %s",
+                        getattr(evt, "id", "?"),
+                        enrich_err,
+                    )
+                    enrichment_succeeded = False
+
+            if (
+                enrichment_succeeded
+                and active_event_service is not None
+                and active_event_service.notification is not None
+                and active_event_service.should_notify(updated, pass_num=2)
+            ):
+                try:
+                    # Dispatch in-place notification update via X-Sequence-ID
+                    target = active_event_service.notification_target or "default"
+                    message = f"[{updated.threat_level.name}] {updated.summary}"
+                    await active_event_service.notification.send_notification(
+                        event=updated, target=target, message=message
+                    )
+                except Exception as notify_err:
+                    logger.warning(
+                        "Second-pass notification update failed for %s: %s",
+                        getattr(updated, "id", "?"),
+                        notify_err,
+                    )
+        except Exception as clip_err:  # pragma: no cover - defensive
+            logger.warning("Clip-ready handling failed: %s", clip_err)
 
     # Attach application state
     app.state.config = active_config
@@ -458,6 +609,8 @@ def create_app(
     # Native ingestion: one embedded go2rtc manager shared by all native adapters.
     native_manager = NativeStreamManager(config=active_config)
     app.state.native_stream_manager = native_manager
+    app.state.on_clip_ready = _on_clip_ready
+
     wyze_native_config = active_config.wyze if active_config is not None else WyzeConfig()
     ring_native_config = active_config.ring if active_config is not None else RingConfig()
     app.state.wyze_native = WyzeNativeAdapter(
@@ -480,11 +633,7 @@ def create_app(
             proto = getattr(cam, "ptz_protocol", "none")
             bridge_name = getattr(cam, "ptz_cam_name", None) or cam.id
             cam_name_map[cam.id] = bridge_name
-            if proto == "mqtt-wyze":
-                ptz_adapters[cam.id] = MqttWyzePtzAdapter(
-                    config=active_config.mqtt, cam_name_map={cam.id: bridge_name}
-                )
-            elif proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
+            if proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
                 ptz_adapters[cam.id] = WyzeTutkPtzAdapter(
                     config=wyze_native_config,
                     client=app.state.wyze_native,
@@ -707,7 +856,11 @@ def create_app(
         """Proxy client WebRTC WebSocket connections directly to go2rtc."""
         await websocket.accept()
         query_str = str(websocket.query_params)
-        upstream_url = _get_go2rtc_ws_url(app, query_str)
+        upstream_url = await _prepare_live_upstream(
+            app, websocket, websocket.query_params.get("src"), query_str
+        )
+        if upstream_url is None:
+            return
         await _proxy_websocket_to_upstream(websocket, upstream_url)
 
     @app.websocket("/api/webrtc/{camera_id}/ws")
@@ -718,18 +871,43 @@ def create_app(
         if str(websocket.query_params):
             query_parts.append(str(websocket.query_params))
         query_str = "&".join(query_parts)
-        upstream_url = _get_go2rtc_ws_url(app, query_str)
+        upstream_url = await _prepare_live_upstream(app, websocket, camera_id, query_str)
+        if upstream_url is None:
+            return
         await _proxy_websocket_to_upstream(websocket, upstream_url)
+
+    @app.get("/api/cameras/{camera_id}/live/diagnostics")
+    async def live_diagnostics(camera_id: str) -> dict[str, Any]:
+        """Report which go2rtc holds the stream and which codecs it serves."""
+        manager = getattr(app.state, "native_stream_manager", None)
+        source = (getattr(manager, "streams", None) or {}).get(camera_id)
+        registered = False
+        codecs: list[str] = []
+        if manager is not None and getattr(manager, "api_url", None) and source:
+            with suppress(Exception):
+                registered = bool(await manager._stream_exists(camera_id))
+            with suppress(Exception):
+                codecs = list(await manager.stream_codecs(camera_id))
+        return {
+            "stream_registered": registered,
+            "source_scheme": _source_scheme(source),
+            "source": _redact_source(source),
+            "codecs": codecs,
+            "h264": any("H264" in c.upper() for c in codecs),
+            "go2rtc_target": _resolve_go2rtc_target(app, camera_id),
+        }
 
     @app.post("/api/webrtc")
     async def proxy_webrtc_post(request: Request) -> Response:
         """Proxy WebRTC HTTP signaling to go2rtc."""
-        cfg = getattr(app.state, "config", None)
-        go2rtc_api = "http://localhost:1984"
-        if cfg is not None and hasattr(cfg, "go2rtc") and cfg.go2rtc.api_url:
-            go2rtc_api = cfg.go2rtc.api_url.rstrip("/")
-
         query_str = str(request.url.query)
+        src = request.query_params.get("src")
+        try:
+            await _ensure_native_stream(app, src)
+        except Exception as exc:
+            logger.warning("Native stream registration failed for %s: %s", src, exc)
+            return JSONResponse(status_code=502, content={"error": "stream unavailable"})
+        go2rtc_api = _resolve_go2rtc_target(app, src)
         upstream_url = f"{go2rtc_api}/api/webrtc"
         if query_str:
             upstream_url = f"{upstream_url}?{query_str}"

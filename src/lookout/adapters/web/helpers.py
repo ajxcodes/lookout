@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from lookout.config.schema import CameraConfig
+from lookout.domain.models import ThreatLevel
 
 
 def infer_camera_icon(name_or_location: str | None) -> str:
@@ -75,6 +76,15 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         else (provider_badge == "ring" or "ring" in (cam.provider or "").lower())
     )
 
+    min_threat = getattr(cam, "notification_min_threat", None)
+    threat_name: str | None = None
+    if isinstance(min_threat, ThreatLevel):
+        threat_name = min_threat.name
+    elif isinstance(min_threat, int):
+        threat_name = ThreatLevel(min_threat).name
+    elif isinstance(min_threat, str):
+        threat_name = min_threat
+
     return {
         "id": cam.id,
         "name": cam.name,
@@ -95,4 +105,12 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "live_source": getattr(cam, "live_stream_url", None),
         "has_live_stream": bool(getattr(cam, "live_stream_url", None)),
         "has_live_source": bool(getattr(cam, "live_stream_url", None)),
+        "notifications_enabled": getattr(cam, "notifications_enabled", True),
+        "notifications_muted": getattr(cam, "notifications_muted", False),
+        "notification_min_threat": threat_name,
+        "notification_event_types": list(
+            getattr(cam, "notification_event_types", ["motion", "sound", "person", "ding"])
+        ),
+        "notify_pass1": getattr(cam, "notify_pass1", True),
+        "notify_pass2": getattr(cam, "notify_pass2", True),
     }

@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
 from lookout.config.schema import RingConfig
@@ -61,20 +61,51 @@ def encode_ring_token(inner: dict[str, Any]) -> str:
     ).decode("ascii")
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        value = int(value)
     if isinstance(value, datetime):
         return _as_utc(value)
-    if isinstance(value, str):
+    if isinstance(value, (int, float)):
         try:
-            return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            return _as_utc(value)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
         except ValueError:
             return None
     return None
@@ -287,15 +318,31 @@ class RingNativeAdapter(VideoRecorderPort):
                     return device
         return None
 
+    def build_bridge_source(self, camera_id: str, refresh_token: str | None = None) -> str:
+        """Build the go2rtc ``exec:`` source using the ring-client-api H.264 bridge."""
+        bridge_path = Path(__file__).resolve().parent / "ring_bridge" / "index.mjs"
+        token = refresh_token if refresh_token is not None else self._token()
+        return f"exec:node {bridge_path} --camera-id {camera_id} --refresh-token {token}"
+
     def _resolve_source(self, camera_id: str, snapshot: bool = False) -> str:
         camera = self._camera_config(camera_id)
         if camera is not None:
             stream_url = getattr(camera, "stream_url", None)
             if stream_url and str(stream_url).startswith("ring:"):
                 source = str(stream_url)
-                if snapshot and "&snapshot" not in source:
-                    source += "&snapshot"
-                return source
+                if snapshot:
+                    if "&snapshot" not in source:
+                        source += "&snapshot"
+                    return source
+                params = parse_qs(urlsplit(source).query)
+                bridge_cam_id = (
+                    params.get("camera_id", [None])[0]
+                    or params.get("device_id", [None])[0]
+                    or getattr(camera, "native_device_id", None)
+                    or camera_id
+                )
+                token = params.get("refresh_token", [None])[0]
+                return self.build_bridge_source(str(bridge_cam_id), refresh_token=token)
         device = None
         if camera is not None:
             device = self._find_cached(str(camera.native_device_id or ""))
@@ -305,7 +352,16 @@ class RingNativeAdapter(VideoRecorderPort):
             raise RingStreamSourceError(
                 f"No Ring device resolved for camera '{camera_id}'. Run native discovery first."
             )
-        return self.build_stream_source(device, snapshot=snapshot)
+        if snapshot:
+            return self.build_stream_source(device, snapshot=True)
+        bridge_cam_id = (
+            device.get("device_api_id")
+            or device.get("camera_id")
+            or device.get("id")
+            or device.get("device_id")
+            or camera_id
+        )
+        return self.build_bridge_source(str(bridge_cam_id))
 
     async def _resolve_ring_device(self, camera_id: str) -> Any:
         camera = self._camera_config(camera_id)
@@ -348,8 +404,9 @@ class RingNativeAdapter(VideoRecorderPort):
         camera_id = str(camera_id)
         source = self._resolve_source(camera_id, snapshot=True)
         manager = self._require_stream_manager()
-        await manager.ensure_stream(camera_id, source)
-        content = await manager.frame(camera_id)
+        snap_stream_id = f"{camera_id}_snapshot"
+        await manager.ensure_stream(snap_stream_id, source)
+        content = await manager.frame(snap_stream_id)
         if not content.startswith(_JPEG_MAGIC):
             raise MediaCaptureError(
                 f"Snapshot for '{camera_id}' is not a JPEG ({len(content)} bytes)"
@@ -419,6 +476,44 @@ class RingNativeAdapter(VideoRecorderPort):
     async def start_live_stream(self, *args: Any, **kwargs: Any) -> None:
         return await self.ensure_live_stream(*args, **kwargs)
 
+    async def ensure_h264_stream(self, camera_id: Any = None, **kwargs: Any) -> Any:
+        """Resolve/register the transcoded H.264 stream for a Ring camera."""
+        camera_id = camera_id if camera_id is not None else kwargs.get("camera_id")
+        camera_id = str(camera_id)
+        manager = self._require_stream_manager()
+        if hasattr(manager, "ensure_h264_stream"):
+            return await manager.ensure_h264_stream(camera_id)
+        # Fallback for managers that only expose ensure_stream.
+        return await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
+
+    # Compatibility aliases for H.264 transcoding helpers.
+    async def ensure_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def register_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def start_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def create_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def add_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_ring_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def transcode_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_h264(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
@@ -428,7 +523,7 @@ class RingNativeAdapter(VideoRecorderPort):
         """Poll real Ring history events for a camera."""
         camera_id = str(camera_id)
         device = await self._resolve_ring_device(camera_id)
-        history = await device.async_history(limit=20)
+        history = await device.async_history(limit=50)
         if not isinstance(history, Sequence):
             return []
         payloads: list[dict[str, Any]] = []

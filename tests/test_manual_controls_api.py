@@ -66,3 +66,29 @@ async def test_manual_controls_audit_entry(config) -> None:
     audit_entries = await audit_logger.query()
     audit_entry = audit_entries[0]
     assert audit_entry["action"].startswith("manual_")
+
+
+def test_patch_camera_notification_granularity_persisted(tmp_path) -> None:
+    """TR-1: Verify PATCH /api/cameras/{id}/settings persists notification granularity."""
+    from fastapi.testclient import TestClient
+
+    from lookout.adapters.web.app import create_app
+    from lookout.config.schema import CameraConfig, LookoutConfig
+
+    cfg = LookoutConfig(
+        cameras=[CameraConfig(id="porch", name="Porch", stream_url="rtsp://localhost/porch")]
+    )
+    app = create_app(config=cfg)
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/cameras/porch/settings",
+            json={
+                "notifications_enabled": True,
+                "notification_min_threat": "MEDIUM",
+                "notification_event_types": ["person", "ding"],
+                "notify_pass1": True,
+                "notify_pass2": False,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["camera"]["notifications_enabled"] is True

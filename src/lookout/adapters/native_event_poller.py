@@ -33,18 +33,26 @@ class NativeEventPoller:
         ring: Any | None,
         ingest: Callable[[str, dict[str, Any]], Awaitable[Any]],
         on_event: Callable[[Any], Awaitable[Any]] | None = None,
+        on_clip_ready: Callable[[Any], Awaitable[Any]] | None = None,
         interval: float = 15.0,
         *,
         stream_manager: Any | None = None,
         dedup_size: int = _DEFAULT_DEDUP_SIZE,
+        record_clip: bool = True,
+        clip_duration: float = 10.0,
+        storage_base_path: str | Path | None = None,
     ) -> None:
         self.config = config
         self.wyze = wyze
         self.ring = ring
         self.ingest = ingest
         self.on_event = on_event
+        self.on_clip_ready = on_clip_ready
         self.interval = float(interval)
         self.stream_manager = stream_manager
+        self.record_clip = bool(record_clip)
+        self.clip_duration = float(clip_duration)
+        self.storage_base_path = Path(storage_base_path) if storage_base_path is not None else None
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -112,6 +120,35 @@ class NativeEventPoller:
         adapter = self._adapter_for(provider)
         return getattr(adapter, "stream_manager", None)
 
+    def _storage_base_path(self) -> Path | None:
+        if self.storage_base_path is not None:
+            return self.storage_base_path
+        storage = getattr(self.config, "storage", None)
+        base_path = getattr(storage, "base_path", None)
+        if base_path:
+            return Path(base_path)
+        return None
+
+    def _persist_snapshot_bytes(self, camera_id: str, kind: str, content: bytes) -> str | None:
+        base_path = self._storage_base_path()
+        if base_path is None or not content:
+            return None
+        try:
+            stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+            safe_kind = (kind or "motion").replace("/", "_")
+            name = f"{camera_id}_{safe_kind}_{stamp}.jpg"
+            event_snap_dir = base_path / "snapshots" / "events"
+            event_snap_dir.mkdir(parents=True, exist_ok=True)
+            (event_snap_dir / name).write_bytes(content)
+
+            cam_snap_dir = base_path / "snapshots"
+            cam_snap_dir.mkdir(parents=True, exist_ok=True)
+            (cam_snap_dir / f"{camera_id}.jpg").write_bytes(content)
+            return f"/media/events/{name}"
+        except OSError as exc:
+            logger.debug("Could not persist snapshot for '%s': %s", camera_id, exc)
+            return None
+
     def _remember(self, key: tuple[str, str]) -> None:
         self._seen[key] = None
         self._seen.move_to_end(key)
@@ -126,6 +163,8 @@ class NativeEventPoller:
             if adapter is None:
                 continue
             since = self._last_poll.get(camera_id)
+            if since is not None:
+                since = since - timedelta(seconds=2)
             try:
                 events = await adapter.poll_events(camera_id, since)
             except Exception as exc:  # noqa: BLE001 - per-camera isolation
@@ -157,8 +196,9 @@ class NativeEventPoller:
     async def _handle_event(self, camera_id: str, provider: str, event: dict[str, Any]) -> None:
         image: bytes | None = None
         snapshot_uri: str | None = None
+        kind = str(event.get("kind") or event.get("alarm_type") or "motion")
         try:
-            image, snapshot_uri = await self._capture_image(camera_id, provider)
+            image, snapshot_uri = await self._capture_image(camera_id, provider, kind=kind)
         except Exception as exc:  # noqa: BLE001 - metadata-only ingest is acceptable
             logger.info(
                 "Snapshot capture failed for native event on '%s' (%s): %s",
@@ -186,9 +226,15 @@ class NativeEventPoller:
                 await self.on_event(result)
             except Exception as exc:  # noqa: BLE001 - broadcast is best-effort
                 logger.warning("Native event broadcast failed for '%s': %s", camera_id, exc)
+        if result is not None and self.record_clip and self.on_clip_ready is not None:
+            asyncio.create_task(
+                self._record_clip_background(
+                    camera_id, provider, result, duration=self.clip_duration
+                )
+            )
 
     async def _capture_image(
-        self, camera_id: str, provider: str
+        self, camera_id: str, provider: str, *, kind: str = "motion"
     ) -> tuple[bytes | None, str | None]:
         """Best-effort snapshot capture for an event.
 
@@ -200,15 +246,80 @@ class NativeEventPoller:
             streams = getattr(manager, "streams", None)
             if streams is not None and camera_id in streams:
                 try:
-                    return await manager.frame(camera_id), None
+                    content = await manager.frame(camera_id)
+                    uri = self._persist_snapshot_bytes(camera_id, kind, content)
+                    return content, uri
                 except Exception as exc:  # noqa: BLE001 - try adapter fallback
                     logger.debug("Stream frame failed for '%s': %s", camera_id, exc)
         adapter = self._adapter_for(provider)
         if adapter is not None and hasattr(adapter, "capture_snapshot"):
             path = await adapter.capture_snapshot(camera_id)
             try:
-                return Path(path).read_bytes(), str(path)
+                content = Path(path).read_bytes()
+                uri = self._persist_snapshot_bytes(camera_id, kind, content)
+                with contextlib.suppress(OSError):
+                    if uri is not None:
+                        Path(path).unlink(missing_ok=True)
+                return content, uri or str(path)
             except OSError as exc:
                 logger.debug("Could not read snapshot '%s': %s", path, exc)
                 return None, str(path)
         return None, None
+
+    async def _record_clip_background(
+        self, camera_id: str, provider: str, event: Any, duration: float = 10.0
+    ) -> None:
+        """Record a background MP4 clip (Pass 2) and invoke on_clip_ready."""
+        event_id = (
+            event.get("id") if isinstance(event, dict) else getattr(event, "id", None)
+        ) or str(uuid.uuid4())
+        clip_bytes: bytes | None = None
+        temp_clip_path: Path | None = None
+        clip_path: Path | None = None
+
+        try:
+            manager = self._manager_for(provider)
+            adapter = self._adapter_for(provider)
+
+            if adapter is not None and hasattr(adapter, "record_clip"):
+                path_str = await adapter.record_clip(camera_id, duration)
+                temp_clip_path = Path(path_str)
+                if temp_clip_path.is_file():
+                    clip_bytes = temp_clip_path.read_bytes()
+            elif manager is not None and hasattr(manager, "clip"):
+                clip_bytes = await manager.clip(camera_id, duration)
+            elif manager is not None and hasattr(manager, "record_clip"):
+                path_str = await manager.record_clip(camera_id, duration)
+                temp_clip_path = Path(path_str)
+                if temp_clip_path.is_file():
+                    clip_bytes = temp_clip_path.read_bytes()
+
+            if not clip_bytes:
+                return
+
+            base_path = self._storage_base_path() or Path("./data")
+            events_dir = base_path / "events"
+            events_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{camera_id}_{event_id}.mp4"
+            clip_path = events_dir / name
+            clip_path.write_bytes(clip_bytes)
+
+            media_uri = f"/media/events/{name}"
+            if isinstance(event, dict):
+                event["media_uri"] = media_uri
+            else:
+                event.media_uri = media_uri
+
+            if self.on_clip_ready is not None:
+                await self.on_clip_ready(event)
+        except Exception as exc:  # noqa: BLE001 - background clip must never crash
+            logger.warning(
+                "Background native clip recording failed for '%s' (%s): %s",
+                camera_id,
+                provider,
+                exc,
+            )
+        finally:
+            if temp_clip_path is not None and temp_clip_path != clip_path:
+                with contextlib.suppress(OSError):
+                    temp_clip_path.unlink(missing_ok=True)

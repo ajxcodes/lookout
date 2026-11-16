@@ -186,7 +186,7 @@ export class LiveGrid {
             ) {
               this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_live`);
             } else {
-              this.startRingLive(cam, video, overlay, liveBtn);
+              this.startTileLiveWebRTC(cam, video, overlay, cam.id);
             }
           } else {
             this.startTileLiveWebRTC(cam, video, overlay);
@@ -325,7 +325,7 @@ export class LiveGrid {
     record.snapshotPoll = setInterval(poll, 1000);
   }
 
-  async startTileLiveWebRTC(cam, video, overlay, streamName = null) {
+  async startTileLiveWebRTC(cam, video, overlay, streamSrc = null) {
     const record = this.streamPlayers.get(cam.id);
     if (!record) return;
 
@@ -342,7 +342,12 @@ export class LiveGrid {
       overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
 
-    const restoreSnapshotFallback = () => {
+    const restoreSnapshotFallback = (reason) => {
+      if (record) record.isLive = false;
+      const why = typeof reason === "string" ? reason : "unknown";
+      console.warn(`Live tile ${cam.id} fell back to snapshots: ${why}`);
+      if (overlay) overlay.dataset.liveFallbackReason = why;
+      if (video) video.dataset.liveFallbackReason = why;
       if (record.clockInterval) {
         clearInterval(record.clockInterval);
         record.clockInterval = null;
@@ -359,6 +364,12 @@ export class LiveGrid {
         overlay.style.display = "flex";
         const snapUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
         overlay.style.backgroundImage = `url("${snapUrl}")`;
+        if (record.snapshotPoll) clearInterval(record.snapshotPoll);
+        record.snapshotPoll = setInterval(() => {
+          if (!overlay) return;
+          const nextUrl = resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot?t=${Date.now()}`);
+          overlay.style.backgroundImage = `url("${nextUrl}")`;
+        }, 2000);
       }
     };
 
@@ -380,11 +391,16 @@ export class LiveGrid {
     if (video) {
       const hideOverlayWhenReady = () => {
         if (!video || (video.readyState < 2 && video.currentTime === 0)) return;
+        if (record && record.snapshotPoll) {
+          clearInterval(record.snapshotPoll);
+          record.snapshotPoll = null;
+        }
         if (overlay) overlay.style.display = "none";
         if (liveBtn) {
           liveBtn.disabled = false;
           liveBtn.textContent = "▶ Start Live";
         }
+        if (record) record.isLive = true;
         showClockIfNeeded();
       };
       video.onplaying = hideOverlayWhenReady;
@@ -394,7 +410,7 @@ export class LiveGrid {
           hideOverlayWhenReady();
         }
       };
-      video.onerror = restoreSnapshotFallback;
+      video.onerror = () => restoreSnapshotFallback("video.onerror");
     }
 
     try {
@@ -418,25 +434,41 @@ export class LiveGrid {
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          restoreSnapshotFallback();
+          restoreSnapshotFallback(`pc ${pc.connectionState}`);
         }
       };
 
-      pc.addTransceiver("video", { direction: "recvonly" });
+      const videoTransceiver = pc.addTransceiver("video", { direction: "recvonly" });
+      try {
+        const caps = window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities
+          ? RTCRtpReceiver.getCapabilities("video")
+          : null;
+        if (caps && caps.codecs && videoTransceiver.setCodecPreferences) {
+          const h264 = caps.codecs.filter((c) => /H264/i.test(c.mimeType));
+          if (h264.length > 0) {
+            const rest = caps.codecs.filter((c) => !/H264/i.test(c.mimeType));
+            videoTransceiver.setCodecPreferences([...h264, ...rest]);
+          }
+        }
+      } catch (codecErr) {
+        console.warn("H264 codec preference unavailable:", codecErr);
+      }
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
       // Prefer substream if available to conserve bandwidth
-      const streamSrc = streamName || cam.id;
-      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamSrc)}`);
+      const streamId = streamSrc || cam.id;
+      const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamId)}`);
 
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
 
+      let timedOut = false;
       const timeoutId = setTimeout(() => {
+        timedOut = true;
         try { ws.close(); } catch {}
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("15s timeout");
       }, 15000);
 
       const iceCandidates = [];
@@ -496,11 +528,12 @@ export class LiveGrid {
 
       ws.onerror = (err) => {
         clearTimeout(timeoutId);
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("ws error");
       };
 
       ws.onclose = () => {
         clearTimeout(timeoutId);
+        if (!hasRemote && !timedOut) restoreSnapshotFallback("ws close");
       };
 
       pc.onicecandidate = (e) => {
@@ -516,10 +549,10 @@ export class LiveGrid {
         }
       };
 
-      record.isLive = true;
+      // Do not claim live success until media actually plays (H265/WebRTC may fail).
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
-      restoreSnapshotFallback();
+      restoreSnapshotFallback("exception");
     }
   }
 
@@ -548,6 +581,19 @@ export class LiveGrid {
     const record = this.streamPlayers.get(cameraId);
     if (record && record.video && record.isLive && this.isTabVisible) {
       record.video.play().catch(() => {});
+    }
+  }
+
+  updateCameraSnapshot(cameraId, snapshotUri = null) {
+    const record = this.streamPlayers.get(cameraId);
+    if (!record) return;
+    const rawUrl = snapshotUri || `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`;
+    const snapUrl = resolveUrl(rawUrl.includes("?") ? rawUrl : `${rawUrl}?t=${Date.now()}`);
+    if (record.video) {
+      record.video.poster = snapUrl;
+    }
+    if (record.overlay && !record.isLive) {
+      record.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
   }
 

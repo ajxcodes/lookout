@@ -19,6 +19,9 @@ from lookout.adapters.ring_native import (
     decode_ring_token,
     encode_ring_token,
 )
+from lookout.adapters.ring_native import (
+    _parse_datetime as _ring_parse_datetime,
+)
 from lookout.config.schema import CameraConfig, RingConfig
 from lookout.domain.models import EventCategory
 from lookout.ports.egress import VideoRecorderPort
@@ -153,7 +156,7 @@ async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
 
     assert path.endswith(".jpg")
     assert Path(path).read_bytes() == JPEG
-    assert manager.ensured[0][0] == "front_door"
+    assert manager.ensured[0][0] == "front_door_snapshot"
     assert manager.ensured[0][1].endswith("&snapshot")
 
 
@@ -258,7 +261,7 @@ async def test_poll_events_maps_real_history_fields() -> None:
     assert payloads[0]["detection_type"] == "human"
     assert payloads[0]["answered"] is True
     assert payloads[0]["timestamp"] == created.isoformat()
-    assert device.history_calls == [{"limit": 20}]
+    assert device.history_calls == [{"limit": 50}]
 
 
 async def test_poll_events_filters_by_since() -> None:
@@ -301,3 +304,28 @@ async def test_ingest_event_builds_camera_event_from_payload() -> None:
     assert event.camera_id == "front_door"
     assert event.category == EventCategory.UNKNOWN_VISITOR
     assert event.metadata["provider"] == "ring"
+
+
+def test_parse_datetime_handles_epoch_millis() -> None:
+    result = _ring_parse_datetime(1700000000000)
+    assert result == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
+
+
+async def test_ring_ding_doorbell_event_capture() -> None:
+    """TR-9: Verify Ring doorbell ding event is captured and notified."""
+    from lookout.adapters.memory.notification import MockNotificationAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import EventCategory
+    from lookout.domain.service import EventProcessingService
+
+    repo = InMemoryEventRepository()
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(repository=repo, notification=notifier)
+
+    event = await service.ingest_raw_event(
+        "front_door",
+        {"metadata": {"kind": "ding", "trigger": "ding"}},
+    )
+    assert event.category == EventCategory.UNKNOWN_VISITOR
+    assert "ding" in event.summary.lower()
+    assert len(notifier.sent_notifications) == 1

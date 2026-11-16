@@ -29,8 +29,9 @@ def probe_wyze(driver: WyzeProviderDriver, config: LookoutConfig | None = None) 
 
     remote_reachable = False
     if config is not None and config.wyze is not None:
-        if config.wyze.external_bridge_url:
-            res = driver.test_connection(config.wyze.external_bridge_url)
+        ext_url = getattr(config.wyze, "external_bridge_url", None)
+        if ext_url:
+            res = driver.test_connection(ext_url)
             remote_reachable = bool(
                 res.get("reachable") if hasattr(res, "get") else getattr(res, "reachable", False)
             )

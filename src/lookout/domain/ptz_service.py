@@ -320,6 +320,31 @@ class PtzControlService:
         if "mute" in settings or "muted" in settings or "notifications_muted" in settings:
             val = settings.get("mute", settings.get("muted", settings.get("notifications_muted")))
             camera.notifications_muted = bool(val)
+            camera.notifications_enabled = not camera.notifications_muted
+        if "notifications_enabled" in settings:
+            camera.notifications_enabled = bool(settings["notifications_enabled"])
+            camera.notifications_muted = not camera.notifications_enabled
+        if "notification_min_threat" in settings:
+            raw_threat = settings["notification_min_threat"]
+            if raw_threat is None or raw_threat == "":
+                camera.notification_min_threat = None
+            else:
+                from lookout.domain.models import ThreatLevel
+
+                camera.notification_min_threat = (
+                    raw_threat
+                    if isinstance(raw_threat, ThreatLevel)
+                    else ThreatLevel[str(raw_threat).upper()]
+                )
+        if (
+            "notification_event_types" in settings
+            and settings["notification_event_types"] is not None
+        ):
+            camera.notification_event_types = [str(t) for t in settings["notification_event_types"]]
+        if "notify_pass1" in settings:
+            camera.notify_pass1 = bool(settings["notify_pass1"])
+        if "notify_pass2" in settings:
+            camera.notify_pass2 = bool(settings["notify_pass2"])
         if "stream_mode" in settings:
             camera.stream_mode = settings["stream_mode"]
         # persist config

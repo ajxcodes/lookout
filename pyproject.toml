@@ -21,6 +21,7 @@ dependencies = [
     "paho-mqtt>=2.0",
     "wyze-sdk>=2.3.16; python_version >= '3.12'",
     "ring-doorbell>=0.9.14",
+    "pillow>=10.0",
 ]
 
 [project.scripts]
