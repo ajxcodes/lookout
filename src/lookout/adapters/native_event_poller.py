@@ -163,6 +163,8 @@ class NativeEventPoller:
             if adapter is None:
                 continue
             since = self._last_poll.get(camera_id)
+            if since is not None:
+                since = since - timedelta(seconds=2)
             try:
                 events = await adapter.poll_events(camera_id, since)
             except Exception as exc:  # noqa: BLE001 - per-camera isolation

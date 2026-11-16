@@ -396,3 +396,29 @@ class FFmpegTranscoderAdapter(MediaTranscoderPort):
             generated = sorted(out_path.glob("thumb_*.jpg"))
 
         return [str(p) for p in generated[:count]]
+
+    async def extract_audio(self, input_path: str) -> bytes:
+        """Extract 16kHz mono PCM WAV audio waveform from a video clip."""
+        cmd = [
+            self.config.ffmpeg_path,
+            "-y",
+            "-i",
+            input_path,
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            "pipe:1",
+        ]
+        try:
+            code, stdout, _ = await self._run_command(cmd)
+        except Exception:
+            return b""
+        if code != 0:
+            return b""
+        return stdout

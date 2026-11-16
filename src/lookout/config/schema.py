@@ -1,6 +1,6 @@
 """Pydantic configuration schemas with strict cross-field validation."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -124,12 +124,25 @@ class CameraConfig(BaseModel):
         default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
     )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
+    notifications_enabled: bool = Field(
+        default=True, description="Whether notifications are enabled for this camera"
+    )
     notifications_muted: bool = Field(
         default=False, description="Whether camera notifications are muted"
     )
-    mqtt_id: str | None = Field(
+    notification_min_threat: ThreatLevel | None = Field(
         default=None,
-        description="Device id used on MQTT bridge topics (e.g. ring-mqtt device id)",
+        description=(
+            "Minimum threat level to trigger notifications (None inherits global threshold)"
+        ),
+    )
+    notification_event_types: list[str] = Field(
+        default_factory=lambda: ["motion", "sound", "person", "ding"],
+        description="Event types that trigger notifications",
+    )
+    notify_pass1: bool = Field(default=True, description="Whether to send instant Pass 1 alerts")
+    notify_pass2: bool = Field(
+        default=True, description="Whether to send enriched Pass 2 clip updates"
     )
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(
@@ -150,8 +163,8 @@ class CameraConfig(BaseModel):
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
     ptz_enabled: bool = Field(default=False, description="Whether PTZ control is enabled")
-    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "native-wyze", "none"] = (
-        Field(default="none", description="PTZ control protocol")
+    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "native-wyze", "none"] = Field(
+        default="none", description="PTZ control protocol"
     )
     ptz_cam_name: str | None = Field(
         default=None,
@@ -171,6 +184,14 @@ class CameraConfig(BaseModel):
         default=None,
         description="Optional RTSP/HTTP H.264 source used for Ring true live view",
     )
+
+    @model_validator(mode="after")
+    def _sync_notification_flags(self) -> Self:
+        if not self.notifications_enabled:
+            self.notifications_muted = True
+        elif self.notifications_muted:
+            self.notifications_enabled = False
+        return self
 
     @field_validator("stream_url")
     @classmethod
@@ -237,12 +258,6 @@ class WyzeConfig(BaseModel):
     totp_key: str | None = Field(default=None, description="Wyze TOTP secret key for automatic 2FA")
     auth_token: str | None = Field(default=None, description="Wyze API access token")
     refresh_token: str | None = Field(default=None, description="Wyze API refresh token")
-    external_bridge_url: str | None = Field(
-        default=None, description="External docker-wyze-bridge Web API endpoint"
-    )
-    bridge_rtsp_url: str | None = Field(
-        default=None, description="External docker-wyze-bridge RTSP endpoint"
-    )
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
     native_ingestion: bool = Field(
         default=False, description="Whether native Wyze ingestion is enabled"
@@ -252,6 +267,12 @@ class WyzeConfig(BaseModel):
     )
     discovery_enabled: bool = Field(
         default=True, description="Whether native Wyze device discovery is enabled"
+    )
+    bridge_rtsp_url: str | None = Field(
+        default=None, description="Optional RTSP URL for legacy/external Wyze bridge"
+    )
+    external_bridge_url: str | None = Field(
+        default=None, description="Optional base URL for external Wyze bridge API"
     )
 
 
@@ -270,9 +291,6 @@ class RingConfig(BaseModel):
     )
     email: str | None = Field(default=None, description="Ring account email")
     session_id: str | None = Field(default=None, description="Active 2FA challenge session ID")
-    external_stream_url: str | None = Field(
-        default=None, description="External ring-mqtt stream URL"
-    )
     oauth_url: str = Field(
         default="https://oauth.ring.com", description="Ring OAuth authentication endpoint"
     )
@@ -292,10 +310,6 @@ class RingConfig(BaseModel):
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
-    )
-    live_rtsp_url: str | None = Field(
-        default=None,
-        description="Optional RTSP URL for Ring live H.264 streams (ring-mqtt style)",
     )
 
 
@@ -563,8 +577,6 @@ class MqttConfig(BaseModel):
     port: int = Field(default=1883, ge=1, le=65535, description="MQTT broker port")
     username: str | None = Field(default=None, description="MQTT username")
     password: str | None = Field(default=None, description="MQTT password")
-    ring_topic: str = Field(default="ring", description="ring-mqtt base topic")
-    wyze_topic: str = Field(default="wyzebridge", description="wyze-bridge base topic")
     cooldown_seconds: float = Field(
         default=30.0, ge=0.0, description="Minimum seconds between events per camera"
     )

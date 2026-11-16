@@ -186,7 +186,7 @@ export class LiveGrid {
             ) {
               this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_live`);
             } else {
-              this.startRingLive(cam, video, overlay, liveBtn);
+              this.startTileLiveWebRTC(cam, video, overlay, cam.id);
             }
           } else {
             this.startTileLiveWebRTC(cam, video, overlay);

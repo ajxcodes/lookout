@@ -212,7 +212,12 @@ class CameraSettingsRequest(BaseModel):
     enabled: bool | None = None
     sensitivity: float | None = None
     mute: bool | None = None
+    notifications_enabled: bool | None = None
     notifications_muted: bool | None = None
+    notification_min_threat: str | None = None
+    notification_event_types: list[str] | None = None
+    notify_pass1: bool | None = None
+    notify_pass2: bool | None = None
     stream_mode: str | None = None
 
 
@@ -226,6 +231,13 @@ def _require_api_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="API key required") from None
     if configured and not secrets.compare_digest(str(token), str(configured)):
         raise HTTPException(status_code=401, detail="Invalid API key") from None
+
+
+def _require_optional_api_key(request: Request) -> None:
+    configured = getattr(request.app.state, "api_key", None) or os.getenv("LOOKOUT_API_KEY")
+    if not configured:
+        return
+    _require_api_key(request)
 
 
 def _camera_exists(config: Any, camera_id: str) -> bool:
@@ -404,7 +416,7 @@ async def camera_live(camera_id: str, request: Request) -> dict[str, Any]:
 async def camera_settings(
     camera_id: str, payload: CameraSettingsRequest, request: Request
 ) -> dict[str, Any]:
-    _require_api_key(request)
+    _require_optional_api_key(request)
     config = request.app.state.config
     if not _camera_exists(config, camera_id):
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
@@ -420,7 +432,11 @@ async def camera_settings(
     return {
         "status": "ok",
         "enabled": getattr(cam, "enabled", None),
-        "camera": {"id": camera_id, "enabled": getattr(cam, "enabled", None)},
+        "camera": {
+            "id": camera_id,
+            "enabled": getattr(cam, "enabled", None),
+            "notifications_enabled": getattr(cam, "notifications_enabled", True),
+        },
     }
 
 

@@ -386,3 +386,23 @@ async def test_poll_events_handles_epoch_ms_time() -> None:
     payloads = await adapter.poll_events("office_cam", since=None)
 
     assert payloads[0]["timestamp"] == datetime.fromtimestamp(1700000000, tz=UTC).isoformat()
+
+
+async def test_wyze_sound_event_categorization_and_notification() -> None:
+    """TR-8: Verify Wyze Sound alarm_type is categorized as ACOUSTIC_ANOMALY / HIGH."""
+    from lookout.adapters.memory.notification import MockNotificationAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import EventCategory, ThreatLevel
+    from lookout.domain.service import EventProcessingService
+
+    repo = InMemoryEventRepository()
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(repository=repo, notification=notifier)
+
+    event = await service.ingest_raw_event(
+        "wyze_cam",
+        {"metadata": {"alarm_type": "Sound", "trigger": "sound"}},
+    )
+    assert event.category == EventCategory.ACOUSTIC_ANOMALY
+    assert event.threat_level == ThreatLevel.HIGH
+    assert len(notifier.sent_notifications) == 1

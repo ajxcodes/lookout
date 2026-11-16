@@ -523,7 +523,7 @@ class RingNativeAdapter(VideoRecorderPort):
         """Poll real Ring history events for a camera."""
         camera_id = str(camera_id)
         device = await self._resolve_ring_device(camera_id)
-        history = await device.async_history(limit=20)
+        history = await device.async_history(limit=50)
         if not isinstance(history, Sequence):
             return []
         payloads: list[dict[str, Any]] = []

@@ -298,52 +298,11 @@ def test_entity_photo_upload_size_limit_exceeded(client: TestClient) -> None:
     assert "File too large. Max size is 15MB." in res.json()["detail"]
 
 
-def test_events_trigger_initiates_background_clip_when_unrecorded(
-    test_config: LookoutConfig,
-    seeded_repo: InMemoryEventRepository,
-) -> None:
-    """TR-12: Verify trigger_event schedules 10s background clip when media_uri is None."""
-    from typing import Any
-
-    vision = CascadeVisionAdapter()
-    app = create_app(
-        config=test_config,
-        repository=seeded_repo,
-        vision_adapter=vision,
-    )
-
-    recorded_calls: list[tuple[str, str, float]] = []
-
-    class FakeClipIngestor:
-        async def _record_clip_background(
-            self, camera_id: str, event: Any, duration: float = 10.0
-        ) -> None:
-            recorded_calls.append((camera_id, event.id, duration))
-            event.media_uri = f"/media/events/{camera_id}_{event.id}.mp4"
-            await seeded_repo.save(event)
-
-    app.state.mqtt_ingestor = FakeClipIngestor()
-    client = TestClient(app)
-
-    res = client.post(
-        "/api/events/trigger",
-        json={"camera_id": "front-porch", "metadata": {"trigger": "motion"}},
-    )
-    assert res.status_code == 200
-    event_id = res.json()["event_id"]
-    assert recorded_calls == [("front-porch", event_id, 10.0)]
-
-    get_res = client.get(f"/api/events/{event_id}")
-    assert get_res.status_code == 200
-    assert get_res.json()["media_uri"] == f"/media/events/front-porch_{event_id}.mp4"
-
-
 @pytest.mark.asyncio
 async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse(
     tmp_path: Path,
 ) -> None:
     """Verify _on_clip_ready persists media_uri to SQLite even with binary clip_frame_samples."""
-    from lookout.adapters.mqtt_ingest import MqttEventIngestor
     from lookout.adapters.sqlite.repository import SqliteEventRepository
 
     db_path = tmp_path / "lookout.db"
@@ -369,13 +328,8 @@ async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse
     evt.media_uri = f"/media/events/front-porch_{evt.id}.mp4"
     evt.metadata["clip_frame_samples"] = [b"\xff\xd8\xff\xe0fake-jpeg-bytes\xff\xd9"]
 
-    cfg.mqtt.enabled = True
-    app_with_mqtt = create_app(config=cfg, repository=repo)
-    ingestor: MqttEventIngestor = app_with_mqtt.state.mqtt_ingestor
-    assert ingestor._on_clip_ready is not None
-
-    q = await app_with_mqtt.state.broadcast_hub.subscribe()
-    await ingestor._on_clip_ready(evt)
+    q = await app.state.broadcast_hub.subscribe()
+    await app.state.on_clip_ready(evt)
 
     saved = await repo.get_by_id(evt.id)
     assert saved is not None

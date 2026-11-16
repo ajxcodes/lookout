@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,23 +10,26 @@ if TYPE_CHECKING:
 
 
 def sync_ring_environment(config: LookoutConfig, target_dir: Path) -> list[Path]:
-    """Synchronize ring-mqtt environment file with 0o600 permissions."""
+    """Generate ring-mqtt.env sidecar file when credentials are present."""
+    if config is None or config.ring is None:
+        return []
+    ring = config.ring
+    if not (ring.email or ring.refresh_token or ring.auth_token):
+        return []
+
     target_dir.mkdir(parents=True, exist_ok=True)
-    env_file = target_dir / "ring-mqtt.env"
-
-    token = (
-        (config.ring.refresh_token if config.ring else None)
-        or (config.ring.auth_token if config.ring else None)
-        or os.environ.get("RING_TOKEN")
-        or os.environ.get("RINGTOKEN")
-        or ""
-    )
-
+    env_path = target_dir / "ring-mqtt.env"
     lines = [
-        f"RINGTOKEN={token}",
         "MQTTHOST=localhost",
-        "MQTTPORT=1883",
     ]
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    env_file.chmod(0o600)
-    return [env_file]
+    if ring.email:
+        lines.append(f"RING_EMAIL={ring.email}")
+    if ring.refresh_token:
+        lines.append(f"RING_REFRESH_TOKEN={ring.refresh_token}")
+        lines.append(f"RINGTOKEN={ring.refresh_token}")
+    if ring.auth_token:
+        lines.append(f"RING_TOKEN={ring.auth_token}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    return [env_path]

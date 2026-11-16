@@ -27,8 +27,13 @@ def probe_ring(driver: RingProviderDriver, config: LookoutConfig | None = None) 
     )
 
     remote_reachable = False
-    if config is not None and config.ring is not None and config.ring.external_stream_url:
-        res = driver.test_connection(config.ring.external_stream_url)
+    ext_url = (
+        getattr(config.ring, "external_stream_url", None)
+        if config is not None and config.ring is not None
+        else None
+    )
+    if ext_url:
+        res = driver.test_connection(ext_url)
         remote_reachable = bool(
             res.get("reachable") if hasattr(res, "get") else getattr(res, "reachable", False)
         )
