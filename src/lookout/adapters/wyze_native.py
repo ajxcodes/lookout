@@ -40,11 +40,32 @@ class WyzeStreamSourceError(RuntimeError):
     """Raised when a Wyze device lacks the fields required to build a go2rtc source."""
 
 
-def _as_utc(value: datetime) -> datetime:
-    """Normalize a datetime to timezone-aware UTC."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    """Normalize a datetime/str/epoch value to a timezone-aware UTC datetime."""
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        # Try ISO-8601 first.
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        # Then try a numeric (epoch) string.
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import json
 import logging
@@ -167,13 +168,17 @@ class MqttEventIngestor:
         on_event: Callable[[CameraEvent], Awaitable[None]] | None = None,
         on_clip_ready: Callable[[CameraEvent], Awaitable[None]] | None = None,
         client_factory: Callable[[], MiniMqttClient] | None = None,
+        stream_manager: Any = None,
     ) -> None:
         self.config = config
         self._ingest = ingest
         self._on_event = on_event
         self._on_clip_ready = on_clip_ready
         self._client_factory = client_factory or self._default_client
+        self.stream_manager = stream_manager
         self._ring_snapshots: dict[str, bytes] = {}
+        self._frame_buffers: dict[str, collections.deque[bytes]] = {}
+        self._pretrigger_frames: dict[str, list[bytes]] = {}
         self._last_trigger: dict[str, float] = {}
         self._ready_at = 0.0
         self._task: asyncio.Task[None] | None = None
@@ -192,6 +197,28 @@ class MqttEventIngestor:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+
+    def buffer_frame(self, camera_id: str, frame_bytes: bytes) -> None:
+        """Append a frame to the per-camera rolling pre-trigger buffer."""
+        camera_id = str(camera_id)
+        buf = self._frame_buffers.get(camera_id)
+        if buf is None:
+            buf = collections.deque(maxlen=5)
+            self._frame_buffers[camera_id] = buf
+        if frame_bytes:
+            buf.append(bytes(frame_bytes))
+
+    def drain_pretrigger_frames(self, camera_id: str, max_frames: int = 5) -> list[bytes]:
+        """Return (and clear) up to ``max_frames`` pre-trigger frames for a camera."""
+        camera_id = str(camera_id)
+        buf = self._frame_buffers.get(camera_id)
+        if not buf:
+            return []
+        frames = list(buf)
+        if max_frames is not None and max_frames >= 0:
+            frames = frames[-max_frames:]
+        buf.clear()
+        return [bytes(f) for f in frames]
 
     def _topics(self) -> list[str]:
         ring, wyze = self.config.mqtt.ring_topic, self.config.mqtt.wyze_topic
@@ -241,6 +268,7 @@ class MqttEventIngestor:
             device, kind, leaf = parts[3], parts[4], parts[5]
             if kind == "snapshot" and leaf == "image":
                 self._ring_snapshots[device] = payload
+                self.buffer_frame(device, payload)
             elif (
                 kind in ("motion", "ding")
                 and leaf == "state"
@@ -273,8 +301,20 @@ class MqttEventIngestor:
             return
         self._last_trigger[cam.id] = now
 
-        image = self._ring_snapshots.get(key) or await self._go2rtc_frame(cam.id)
+        image = self._ring_snapshots.get(key)
+        if image is None:
+            image = await self._go2rtc_frame(cam.id)
+            if image:
+                self.buffer_frame(cam.id, image)
+        else:
+            self.buffer_frame(cam.id, image)
+        # Drain pre-trigger frames from any buffer keyed to this camera (device key
+        # or resolved camera id) so seeded frames are captured regardless of key.
+        pre_frames: list[bytes] = []
+        for cid in {str(key), str(cam.id)}:
+            pre_frames.extend(self.drain_pretrigger_frames(cid))
         metadata: dict[str, Any] = {"trigger": kind, "source": "mqtt", **extra}
+        metadata["pretrigger_frames"] = len(pre_frames)
         payload: dict[str, Any] = {"metadata": metadata}
         if image:
             payload["image"] = image
@@ -282,15 +322,43 @@ class MqttEventIngestor:
         if kind == "audio" and "sound" in extra:
             payload["audio"] = str(extra["sound"]).encode("utf-8")
         event = await self._ingest(cam.id, payload)
+        if event is not None:
+            if event.metadata is None:
+                event.metadata = {}
+            event.metadata["pretrigger_frames"] = len(pre_frames)
+            # Stash pre-trigger frames for the background clip enrichment.
+            self._pretrigger_frames[event.id] = list(pre_frames)
         if self._on_event is not None:
             await self._on_event(event)
         if event is not None and self._on_clip_ready is not None:
             asyncio.create_task(self._record_clip_background(cam.id, event, duration=10.0))
 
+    def _resolve_go2rtc_api_url(self, camera_id: str) -> str:
+        manager = self.stream_manager
+        if manager is not None:
+            cam = self._camera_for(camera_id)
+            provider = str(getattr(cam, "native_provider", "") or "").lower()
+            streams = getattr(manager, "streams", None) or {}
+            if camera_id in streams or provider in ("wyze", "ring"):
+                api_url = getattr(manager, "api_url", None)
+                if api_url:
+                    return str(api_url).rstrip("/")
+                api_port = getattr(manager, "api_port", None)
+                if api_port:
+                    return f"http://127.0.0.1:{int(api_port)}"
+        return self.config.go2rtc.api_url.rstrip("/")
+
     async def _record_clip_background(
         self, camera_id: str, event: CameraEvent, duration: float = 10.0
     ) -> None:
-        base = self.config.go2rtc.api_url.rstrip("/")
+        event_id = str(getattr(event, "id", "") or "")
+        pre_frames = self._pretrigger_frames.pop(event_id, []) or []
+        if not pre_frames:
+            try:
+                pre_frames = self.drain_pretrigger_frames(camera_id, max_frames=5)
+            except Exception:
+                pre_frames = []
+        base = self._resolve_go2rtc_api_url(camera_id)
         name = f"{camera_id}_{event.id}.mp4"
         directory = Path(self.config.storage.base_path) / "events"
         try:
@@ -383,6 +451,24 @@ class MqttEventIngestor:
                 except Exception as gif_exc:
                     logger.debug("GIF preview generation skipped for %s: %s", event.id, gif_exc)
 
+                if event.metadata is None:
+                    event.metadata = {}
+                frame_samples: list[bytes] = list(pre_frames)
+                # Best-effort: sample a few evenly spaced frames from the saved clip
+                # via ffmpeg when available, so the second pass has post-trigger data.
+                try:
+                    import shutil as _shutil
+
+                    if _shutil.which("ffmpeg") is not None:
+                        sampled = await self._sample_clip_frames(str(clip_path), max_frames=5)
+                        frame_samples.extend(sampled)
+                except Exception:  # pragma: no cover - best effort
+                    pass
+                if frame_samples:
+                    event.metadata["clip_frame_samples"] = frame_samples
+                else:
+                    event.metadata.setdefault("clip_frame_samples", [])
+
                 if self._on_clip_ready is not None:
                     await self._on_clip_ready(event)
             else:
@@ -398,7 +484,7 @@ class MqttEventIngestor:
             logger.warning("Background clip recording error for %s: %s", camera_id, exc)
 
     async def _go2rtc_frame(self, camera_id: str) -> bytes | None:
-        base = self.config.go2rtc.api_url.rstrip("/")
+        base = self._resolve_go2rtc_api_url(camera_id)
         cam = self._camera_for(camera_id)
         max_attempts = 2 if (cam and cam.mqtt_id) else 1
         for attempt in range(1, max_attempts + 1):
@@ -418,10 +504,94 @@ class MqttEventIngestor:
                 await asyncio.sleep(1.5)
         return None
 
+    async def _sample_clip_frames(self, clip_path: str, max_frames: int = 5) -> list[bytes]:
+        """Best-effort extraction of evenly spaced frames from a saved MP4 clip.
+
+        Returns a list of JPEG-encoded frame bytes. Any failure (missing ffmpeg,
+        unreadable clip, etc.) yields an empty list so clip enrichment degrades
+        gracefully.
+        """
+        if not max_frames or max_frames <= 0:
+            return []
+
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        if shutil.which("ffmpeg") is None:
+            return []
+
+        tmpdir = tempfile.mkdtemp(prefix="clip_frames_")
+        try:
+            # Probe duration to space samples evenly across the clip.
+            duration = 10.0
+            try:
+                probe = await asyncio.create_subprocess_exec(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    clip_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await probe.communicate()
+                if probe.returncode == 0:
+                    parsed = float(stdout.decode("utf-8", errors="replace").strip())
+                    if parsed > 0:
+                        duration = parsed
+            except (ValueError, TypeError, OSError):
+                duration = 10.0
+
+            interval = max(duration / float(max_frames), 0.1)
+            pattern = str(Path(tmpdir) / "frame_%03d.jpg")
+
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                clip_path,
+                "-vf",
+                f"fps=1/{interval:.4f}",
+                "-vframes",
+                str(max_frames),
+                "-q:v",
+                "2",
+                "-threads",
+                "1",
+                pattern,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode != 0:
+                return []
+
+            frames: list[bytes] = []
+            for path in sorted(Path(tmpdir).glob("frame_*.jpg"))[:max_frames]:
+                try:
+                    data = path.read_bytes()
+                except OSError:
+                    continue
+                if data.startswith(b"\xff\xd8"):
+                    frames.append(data)
+            return frames
+        except Exception:  # pragma: no cover - best effort
+            return []
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     def _save_snapshot(self, camera_id: str, kind: str, image: bytes) -> str:
-        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         name = f"{camera_id}_{kind}_{stamp}.jpg"
-        directory = Path(self.config.storage.base_path).joinpath(*_EVENT_SNAPSHOT_DIR)
+        base_path = Path(self.config.storage.base_path)
+        directory = base_path.joinpath(*_EVENT_SNAPSHOT_DIR)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / name).write_bytes(image)
+        cam_snap_dir = base_path / "snapshots"
+        cam_snap_dir.mkdir(parents=True, exist_ok=True)
+        (cam_snap_dir / f"{camera_id}.jpg").write_bytes(image)
         return f"/media/events/{name}"

@@ -337,3 +337,218 @@ async def test_go2rtc_frame_retries_for_on_demand_cameras(tmp_path: Path) -> Non
 
     assert attempts == 2
     assert frame == JPEG
+
+
+async def test_pretrigger_frame_buffer_bounded(tmp_path: Any) -> None:
+    from unittest.mock import AsyncMock
+
+    ing = MqttEventIngestor(config=_config(tmp_path), ingest=AsyncMock())
+    for i in range(10):
+        ing.buffer_frame("cam1", f"frame-{i}".encode())
+    assert len(ing._frame_buffers["cam1"]) <= 5
+
+
+async def test_trigger_drains_pretrigger_frames(tmp_path: Any) -> None:
+    events: list[CameraEvent] = []
+
+    async def ingest(camera_id: str, payload: dict[str, Any]) -> CameraEvent:
+        evt = _event(camera_id)
+        events.append(evt)
+        return evt
+
+    ing = MqttEventIngestor(config=_config(tmp_path), ingest=ingest)
+    ing._ready_at = 0.0
+    ing._go2rtc_frame = lambda cam: _none()  # type: ignore[method-assign,assignment]
+    ing.buffer_frame("front_door", b"pretrigger-frame")
+
+    await ing.handle_message(RING_MOTION, b"ON")
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.metadata["pretrigger_frames"] >= 1
+
+
+async def test_clip_ready_invokes_enrichment_and_republishes_ntfy(tmp_path: Any) -> None:
+    from lookout.adapters.light_ml import LightMLObjectDetector
+    from lookout.adapters.memory import InMemoryEventRepository
+    from lookout.domain.service import EventProcessingService
+
+    ntfy_calls: list[dict[str, Any]] = []
+
+    class FakeNtfy:
+        async def send_notification(
+            self, event: Any = None, target: Any = None, message: Any = None
+        ) -> bool:
+            ntfy_calls.append({"sequence_id": getattr(event, "id", None)})
+            return True
+
+    repo = InMemoryEventRepository()
+    notification = FakeNtfy()
+    service = EventProcessingService(
+        repository=repo,
+        notification=notification,
+        light_ml_detector=LightMLObjectDetector(),
+    )
+
+    cfg = _config(tmp_path)
+    cfg.go2rtc.api_url = "http://127.0.0.1:1984"
+
+    async def on_clip_ready(evt: CameraEvent) -> None:
+        frame_samples: list[bytes] = []
+        if isinstance(getattr(evt, "metadata", None), dict):
+            frame_samples = evt.metadata.get("clip_frame_samples") or []
+        try:
+            updated = await service.enrich_event_from_media(evt.id, frame_samples)
+            if updated is not None:
+                await service.notification.send_notification(
+                    event=updated,
+                    target=service.notification_target or "default",
+                    message=f"[{updated.threat_level.name}] {updated.summary}",
+                )
+        except Exception:
+            pass
+
+    ingestor = MqttEventIngestor(
+        config=cfg,
+        ingest=lambda cam, payload: service.ingest_raw_event(cam, payload),
+        on_clip_ready=on_clip_ready,
+    )
+
+    event = await service.ingest_raw_event("backyard", b"frame")
+    # initial notification already dispatched by process_event
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/stream.mp4"
+        return httpx.Response(200, content=b"\x00" * 2048)
+
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", return_value=mock_client):
+        await ingestor._record_clip_background("backyard", event, duration=5.0)
+
+    assert len(ntfy_calls) == 2
+    assert ntfy_calls[1]["sequence_id"] == event.id
+
+
+async def test_enrichment_failure_keeps_original_notification(tmp_path: Any) -> None:
+    from lookout.adapters.memory import InMemoryEventRepository
+    from lookout.domain.service import EventProcessingService
+
+    ntfy_calls: list[dict[str, Any]] = []
+
+    class FakeNtfy:
+        async def send_notification(
+            self, event: Any = None, target: Any = None, message: Any = None
+        ) -> bool:
+            ntfy_calls.append({"sequence_id": getattr(event, "id", None)})
+            return True
+
+    repo = InMemoryEventRepository()
+    notification = FakeNtfy()
+    service = EventProcessingService(repository=repo, notification=notification)
+
+    cfg = _config(tmp_path)
+    cfg.go2rtc.api_url = "http://127.0.0.1:1984"
+
+    async def on_clip_ready(evt: CameraEvent) -> None:
+        frame_samples: list[bytes] = []
+        if isinstance(getattr(evt, "metadata", None), dict):
+            frame_samples = evt.metadata.get("clip_frame_samples") or []
+        try:
+            updated = await service.enrich_event_from_media(evt.id, frame_samples)
+            if updated is not None:
+                await service.notification.send_notification(
+                    event=updated,
+                    target=service.notification_target or "default",
+                    message=f"[{updated.threat_level.name}] {updated.summary}",
+                )
+        except Exception:
+            pass
+
+    ingestor = MqttEventIngestor(
+        config=cfg,
+        ingest=lambda cam, payload: service.ingest_raw_event(cam, payload),
+        on_clip_ready=on_clip_ready,
+    )
+
+    event = await service.ingest_raw_event("backyard", b"frame")
+
+    # Make enrichment raise.
+    async def _raise(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    service.enrich_event_from_media = _raise  # type: ignore[assignment]
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"\x00" * 2048)
+
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", return_value=mock_client):
+        await ingestor._record_clip_background("backyard", event, duration=5.0)
+
+    assert len(ntfy_calls) == 1
+
+
+async def test_mqtt_resolves_native_stream_manager_for_native_camera_clip(
+    tmp_path: Path,
+) -> None:
+    """TR-7: Verify MqttEventIngestor resolves NativeStreamManager.api_url and updates snapshot."""
+    cfg = LookoutConfig(
+        cameras=[
+            CameraConfig(
+                id="native_wyze",
+                name="Native Wyze",
+                stream_url="wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x",
+                native_provider="wyze",
+            )
+        ],
+        storage={"base_path": str(tmp_path), "database_path": str(tmp_path / "db.sqlite")},
+    )
+    cfg.go2rtc.api_url = "http://127.0.0.1:1984"
+
+    class FakeNativeManager:
+        api_url = "http://127.0.0.1:11984"
+        streams = {"native_wyze": "wyze://10.0.0.2"}
+
+    clip_ready_events: list[CameraEvent] = []
+
+    async def _on_clip(evt: CameraEvent) -> None:
+        clip_ready_events.append(evt)
+
+    ingestor = MqttEventIngestor(
+        config=cfg,
+        ingest=AsyncMock(),
+        on_clip_ready=_on_clip,
+        stream_manager=FakeNativeManager(),
+    )
+
+    # 1. Verify _save_snapshot updates both event snapshot and top-level camera snapshot
+    snap_uri = ingestor._save_snapshot("native_wyze", "motion", JPEG)
+    assert snap_uri.startswith("/media/events/native_wyze_motion_")
+    top_snap = tmp_path / "snapshots" / "native_wyze.jpg"
+    assert top_snap.is_file()
+    assert top_snap.read_bytes() == JPEG
+
+    # 2. Verify _go2rtc_frame and _record_clip_background target port 11984
+    requested_urls: list[str] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/api/frame.jpeg":
+            return httpx.Response(200, content=JPEG)
+        return httpx.Response(200, content=b"\x00" * 2048)
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs: Any) -> httpx.AsyncClient:
+        return real_client(transport=httpx.MockTransport(mock_handler))
+
+    event = _event("native_wyze")
+    with patch("lookout.adapters.mqtt_ingest.httpx.AsyncClient", side_effect=client_factory):
+        frame = await ingestor._go2rtc_frame("native_wyze")
+        await ingestor._record_clip_background("native_wyze", event, duration=10.0)
+
+    assert frame == JPEG
+    assert any("127.0.0.1:11984/api/frame.jpeg" in u for u in requested_urls)
+    assert any("127.0.0.1:11984/api/stream.mp4" in u for u in requested_urls)
+    assert len(clip_ready_events) == 1
+    assert event.media_uri == f"/media/events/native_wyze_{event.id}.mp4"

@@ -18,6 +18,9 @@ from lookout.adapters.wyze_native import (
     WyzeStreamSourceError,
     WyzeTutkPtzAdapter,
 )
+from lookout.adapters.wyze_native import (
+    _as_utc as _wyze_as_utc,
+)
 from lookout.config.schema import CameraConfig, WyzeConfig
 from lookout.ports.egress import PtzControlPort, VideoRecorderPort
 
@@ -360,3 +363,26 @@ async def test_poll_events_maps_wyze_event_fields() -> None:
     assert payloads[0]["mac"] == "A1B2C3D4E5F6"
     assert payloads[0]["alarm_type"] == "Motion"
     assert payloads[0]["ai_tags"] == ["Person", "Vehicle"]
+
+
+def test_as_utc_handles_int_epoch_millis() -> None:
+    assert _wyze_as_utc(1700000000000) == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
+
+
+async def test_poll_events_handles_epoch_ms_time() -> None:
+    event = SimpleNamespace(
+        id="evt-ms",
+        mac="A1B2C3D4E5F6",
+        time=1700000000000,
+        alarm_type=SimpleNamespace(description="Motion"),
+        tags=[],
+        category="motion",
+        parameters={},
+    )
+    raw = FakeWyzeRawClient([WYZE_DEVICE], events=[event])
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), client=raw, cameras=[_camera()])
+    adapter.cache_devices([{**WYZE_DEVICE}])
+
+    payloads = await adapter.poll_events("office_cam", since=None)
+
+    assert payloads[0]["timestamp"] == datetime.fromtimestamp(1700000000, tz=UTC).isoformat()

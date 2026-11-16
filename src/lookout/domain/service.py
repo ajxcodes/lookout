@@ -242,10 +242,15 @@ class EventProcessingService(EventIngressPort):
         else:
             threat_level = ThreatLevel.INFO
 
+        event_ts = self._parse_event_timestamp(
+            metadata.get("timestamp")
+            or (payload.get("timestamp") if isinstance(payload, dict) else None)
+        )
+
         event = CameraEvent(
             id=str(uuid4()),
             camera_id=camera_id,
-            timestamp=datetime.now(UTC),
+            timestamp=event_ts,
             category=category,
             threat_level=threat_level,
             summary=summary,
@@ -262,6 +267,39 @@ class EventProcessingService(EventIngressPort):
         )
 
         return await self.process_event(event)
+
+    @staticmethod
+    def _parse_event_timestamp(raw_ts: Any) -> datetime:
+        """Normalize an optional ISO string, epoch number, or datetime to UTC datetime."""
+        if raw_ts is None or isinstance(raw_ts, bool):
+            return datetime.now(UTC)
+        if isinstance(raw_ts, datetime):
+            return raw_ts.replace(tzinfo=UTC) if raw_ts.tzinfo is None else raw_ts.astimezone(UTC)
+        if isinstance(raw_ts, (int, float)):
+            try:
+                num = float(raw_ts)
+                if abs(num) >= 1e12:
+                    num /= 1000.0
+                return datetime.fromtimestamp(num, tz=UTC)
+            except (ValueError, OSError, OverflowError):
+                return datetime.now(UTC)
+        if isinstance(raw_ts, str):
+            stripped = raw_ts.strip()
+            if not stripped:
+                return datetime.now(UTC)
+            try:
+                dt = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+                return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+            except ValueError:
+                pass
+            try:
+                num = float(stripped)
+                if abs(num) >= 1e12:
+                    num /= 1000.0
+                return datetime.fromtimestamp(num, tz=UTC)
+            except (ValueError, OSError, OverflowError):
+                pass
+        return datetime.now(UTC)
 
     async def process_event(self, event: CameraEvent) -> CameraEvent:
         """Persist event to repository and dispatch notification if threshold met."""
@@ -285,74 +323,137 @@ class EventProcessingService(EventIngressPort):
             return None
 
         detector = self.light_ml_detector
-        if detector is None:
-            return event
+        if detector is not None and frame_samples:
+            analysis = detector.analyze_clip_frames(
+                frame_samples,
+                camera_id=event.camera_id,
+                pet_classifier=self.pet_classifier,
+                zone_evaluator=self.zone_evaluator,
+                entity_matcher=self.entity_matcher,
+            )
 
-        analysis = detector.analyze_clip_frames(
-            frame_samples,
-            camera_id=event.camera_id,
-            pet_classifier=self.pet_classifier,
-            zone_evaluator=self.zone_evaluator,
-            entity_matcher=self.entity_matcher,
-        )
+            # Update matched entities
+            if analysis.tracked_entities:
+                for entity in analysis.tracked_entities:
+                    if entity not in event.matched_entities:
+                        event.matched_entities.append(entity)
+                if event.metrics is not None:
+                    event.metrics.tracked_entities = list(event.matched_entities)
 
-        # Update matched entities
-        if analysis.tracked_entities:
-            for entity in analysis.tracked_entities:
-                if entity not in event.matched_entities:
-                    event.matched_entities.append(entity)
-            if event.metrics is not None:
-                event.metrics.tracked_entities = list(event.matched_entities)
+            # Update zone
+            if analysis.traversed_zones:
+                event.zone_id = analysis.traversed_zones[-1]
+                if event.metrics is not None:
+                    event.metrics.zone_id = event.zone_id
 
-        # Update zone
-        if analysis.traversed_zones:
-            event.zone_id = analysis.traversed_zones[-1]
-            if event.metrics is not None:
-                event.metrics.zone_id = event.zone_id
+            # Update metadata
+            if event.metadata is None:
+                event.metadata = {}
+            event.metadata["trajectory"] = list(analysis.traversed_zones)
+            event.metadata["sustained_elimination"] = analysis.sustained_elimination
+            event.metadata["clip_enrichment"] = analysis.telemetry
+            if analysis.best_confidence > 0.0:
+                event.metadata["best_confidence"] = analysis.best_confidence
+                if (
+                    event.metrics is not None
+                    and analysis.best_confidence > event.metrics.confidence
+                ):
+                    event.metrics.confidence = analysis.best_confidence
 
-        # Update metadata
-        event.metadata["trajectory"] = list(analysis.traversed_zones)
-        event.metadata["sustained_elimination"] = analysis.sustained_elimination
-        event.metadata["clip_enrichment"] = analysis.telemetry
-        if analysis.best_confidence > 0.0:
-            event.metadata["best_confidence"] = analysis.best_confidence
-            if event.metrics is not None and analysis.best_confidence > event.metrics.confidence:
-                event.metrics.confidence = analysis.best_confidence
-
-        # If sustained_elimination is confirmed and category is PET_ELIMINATION or KNOWN_PET,
-        # confirms EventCategory.PET_ELIMINATION.
-        # If pet posture was only brief/transient (<2 frames) and not sustained,
-        # downgrades category to EventCategory.KNOWN_PET.
-        if event.category in (EventCategory.PET_ELIMINATION, EventCategory.KNOWN_PET):
-            if analysis.sustained_elimination:
-                event.category = EventCategory.PET_ELIMINATION
-                event.threat_level = self._evaluate_threat_level(event.category)
-                pet_name = (
-                    next(
-                        (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name), None
+            # If sustained_elimination is confirmed and category is PET_ELIMINATION or KNOWN_PET,
+            # confirms EventCategory.PET_ELIMINATION.
+            # If pet posture was only brief/transient (<2 frames) and not sustained,
+            # downgrades category to EventCategory.KNOWN_PET.
+            if event.category in (EventCategory.PET_ELIMINATION, EventCategory.KNOWN_PET):
+                if analysis.sustained_elimination:
+                    event.category = EventCategory.PET_ELIMINATION
+                    event.threat_level = self._evaluate_threat_level(event.category)
+                    pet_name = (
+                        next(
+                            (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name),
+                            None,
+                        )
+                        if event.metrics
+                        else None
+                    ) or (
+                        event.pet_id
+                        or (event.matched_entities[0] if event.matched_entities else "Pet")
                     )
-                    if event.metrics
-                    else None
-                ) or (
-                    event.pet_id or (event.matched_entities[0] if event.matched_entities else "Pet")
-                )
-                zone_label = (
-                    "Backyard (Lawn)" if event.zone_id == "lawn" else (event.zone_id or "yard")
-                )
-                event.summary = f"{pet_name} pooped in {zone_label}"
+                    zone_label = (
+                        "Backyard (Lawn)" if event.zone_id == "lawn" else (event.zone_id or "yard")
+                    )
+                    event.summary = f"{pet_name} pooped in {zone_label}"
+                else:
+                    event.category = EventCategory.KNOWN_PET
+                    event.threat_level = self._evaluate_threat_level(event.category)
+                    pet_name = (
+                        next(
+                            (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name),
+                            None,
+                        )
+                        if event.metrics
+                        else None
+                    ) or (
+                        event.pet_id
+                        or (event.matched_entities[0] if event.matched_entities else "Pet")
+                    )
+                    event.summary = f"Detected {pet_name} on camera {event.camera_id}"
+
+        # VLM cascade on sampled key frames (best-effort, raises confidence/summary).
+        if self.vision_inference is not None and frame_samples:
+            key_frames: list[bytes] = []
+            if len(frame_samples) <= 3:
+                key_frames = list(frame_samples)
             else:
-                event.category = EventCategory.KNOWN_PET
-                event.threat_level = self._evaluate_threat_level(event.category)
-                pet_name = (
-                    next(
-                        (b.entity_name for b in event.metrics.bounding_boxes if b.entity_name), None
+                key_frames = [
+                    frame_samples[0],
+                    frame_samples[len(frame_samples) // 2],
+                    frame_samples[-1],
+                ]
+            # de-dupe preserving order
+            seen: set[bytes] = set()
+            unique_keys: list[bytes] = []
+            for f in key_frames:
+                if f not in seen:
+                    seen.add(f)
+                    unique_keys.append(f)
+            for frame in unique_keys:
+                try:
+                    vis_cat, vis_metrics, vis_prov = await self.vision_inference.analyze_scene(
+                        frame
                     )
-                    if event.metrics
-                    else None
-                ) or (
-                    event.pet_id or (event.matched_entities[0] if event.matched_entities else "Pet")
-                )
-                event.summary = f"Detected {pet_name} on camera {event.camera_id}"
+                except Exception:  # pragma: no cover - best effort
+                    continue
+                if vis_prov is not None and hasattr(vis_prov, "provider"):
+                    if event.provenance is None:
+                        event.provenance = []
+                    event.provenance.append(vis_prov)
+                if event.metrics is None:
+                    event.metrics = DetectionMetrics()
+                if (
+                    vis_metrics is not None
+                    and getattr(vis_metrics, "confidence", 0.0) > event.metrics.confidence
+                ):
+                    event.metrics.confidence = vis_metrics.confidence
+                    if getattr(vis_metrics, "bounding_boxes", None):
+                        event.metrics.bounding_boxes = vis_metrics.bounding_boxes
+                if (
+                    vis_cat is not None
+                    and vis_cat != event.category
+                    and event.category == EventCategory.UNKNOWN_VISITOR
+                ):
+                    event.category = vis_cat
+                    event.threat_level = self._evaluate_threat_level(event.category)
+                    if event.matched_entities:
+                        event.summary = (
+                            f"Detected {', '.join(event.matched_entities)} "
+                            f"on camera {event.camera_id}"
+                        )
+                    else:
+                        event.summary = (
+                            f"Detected {event.category.value.replace('_', ' ')} "
+                            f"on camera {event.camera_id}"
+                        )
 
         await self.repository.save(event)
         return event

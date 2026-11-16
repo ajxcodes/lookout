@@ -369,3 +369,38 @@ async def test_cascade_falls_back_to_total_timeout_seconds() -> None:
     # Must have timed out on the slow provider and fallen back to offline_fallback
     assert provenance.provider == "offline_fallback"
     assert category == EventCategory.UNKNOWN_VISITOR
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ollama_downscales_large_image() -> None:
+    import base64
+    import io
+    import json
+
+    from PIL import Image
+
+    img = Image.new("RGB", (2000, 2000), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    original = buf.getvalue()
+
+    captured: dict[str, bytes] = {}
+
+    def handler(request: httpx.Request) -> Response:
+        body = json.loads(request.content)
+        captured["decoded"] = base64.b64decode(body["images"][0])
+        return Response(
+            200,
+            json={
+                "response": '{"category": "false_positive", "confidence": 0.5}',
+                "prompt_eval_count": 1,
+            },
+        )
+
+    respx.post("http://localhost:11434/api/generate").mock(side_effect=handler)
+
+    provider = OllamaVisionProvider(OllamaConfig())
+    await provider.analyze(original)
+
+    assert len(captured["decoded"]) < len(original)

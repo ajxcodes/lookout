@@ -28,7 +28,9 @@ export class TimelineList {
   }
 
   setEvents(events) {
-    this.events = events;
+    this.events = Array.isArray(events)
+      ? [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      : [];
     this.render();
   }
 
@@ -39,6 +41,7 @@ export class TimelineList {
     } else {
       this.events.unshift(eventItem);
     }
+    this.events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     this.render();
   }
 
