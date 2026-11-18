@@ -50,7 +50,15 @@ async def providers_status(request: Request) -> dict[str, Any]:
     }
     manager = getattr(request.app.state, "native_stream_manager", None)
     if manager is not None:
-        native_block["stream_manager"] = await manager.status()
+        from lookout.adapters.web.app import _redact_source
+
+        manager_status = await manager.status()
+        streams = manager_status.get("streams")
+        if isinstance(streams, dict):
+            manager_status["streams"] = {
+                name: _redact_source(source) for name, source in streams.items()
+            }
+        native_block["stream_manager"] = manager_status
     poller = getattr(request.app.state, "native_event_poller", None)
     native_block["event_poller_running"] = bool(getattr(poller, "running", False))
     poller_status = None
