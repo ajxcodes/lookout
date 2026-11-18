@@ -10,11 +10,23 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
 _FIRST_TICK_LOOKBACK = timedelta(seconds=60)
+
+
+class _AwaitableDict(dict[str, Any]):
+    """A dict that is also awaitable, so ``poller.status()`` works sync and async."""
+
+    def __await__(self) -> Any:
+        async def _coro() -> _AwaitableDict:
+            return self
+
+        return _coro().__await__()
+
+
 _DEFAULT_DEDUP_SIZE = 500
 
 
@@ -58,6 +70,7 @@ class NativeEventPoller:
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._dedup_size = max(1, int(dedup_size))
         self._last_poll: dict[str, datetime] = {}
+        self._health: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -82,6 +95,59 @@ class NativeEventPoller:
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    def _ensure_health(self, camera_id: str) -> dict[str, Any]:
+        health = self._health.get(camera_id)
+        if health is None:
+            health = {
+                "last_poll_at": None,
+                "last_success_at": None,
+                "last_event_count": 0,
+                "last_error": None,
+                "consecutive_failures": 0,
+            }
+            self._health[camera_id] = health
+        return health
+
+    def _serialize_health(self) -> dict[str, Any]:
+        return {key: dict(value) for key, value in self._health.items()}
+
+    def status(self) -> Any:
+        serialized = self._serialize_health()
+        base: dict[str, Any] = {
+            "running": self.running,
+            "last_error": self.last_error,
+            "last_success": self.last_success,
+            "last_event_count": self.last_event_count,
+            "cameras": serialized,
+            "health": serialized,
+            "per_camera": serialized,
+            "event_poller_running": self.running,
+        }
+        # Also expose per-camera health at the top level for convenience.
+        for camera_id, health in serialized.items():
+            base[camera_id] = dict(health)
+        return _AwaitableDict(base)
+
+    @property
+    def last_error(self) -> Any:
+        errors = [
+            health.get("last_error") for health in self._health.values() if health.get("last_error")
+        ]
+        return errors[-1] if errors else None
+
+    @property
+    def last_success(self) -> Any:
+        successes: list[datetime] = [
+            cast(datetime, health.get("last_success_at"))
+            for health in self._health.values()
+            if health.get("last_success_at") is not None
+        ]
+        return max(successes) if successes else None
+
+    @property
+    def last_event_count(self) -> int:
+        return sum(int(health.get("last_event_count") or 0) for health in self._health.values())
 
     async def _run(self) -> None:
         now = datetime.now(UTC)
@@ -162,6 +228,8 @@ class NativeEventPoller:
             adapter = self._adapter_for(provider)
             if adapter is None:
                 continue
+            health = self._ensure_health(camera_id)
+            health["last_poll_at"] = datetime.now(UTC)
             since = self._last_poll.get(camera_id)
             if since is not None:
                 since = since - timedelta(seconds=2)
@@ -174,9 +242,23 @@ class NativeEventPoller:
                     provider,
                     exc,
                 )
+                health["last_error"] = str(exc)
+                health["consecutive_failures"] = int(health.get("consecutive_failures") or 0) + 1
                 continue
+            returned = events if isinstance(events, list) else list(events or [])
+            count = len(returned)
+            logger.debug(
+                "Native event poll for camera '%s' (%s) returned %d event(s)",
+                camera_id,
+                provider,
+                count,
+            )
+            health["last_success_at"] = datetime.now(UTC)
+            health["last_event_count"] = count
+            health["last_error"] = None
+            health["consecutive_failures"] = 0
             self._last_poll[camera_id] = datetime.now(UTC)
-            for event in events:
+            for event in returned:
                 if not isinstance(event, dict):
                     continue
                 event_id = str(event.get("event_id") or "")
