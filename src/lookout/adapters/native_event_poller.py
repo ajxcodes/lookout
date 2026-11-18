@@ -132,9 +132,7 @@ class NativeEventPoller:
     @property
     def last_error(self) -> Any:
         errors = [
-            health.get("last_error")
-            for health in self._health.values()
-            if health.get("last_error")
+            health.get("last_error") for health in self._health.values() if health.get("last_error")
         ]
         return errors[-1] if errors else None
 
@@ -149,10 +147,7 @@ class NativeEventPoller:
 
     @property
     def last_event_count(self) -> int:
-        return sum(
-            int(health.get("last_event_count") or 0)
-            for health in self._health.values()
-        )
+        return sum(int(health.get("last_event_count") or 0) for health in self._health.values())
 
     async def _run(self) -> None:
         now = datetime.now(UTC)

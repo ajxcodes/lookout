@@ -551,11 +551,7 @@ class RingNativeAdapter(VideoRecorderPort):
 
             raw_empty = getattr(self, "_last_ring_raw_empty", False)
             # Retry once on suspicious empty history for internal (non-external) clients.
-            if (
-                raw_empty
-                and attempt == 0
-                and self._external_client is None
-            ):
+            if raw_empty and attempt == 0 and self._external_client is None:
                 await self._invalidate_ring_client()
                 continue
 
