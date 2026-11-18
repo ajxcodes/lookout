@@ -7,6 +7,7 @@ for control and an embedded go2rtc instance for TUTK media.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -86,6 +87,9 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         self.cameras = list(cameras) if cameras is not None else []
         self._client_instance = client
         self._devices: dict[str, dict[str, Any]] = {}
+        self._last_error: str | None = None
+        self._last_success: Any | None = None
+        self._last_event_count: int = 0
         self._ptz = WyzeTutkPtzAdapter(
             config=self.config, client=self, stream_manager=stream_manager
         )
@@ -167,10 +171,59 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             "or wyze.email/password/key_id/api_key."
         )
 
-    def _client(self) -> Any:
+    def _client(self, force: bool = False) -> Any:
+        if force:
+            self._client_instance = self._build_client()
+            return self._client_instance
         if self._client_instance is None:
             self._client_instance = self._build_client()
         return self._client_instance
+
+    def _persist_wyze_tokens(self, client: Any) -> None:
+        token = getattr(client, "_token", None)
+        refresh_token = getattr(client, "_refresh_token", None)
+        if token is not None:
+            with contextlib.suppress(Exception):
+                self.config.auth_token = token
+        if refresh_token is not None:
+            with contextlib.suppress(Exception):
+                self.config.refresh_token = refresh_token
+
+    async def _refresh_wyze_auth(self) -> bool:
+        client = self._client_instance
+        if client is None:
+            try:
+                self._client(force=True)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+        refresh_method = getattr(client, "refresh_token", None)
+        if callable(refresh_method):
+            try:
+                await self._run_sync(refresh_method)
+                self._persist_wyze_tokens(client)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+        # Rebuild if refresh fails.
+        try:
+            self._client(force=True)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def refresh_client(self) -> Any:
+        return self._client(force=True)
+
+    async def recreate_client(self) -> Any:
+        return self._client(force=True)
+
+    async def reset_client(self) -> None:
+        self._client_instance = None
+
+    @staticmethod
+    def _is_token_expired(exc: Any) -> bool:
+        return "access token has expired" in str(exc).lower()
 
     async def _run_sync(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a blocking wyze_sdk call in a worker thread."""
@@ -417,7 +470,22 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
                 )
             )
 
-        events = await self._run_sync(_fetch)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                events = await self._run_sync(_fetch)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if self._is_token_expired(exc) and attempt == 1:
+                    refreshed = await self._refresh_wyze_auth()
+                    if not refreshed:
+                        with contextlib.suppress(Exception):
+                            self._client(force=True)
+                    continue
+                self._last_error = str(exc)
+                raise
+
         payloads: list[dict[str, Any]] = []
         for event in events:
             event_time = getattr(event, "time", None)
@@ -450,6 +518,14 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
                     },
                 }
             )
+
+        # Persist rotated tokens after a successful fetch.
+        with contextlib.suppress(Exception):
+            self._persist_wyze_tokens(self._client())
+
+        self._last_success = datetime.now(UTC)
+        self._last_event_count = len(payloads)
+        self._last_error = None
         return payloads
 
     async def run_action(

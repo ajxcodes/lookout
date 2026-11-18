@@ -53,6 +53,31 @@ async def providers_status(request: Request) -> dict[str, Any]:
         native_block["stream_manager"] = await manager.status()
     poller = getattr(request.app.state, "native_event_poller", None)
     native_block["event_poller_running"] = bool(getattr(poller, "running", False))
+    poller_status = None
+    if poller is not None:
+        try:
+            raw = poller.status() if callable(getattr(poller, "status", None)) else None
+            if hasattr(raw, "__await__"):
+                raw = await raw
+            poller_status = raw
+        except Exception:  # noqa: BLE001
+            poller_status = None
+    native_block["event_poller"] = poller_status
+    native_block["event_poller_last_error"] = getattr(poller, "last_error", None)
+    native_block["event_poller_last_success"] = getattr(poller, "last_success", None)
+    native_block["event_poller_last_event_count"] = getattr(poller, "last_event_count", 0)
+    event_poller_errors: list[str] = []
+    event_poller_errors_by_camera: dict[str, Any] = {}
+    if isinstance(poller_status, dict):
+        for container_key in ("cameras", "health", "per_camera"):
+            container = poller_status.get(container_key)
+            if isinstance(container, dict):
+                for cam_id, health in container.items():
+                    if isinstance(health, dict) and health.get("last_error"):
+                        event_poller_errors.append(str(health["last_error"]))
+                        event_poller_errors_by_camera[str(cam_id)] = health.get("last_error")
+    native_block["event_poller_errors"] = event_poller_errors
+    native_block["event_poller_errors_by_camera"] = event_poller_errors_by_camera
 
     return {"providers": manifests, "native": native_block}
 
