@@ -10,14 +10,14 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
 _FIRST_TICK_LOOKBACK = timedelta(seconds=60)
 
 
-class _AwaitableDict(dict):
+class _AwaitableDict(dict[str, Any]):
     """A dict that is also awaitable, so ``poller.status()`` works sync and async."""
 
     def __await__(self) -> Any:
@@ -138,8 +138,8 @@ class NativeEventPoller:
 
     @property
     def last_success(self) -> Any:
-        successes = [
-            health.get("last_success_at")
+        successes: list[datetime] = [
+            cast(datetime, health.get("last_success_at"))
             for health in self._health.values()
             if health.get("last_success_at") is not None
         ]

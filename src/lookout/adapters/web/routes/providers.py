@@ -57,7 +57,7 @@ async def providers_status(request: Request) -> dict[str, Any]:
     if poller is not None:
         try:
             raw = poller.status() if callable(getattr(poller, "status", None)) else None
-            if hasattr(raw, "__await__"):
+            if raw is not None and hasattr(raw, "__await__"):
                 raw = await raw
             poller_status = raw
         except Exception:  # noqa: BLE001
