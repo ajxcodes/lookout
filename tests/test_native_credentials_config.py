@@ -244,9 +244,7 @@ def test_native_status_preserves_stream_shape_and_fields(tmp_path: Path) -> None
     client, app = _client(tmp_path)
     app.state.native_stream_manager.streams = {
         "front_door": "ring:?camera_id=123&device_id=abc&refresh_token=SECRET123",
-        "backyard_snapshot": (
-            "ring:?camera_id=456&device_id=def&refresh_token=SECRET456&snapshot"
-        ),
+        "backyard_snapshot": ("ring:?camera_id=456&device_id=def&refresh_token=SECRET456&snapshot"),
     }
 
     response = client.get("/api/native/status")
