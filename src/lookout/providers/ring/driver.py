@@ -14,6 +14,8 @@ from lookout.providers.base import (
     ProviderManifest,
     StreamDescriptor,
 )
+from lookout.providers.credential_probe import ring_credentials_present
+from lookout.providers.ring.authenticator import RingAuthCliIssuer, RingTokenIssuer
 from lookout.providers.ring.discovery import probe_ring
 from lookout.providers.ring.routes import create_ring_router
 from lookout.providers.ring.sync import sync_ring_environment
@@ -29,10 +31,26 @@ class RingProviderDriver(BaseProviderDriver):
     display_name: str = "Ring Video Doorbell"
     default_ports: dict[str, int] = {"http": 55123, "rtsp": 8555}
 
-    def __init__(self, session_ttl_seconds: float = 600.0) -> None:
+    def __init__(
+        self,
+        session_ttl_seconds: float = 600.0,
+        token_issuer: RingTokenIssuer | None = None,
+    ) -> None:
         super().__init__(session_ttl_seconds=session_ttl_seconds)
         self._manifest_cache: ProviderManifest | None = None
         self._router: APIRouter | None = None
+        self._token_issuer: RingTokenIssuer | None = token_issuer
+
+    @property
+    def token_issuer(self) -> RingTokenIssuer:
+        """Lazily construct the real CLI-backed issuer (no I/O at discovery)."""
+        if self._token_issuer is None:
+            self._token_issuer = RingAuthCliIssuer()
+        return self._token_issuer
+
+    def set_token_issuer(self, issuer: RingTokenIssuer | None) -> None:
+        """Inject an issuer (used by tests and the auth service)."""
+        self._token_issuer = issuer
 
     def get_ui_manifest(self) -> ProviderManifest:
         """Return UI manifest loaded from manifest.json."""
@@ -42,16 +60,26 @@ class RingProviderDriver(BaseProviderDriver):
         return self._manifest_cache
 
     def authenticate(self, credentials: dict[str, Any]) -> AuthResult:
-        """Initiate Ring 2FA challenge initiation."""
-        session_id = f"ring_session_{uuid.uuid4().hex[:12]}"
-        email = credentials.get("email", "")
-        password = credentials.get("password", "")
+        """Begin a real Ring login via the issuer, returning a 2FA challenge."""
+        email = str(credentials.get("email", ""))
+        password = str(credentials.get("password", ""))
+        try:
+            issuer_session_id = self.token_issuer.begin_login(email, password)
+        except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message=f"Ring login could not be started: {exc}",
+            )
 
+        session_id = f"ring_session_{uuid.uuid4().hex[:12]}"
+        # Only the email and an opaque issuer handle are retained; the password
+        # lives solely in the issuer session and is dropped after completion.
         self.store_session(
             session_id,
             {
                 "email": email,
-                "password": password,
+                "issuer_session_id": issuer_session_id,
                 "provider": self.provider_id,
             },
         )
@@ -60,11 +88,11 @@ class RingProviderDriver(BaseProviderDriver):
             session_id=session_id,
             provider=self.provider_id,
             phone="***-***-1234",
-            message="2FA code sent via SMS to your registered phone",
+            message="Enter the 2FA code sent to your registered phone",
         )
 
     def verify_2fa(self, session_id: str, code: str) -> AuthResult:
-        """Verify Ring 2FA verification returning RINGTOKEN."""
+        """Complete the issuer 2FA exchange and return the real RINGTOKEN."""
         session = self.get_session(session_id)
         if not session:
             return AuthResult(
@@ -72,15 +100,44 @@ class RingProviderDriver(BaseProviderDriver):
                 provider=self.provider_id,
                 message="Invalid or expired session",
             )
+        issuer_session_id = session.get("issuer_session_id")
+        if not issuer_session_id:
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message="Invalid or expired issuer session",
+            )
+        try:
+            raw_token = self.token_issuer.complete(str(issuer_session_id), code)
+        except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            self.token_issuer.dispose(str(issuer_session_id))
+            self._sessions.pop(session_id, None)
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message=f"Ring 2FA verification failed: {exc}",
+            )
+        self.token_issuer.dispose(str(issuer_session_id))
+        self._sessions.pop(session_id, None)
 
         email = session.get("email", "")
         return AuthResult(
             status="authenticated",
             provider=self.provider_id,
-            refresh_token="mock-ringtoken-12345",
-            auth_token="mock-ringtoken-12345",
+            refresh_token=raw_token,
+            auth_token=raw_token,
             email=email,
         )
+
+    def has_valid_credentials(self, config: LookoutConfig | None = None) -> dict[str, Any]:
+        """Delegate offline credential discovery to the shared probe."""
+        return ring_credentials_present(config)
+
+    def dispose_session(self, session_id: str) -> None:
+        """Dispose any issuer session referenced by a driver session."""
+        session = self._sessions.pop(session_id, None)
+        if session and session.get("issuer_session_id"):
+            self.token_issuer.dispose(str(session["issuer_session_id"]))
 
     def probe_existing(self, config: LookoutConfig | None = None) -> DiscoveryResult:
         """Probe for existing Ring token or ring-mqtt bridge."""

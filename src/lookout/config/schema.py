@@ -249,6 +249,10 @@ class WyzeConfig(BaseModel):
     discovery_enabled: bool = Field(
         default=True, description="Whether native Wyze device discovery is enabled"
     )
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
+    )
 
 
 class RingConfig(BaseModel):
@@ -288,6 +292,10 @@ class RingConfig(BaseModel):
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
+    )
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
     )
 
 

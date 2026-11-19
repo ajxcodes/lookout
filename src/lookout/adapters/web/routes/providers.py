@@ -48,11 +48,19 @@ async def providers_status(request: Request) -> dict[str, Any]:
             ),
         },
     }
+    for pid in ("wyze", "ring"):
+        native_block[pid]["logged_out"] = bool(
+            getattr(getattr(active_config, pid, None), "logged_out", False)
+        )
     manager = getattr(request.app.state, "native_stream_manager", None)
     if manager is not None:
         native_block["stream_manager"] = await manager.status()
     poller = getattr(request.app.state, "native_event_poller", None)
     native_block["event_poller_running"] = bool(getattr(poller, "running", False))
+    health = getattr(poller, "health", None) if poller is not None else None
+    native_block["event_poller_consecutive_failures"] = (
+        int(health.get("consecutive_failures", 0)) if isinstance(health, dict) else 0
+    )
 
     return {"providers": manifests, "native": native_block}
 

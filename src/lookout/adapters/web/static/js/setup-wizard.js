@@ -141,6 +141,23 @@ export class SetupWizard {
     this.btnResend2fa = document.getElementById("btn-resend-2fa");
     this.countdown2fa = document.getElementById("countdown-2fa");
     this.status2fa = document.getElementById("status-2fa");
+
+    // Real credential capture (no hardcoded credentials anywhere in the wizard).
+    this.modalCredentials = document.getElementById("modal-credentials");
+    this.credTitle = document.getElementById("cred-title");
+    this.credDesc = document.getElementById("cred-desc");
+    this.credEmail = document.getElementById("cred-email");
+    this.credPassword = document.getElementById("cred-password");
+    this.credApiId = document.getElementById("cred-api-id");
+    this.credApiKey = document.getElementById("cred-api-key");
+    this.credTotp = document.getElementById("cred-totp");
+    this.credWyzeFields = document.getElementById("cred-wyze-fields");
+    this.credStatus = document.getElementById("cred-status");
+    this.btnCredSubmit = document.getElementById("btn-cred-submit");
+    this.btnCredCancel = document.getElementById("btn-cred-cancel");
+    this.btnCredClose = document.getElementById("cred-close");
+    this.activeCredentialProvider = null;
+    this.forceAuth = false;
     this.active2faProvider = null;
     this.active2faSessionId = null;
     this.countdownTimer = null;
@@ -269,6 +286,15 @@ export class SetupWizard {
     }
     if (this.btnResend2fa) {
       this.btnResend2fa.addEventListener("click", () => this.resend2fa());
+    }
+    if (this.btnCredSubmit) {
+      this.btnCredSubmit.addEventListener("click", () => this.submitCredentials());
+    }
+    if (this.btnCredCancel) {
+      this.btnCredCancel.addEventListener("click", () => this.closeCredentialsModal());
+    }
+    if (this.btnCredClose) {
+      this.btnCredClose.addEventListener("click", () => this.closeCredentialsModal());
     }
 
     // Step 3: Face Upload
@@ -511,9 +537,11 @@ export class SetupWizard {
                     <span class="badge" id="badge-${prov.id}-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
                   </div>
                   <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-${prov.id}">${prov.description || ""}</div>
-                  <div style="display:flex;gap:var(--space-xs);">
+                  <div style="display:flex;gap:var(--space-xs);flex-wrap:wrap;">
                     <button class="btn btn-sm" id="btn-adopt-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
                     <button class="btn btn-sm btn-primary" id="btn-auth-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
+                    <button class="btn btn-sm" id="btn-rotate-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Rotate credentials</button>
+                    <button class="btn btn-sm" id="btn-logout-${prov.id}" type="button" style="font-size:0.75rem;padding:3px 8px;">Log out</button>
                   </div>
                 `;
                 container.appendChild(card);
@@ -531,6 +559,14 @@ export class SetupWizard {
                 const authBtn = document.getElementById(`btn-auth-${prov.id}`);
                 if (authBtn) {
                   authBtn.addEventListener("click", () => this.startAuth(prov.id));
+                }
+                const rotateBtn = document.getElementById(`btn-rotate-${prov.id}`);
+                if (rotateBtn) {
+                  rotateBtn.addEventListener("click", () => this.startAuth(prov.id, true));
+                }
+                const logoutBtn = document.getElementById(`btn-logout-${prov.id}`);
+                if (logoutBtn) {
+                  logoutBtn.addEventListener("click", () => this.logoutProvider(prov.id));
                 }
               }
             });
@@ -557,6 +593,18 @@ export class SetupWizard {
             badge.textContent = "Connected (Authenticated)";
             badge.style.background = "#10b981";
             badge.style.color = "#ffffff";
+          } else if (pStatus.status === "2fa_required") {
+            badge.textContent = "2FA required";
+            badge.style.background = "#f59e0b";
+            badge.style.color = "#ffffff";
+          } else if (pStatus.status === "logged_out") {
+            badge.textContent = "Logged out";
+            badge.style.background = "#6b7280";
+            badge.style.color = "#ffffff";
+          } else if (pStatus.status === "error") {
+            badge.textContent = "Authentication error";
+            badge.style.background = "#ef4444";
+            badge.style.color = "#ffffff";
           } else {
             badge.textContent = "Unconfigured";
             badge.style.background = "var(--bg-subtle)";
@@ -569,23 +617,111 @@ export class SetupWizard {
     }
   }
 
-  async startAuth(provider) {
-    const creds = { email: `${provider}_user@example.com`, password: "password123" };
+  startAuth(provider, force = false) {
+    this.activeCredentialProvider = provider;
+    this.forceAuth = Boolean(force);
+    if (this.credTitle) {
+      this.credTitle.textContent = force
+        ? `Rotate ${provider.toUpperCase()} credentials`
+        : `${provider.toUpperCase()} Login`;
+    }
+    if (this.credDesc) {
+      this.credDesc.textContent = force
+        ? "Re-enter your credentials to issue fresh tokens. Existing credentials are replaced."
+        : "Enter your real provider credentials to issue authentication tokens.";
+    }
+    if (this.credEmail) this.credEmail.value = "";
+    if (this.credPassword) this.credPassword.value = "";
+    if (this.credApiId) this.credApiId.value = "";
+    if (this.credApiKey) this.credApiKey.value = "";
+    if (this.credTotp) this.credTotp.value = "";
+    if (this.credWyzeFields) {
+      this.credWyzeFields.style.display = provider === "wyze" ? "block" : "none";
+    }
+    if (this.credStatus) {
+      this.credStatus.textContent = "";
+      this.credStatus.style.color = "inherit";
+    }
+    if (this.modalCredentials) this.modalCredentials.style.display = "flex";
+  }
+
+  closeCredentialsModal() {
+    if (this.modalCredentials) this.modalCredentials.style.display = "none";
+    if (this.credPassword) this.credPassword.value = "";
+    if (this.credApiKey) this.credApiKey.value = "";
+    if (this.credTotp) this.credTotp.value = "";
+  }
+
+  async submitCredentials() {
+    const provider = this.activeCredentialProvider;
+    if (!provider) return;
+    const creds = {
+      email: (this.credEmail && this.credEmail.value.trim()) || "",
+      password: (this.credPassword && this.credPassword.value) || "",
+      api_id: (this.credApiId && this.credApiId.value.trim()) || undefined,
+      api_key: (this.credApiKey && this.credApiKey.value) || undefined,
+      totp_key: (this.credTotp && this.credTotp.value) || undefined,
+      force: this.forceAuth,
+    };
+    if (!creds.email || !creds.password) {
+      if (this.credStatus) {
+        this.credStatus.textContent = "Email and password are required.";
+        this.credStatus.style.color = "#ef4444";
+      }
+      return;
+    }
+    if (this.btnCredSubmit) {
+      this.btnCredSubmit.disabled = true;
+      this.btnCredSubmit.textContent = "Authenticating...";
+    }
     try {
-      const res = await fetch(resolveUrl(`/api/auth/${provider}/login`), {
+      const endpoint = this.forceAuth ? "rotate" : "login";
+      const res = await fetch(resolveUrl(`/api/auth/${provider}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(creds),
       });
       const data = await res.json();
       if (data.status === "2fa_required") {
+        this.closeCredentialsModal();
         this.open2faModal(provider, data.session_id, data.message);
+      } else if (data.status === "pre_authenticated") {
+        this.closeCredentialsModal();
+        await this.checkSidecars();
       } else if (data.status === "authenticated") {
-        alert(`${provider.toUpperCase()} authenticated successfully.`);
+        this.closeCredentialsModal();
+        await this.checkSidecars();
+      } else {
+        if (this.credStatus) {
+          this.credStatus.textContent = data.message || "Authentication failed";
+          this.credStatus.style.color = "#ef4444";
+        }
+      }
+    } catch (err) {
+      if (this.credStatus) {
+        this.credStatus.textContent = `Authentication error: ${err.message}`;
+        this.credStatus.style.color = "#ef4444";
+      }
+    } finally {
+      if (this.btnCredSubmit) {
+        this.btnCredSubmit.disabled = false;
+        this.btnCredSubmit.textContent = "Authenticate";
+      }
+    }
+  }
+
+  async logoutProvider(provider) {
+    try {
+      const res = await fetch(resolveUrl(`/api/auth/${provider}/logout`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (res.ok) {
         await this.checkSidecars();
       }
     } catch (err) {
-      alert(`Login failed: ${err.message}`);
+      console.warn(`logout failed for ${provider}:`, err);
     }
   }
 
@@ -705,5 +841,19 @@ export class SetupWizard {
 
 
 document.addEventListener("DOMContentLoaded", () => {
-  new SetupWizard();
+  const wizard = new SetupWizard();
+  // Expose the wizard so the viewer's "Reauthenticate" camera action can open
+  // this same credential modal with force=true (the AC4 Rotate path).
+  window.lookoutWizard = wizard;
+
+  // AC10: "Reauthenticate" on a camera card may route here with ?reauth=<provider>.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const reauthProvider = params.get("reauth");
+    if (reauthProvider) {
+      wizard.startAuth(reauthProvider, true);
+    }
+  } catch (_) {
+    // Ignore malformed query strings; the wizard still initializes normally.
+  }
 });

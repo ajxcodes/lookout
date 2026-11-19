@@ -146,6 +146,17 @@ class ProviderRegistry:
                 sub = APIRouter()
 
                 def _bind(d: BaseProviderDriver, r: APIRouter) -> None:
+                    from lookout.providers import auth_service
+
+                    def _persist_path(request: Request) -> Path | None:
+                        config_path = getattr(request.app.state, "config_path", None)
+                        if config_path and Path(config_path).exists():
+                            return Path(config_path)
+                        return None
+
+                    def _sidecar_dir(request: Request) -> Path:
+                        return Path(getattr(request.app.state, "sidecar_dir", "data/sidecars"))
+
                     @r.get("/manifest")
                     async def _manifest() -> dict[str, Any]:
                         return d.get_ui_manifest().model_dump()
@@ -156,12 +167,69 @@ class ProviderRegistry:
                         return d.probe_existing(cfg).model_dump()
 
                     @r.post("/login")
-                    async def _login(credentials: dict[str, Any]) -> dict[str, Any]:
-                        return d.authenticate(credentials).model_dump()
+                    async def _login(
+                        credentials: dict[str, Any], request: Request
+                    ) -> dict[str, Any]:
+                        result = auth_service.login(
+                            d.provider_id,
+                            credentials,
+                            getattr(request.app.state, "config", None),
+                            driver=d,
+                            force=bool(credentials.get("force", False)),
+                            sidecar_dir=_sidecar_dir(request),
+                        )
+                        return auth_service.sanitize_auth_result(result)
 
                     @r.post("/verify")
-                    async def _verify(payload: _GenericVerifyRequest) -> dict[str, Any]:
-                        return d.verify_2fa(payload.session_id, payload.code).model_dump()
+                    async def _verify(
+                        payload: _GenericVerifyRequest, request: Request
+                    ) -> dict[str, Any]:
+                        result = await auth_service.verify(
+                            d.provider_id,
+                            payload.session_id,
+                            payload.code,
+                            getattr(request.app.state, "config", None),
+                            driver=d,
+                            request_state=request.app.state,
+                            sidecar_dir=_sidecar_dir(request),
+                            config_path=_persist_path(request),
+                        )
+                        return auth_service.sanitize_auth_result(result)
+
+                    @r.post("/rotate")
+                    async def _rotate(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+                        result = auth_service.login(
+                            d.provider_id,
+                            payload,
+                            getattr(request.app.state, "config", None),
+                            driver=d,
+                            force=True,
+                            sidecar_dir=_sidecar_dir(request),
+                        )
+                        if result.status == "2fa_required" and payload.get("code"):
+                            result = await auth_service.verify(
+                                d.provider_id,
+                                str(result.session_id),
+                                str(payload["code"]),
+                                getattr(request.app.state, "config", None),
+                                driver=d,
+                                request_state=request.app.state,
+                                sidecar_dir=_sidecar_dir(request),
+                                config_path=_persist_path(request),
+                            )
+                        return auth_service.sanitize_auth_result(result)
+
+                    @r.post("/logout")
+                    async def _logout(request: Request) -> dict[str, Any]:
+                        result = auth_service.logout(
+                            d.provider_id,
+                            getattr(request.app.state, "config", None),
+                            driver=d,
+                            request_state=request.app.state,
+                            sidecar_dir=_sidecar_dir(request),
+                            config_path=_persist_path(request),
+                        )
+                        return auth_service.sanitize_auth_result(result)
 
                     @r.post("/test")
                     async def _test(payload: dict[str, Any] | None = None) -> dict[str, Any]:

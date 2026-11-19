@@ -71,6 +71,18 @@ def test_setup_test_notification_ping(unconfigured_app) -> None:
     assert response.status_code == 200 and response.json()["sent"] is True
 
 
+def test_wizard_renders_four_auth_states_without_hardcoded_credentials() -> None:
+    """TR-16 (AC6): wizard handles pre_authenticated/2fa_required/authenticated/error."""
+    source = (
+        Path(__file__).parents[1] / "src/lookout/adapters/web/static/js/setup-wizard.js"
+    ).read_text(encoding="utf-8")
+    for state in ("pre_authenticated", "2fa_required", "authenticated", "error"):
+        assert state in source
+    assert "rotate" in source.lower()
+    assert "password123" not in source
+    assert "logout" in source.lower()
+
+
 def test_setup_finalize_generates_valid_yaml(unconfigured_app) -> None:
     """TR-15: Verify POST /api/setup/finalize writes valid YAML config and transitions state."""
     app, target_path = unconfigured_app

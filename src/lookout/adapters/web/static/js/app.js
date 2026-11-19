@@ -13,6 +13,14 @@ import { SettingsModal } from "./components/settings-modal.js";
 import { ZoomController } from "./components/zoom-controller.js";
 import { resolveUrl } from "./utils/url.js";
 
+// AC10: labels live here so the viewer keeps a single, explicit vocabulary for
+// the universal camera-management controls rendered by LiveGrid.
+const CAMERA_MANAGEMENT_LABELS = {
+  remove: "Remove camera",
+  reauthenticate: "Reauthenticate",
+  authRequired: "Authentication required",
+};
+
 class LookoutApp {
   constructor() {
     this.cameras = [];
@@ -66,6 +74,9 @@ class LookoutApp {
       container: this.liveGridContainer,
       densitySelector: this.densitySelect,
       onFocusCamera: (cam) => this.switchToFocus(cam),
+      onRemoveCamera: (cam) => this.removeCamera(cam),
+      onReauthenticateCamera: (cam) => this.reauthenticateCamera(cam),
+      cameraManagementLabels: CAMERA_MANAGEMENT_LABELS,
     });
 
     this.acousticVis = new AcousticVisualizer({
@@ -394,6 +405,43 @@ class LookoutApp {
     }
   }
 
+  // AC10: management controls are rendered directly into each LiveGrid tile
+  // (see components/camera-management.js) rather than attached after the fact
+  // with a selector that did not match the real `.camera-grid-tile` elements.
+
+  async removeCamera(cam) {
+    if (!window.confirm(`Remove camera '${cam.name || cam.id}'? Recorded history is kept.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}`), {
+        method: "DELETE",
+      });
+      if (res.ok) await this.fetchCameras();
+    } catch (err) {
+      console.warn("Camera removal failed:", err);
+    }
+  }
+
+  async reauthenticateCamera(cam) {
+    const provider = cam.native_provider || cam.provider_badge || cam.camera_type || "ring";
+    // Reuse the AC4 Rotate path: open the real credential modal with force=true
+    // so the user actually supplies credentials instead of posting a bare
+    // {force: true} body that can never complete a login.
+    const wizard = window.lookoutWizard;
+    if (wizard && typeof wizard.startAuth === "function") {
+      wizard.startAuth(provider, true);
+      return;
+    }
+    // The modal lives on the setup page; route there with a reauth hint and let
+    // the wizard open the same credential modal with force=true.
+    try {
+      window.location.href = resolveUrl(`/setup?reauth=${encodeURIComponent(provider)}`);
+    } catch (err) {
+      console.warn("Reauthentication unavailable:", err);
+    }
+  }
+
   async fetchCameras() {
     try {
       const res = await fetch(resolveUrl("/api/cameras"));
@@ -403,6 +451,7 @@ class LookoutApp {
       this.liveGrid.setCameras(this.cameras);
       this.timeline.setCameras(this.cameras);
       this.cameraSwitcher.setCameras(this.cameras);
+      // Management controls are now rendered by LiveGrid.setCameras() above.
 
       if (this.cameras.length > 0) {
         this.activeCamera = this.cameras[0];

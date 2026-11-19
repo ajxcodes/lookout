@@ -50,6 +50,8 @@ class NativeEventPoller:
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._dedup_size = max(1, int(dedup_size))
         self._last_poll: dict[str, datetime] = {}
+        self.consecutive_failures = 0
+        self.paused_providers: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -75,6 +77,25 @@ class NativeEventPoller:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def health(self) -> dict[str, Any]:
+        """Read-only poller health snapshot (no credential material)."""
+        last_poll = max(self._last_poll.values()) if self._last_poll else None
+        return {
+            "running": self.running,
+            "consecutive_failures": self.consecutive_failures,
+            "last_poll": last_poll.isoformat() if last_poll is not None else None,
+            "paused_providers": sorted(self.paused_providers),
+        }
+
+    def pause(self, provider: str) -> None:
+        """Pause native polling for a provider (used by logout)."""
+        self.paused_providers.add(str(provider).lower())
+
+    def resume(self, provider: str) -> None:
+        """Resume native polling for a provider (used by a successful login)."""
+        self.paused_providers.discard(str(provider).lower())
+
     async def _run(self) -> None:
         now = datetime.now(UTC)
         for camera in self._native_cameras():
@@ -83,6 +104,7 @@ class NativeEventPoller:
             try:
                 await self._tick()
             except Exception as exc:  # noqa: BLE001 - the poller must never die
+                self.consecutive_failures += 1
                 logger.warning("Native event poll tick failed: %s", exc)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self.interval)
@@ -119,9 +141,12 @@ class NativeEventPoller:
             self._seen.popitem(last=False)
 
     async def _tick(self) -> None:
+        had_failure = False
         for camera in self._native_cameras():
             camera_id = str(camera.id)
             provider = str(getattr(camera, "native_provider", "") or "").lower()
+            if provider in self.paused_providers:
+                continue
             adapter = self._adapter_for(provider)
             if adapter is None:
                 continue
@@ -129,6 +154,8 @@ class NativeEventPoller:
             try:
                 events = await adapter.poll_events(camera_id, since)
             except Exception as exc:  # noqa: BLE001 - per-camera isolation
+                had_failure = True
+                self.consecutive_failures += 1
                 logger.warning(
                     "Native event poll failed for camera '%s' (%s): %s",
                     camera_id,
@@ -153,6 +180,8 @@ class NativeEventPoller:
                     continue
                 self._remember(key)
                 await self._handle_event(camera_id, provider, event)
+        if not had_failure:
+            self.consecutive_failures = 0
 
     async def _handle_event(self, camera_id: str, provider: str, event: dict[str, Any]) -> None:
         image: bytes | None = None
