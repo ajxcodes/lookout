@@ -55,19 +55,23 @@ async def list_cameras(request: Request) -> dict[str, Any]:
     if config is None or not hasattr(config, "cameras"):
         return {"cameras": []}
 
+    from lookout.adapters.web.app import _redact_source
+
     auth_required_cameras = []
     for section_name in ("wyze", "ring"):
         section = getattr(config, section_name, None)
         if section is not None and getattr(section, "logged_out", False):
             auth_required_cameras.append(section_name)
-    cameras = [
-        build_camera_card_data(
+    cameras = []
+    for cam in config.cameras:
+        card = build_camera_card_data(
             cam,
             auth_required=str(getattr(cam, "native_provider", "") or "").lower()
             in auth_required_cameras,
         )
-        for cam in config.cameras
-    ]
+        if card.get("stream_url"):
+            card["stream_url"] = _redact_source(card["stream_url"])
+        cameras.append(card)
     return {"cameras": cameras}
 
 
@@ -173,11 +177,11 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
                 except Exception:  # noqa: BLE001 - fall through to next source
                     pass
 
-        # 1. Check for cached motion snapshot on disk
-        if snapshot_file.exists():
-            return FileResponse(snapshot_file, media_type="image/jpeg")
+        # 1. Check for newest cached motion or recorded event snapshot on disk (by mtime)
+        candidates: list[Path] = []
+        if snapshot_file.is_file():
+            candidates.append(snapshot_file)
 
-        # 2. Check for latest recorded event snapshot on disk before hitting live stream
         event_snap_dirs = [
             base_path / "snapshots" / "events",
             Path("/snapshots/events"),
@@ -185,9 +189,22 @@ async def get_camera_snapshot(camera_id: str, request: Request) -> Response:
         ]
         for snap_dir in event_snap_dirs:
             if snap_dir.is_dir():
-                matches = sorted(snap_dir.glob(f"{camera_id}_*.jpg"))
-                if matches:
-                    return FileResponse(matches[-1], media_type="image/jpeg")
+                candidates.extend(p for p in snap_dir.glob(f"{camera_id}_*.jpg") if p.is_file())
+
+        if candidates:
+
+            def _snap_sort_key(p: Path) -> tuple[float, str]:
+                try:
+                    return (p.stat().st_mtime, p.name)
+                except OSError:
+                    return (0.0, p.name)
+
+            newest = max(candidates, key=_snap_sort_key)
+            return FileResponse(
+                newest,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         # 3. Dynamic live frame from go2rtc (only for continuous live_rtc streams)
         if not is_on_demand:
@@ -250,7 +267,12 @@ class CameraSettingsRequest(BaseModel):
     enabled: bool | None = None
     sensitivity: float | None = None
     mute: bool | None = None
+    notifications_enabled: bool | None = None
     notifications_muted: bool | None = None
+    notification_min_threat: str | None = None
+    notification_event_types: list[str] | None = None
+    notify_pass1: bool | None = None
+    notify_pass2: bool | None = None
     stream_mode: str | None = None
 
 
@@ -264,6 +286,13 @@ def _require_api_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="API key required") from None
     if configured and not secrets.compare_digest(str(token), str(configured)):
         raise HTTPException(status_code=401, detail="Invalid API key") from None
+
+
+def _require_optional_api_key(request: Request) -> None:
+    configured = getattr(request.app.state, "api_key", None) or os.getenv("LOOKOUT_API_KEY")
+    if not configured:
+        return
+    _require_api_key(request)
 
 
 def _camera_exists(config: Any, camera_id: str) -> bool:
@@ -356,6 +385,29 @@ async def camera_snapshot(camera_id: str, request: Request) -> dict[str, Any]:
         if status is not None:
             raise HTTPException(status_code=int(status), detail=str(exc)) from None
         raise HTTPException(status_code=500, detail=str(exc)) from None
+    if config is not None and getattr(config, "storage", None) is not None:
+        try:
+            snap_src: Path | None = None
+            if isinstance(res, (str, Path)):
+                cand = Path(res)
+                if cand.is_file():
+                    snap_src = cand
+            elif isinstance(res, dict):
+                raw_path = res.get("path") or res.get("snapshot_uri")
+                if isinstance(raw_path, str):
+                    cand = Path(raw_path)
+                    if cand.is_file():
+                        snap_src = cand
+            if snap_src is not None:
+                data = snap_src.read_bytes()
+                if data:
+                    dest_dir = Path(config.storage.base_path) / "snapshots"
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    dest_file = dest_dir / f"{camera_id}.jpg"
+                    if snap_src.resolve() != dest_file.resolve():
+                        dest_file.write_bytes(data)
+        except Exception:  # noqa: BLE001 - best-effort cache update
+            pass
     return {"status": "ok", "result": res}
 
 
@@ -388,7 +440,7 @@ async def camera_record(camera_id: str, request: Request) -> dict[str, Any]:
 async def camera_settings(
     camera_id: str, payload: CameraSettingsRequest, request: Request
 ) -> dict[str, Any]:
-    _require_api_key(request)
+    _require_optional_api_key(request)
     config = request.app.state.config
     if not _camera_exists(config, camera_id):
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
@@ -404,7 +456,11 @@ async def camera_settings(
     return {
         "status": "ok",
         "enabled": getattr(cam, "enabled", None),
-        "camera": {"id": camera_id, "enabled": getattr(cam, "enabled", None)},
+        "camera": {
+            "id": camera_id,
+            "enabled": getattr(cam, "enabled", None),
+            "notifications_enabled": getattr(cam, "notifications_enabled", True),
+        },
     }
 
 

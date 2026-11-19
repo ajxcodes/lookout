@@ -191,7 +191,16 @@ export class LiveGrid {
         liveBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (cam.provider_badge === "ring" || cam.camera_type === "ring") {
-            this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_h264`);
+            if (
+              cam.live_stream_url ||
+              cam.live_source ||
+              cam.has_live_stream ||
+              cam.has_live_source
+            ) {
+              this.startTileLiveWebRTC(cam, video, overlay, `${cam.id}_live`);
+            } else {
+              this.startTileLiveWebRTC(cam, video, overlay, cam.id);
+            }
           } else {
             this.startTileLiveWebRTC(cam, video, overlay);
           }
@@ -358,8 +367,12 @@ export class LiveGrid {
       overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
 
-    const restoreSnapshotFallback = () => {
+    const restoreSnapshotFallback = (reason) => {
       if (record) record.isLive = false;
+      const why = typeof reason === "string" ? reason : "unknown";
+      console.warn(`Live tile ${cam.id} fell back to snapshots: ${why}`);
+      if (overlay) overlay.dataset.liveFallbackReason = why;
+      if (video) video.dataset.liveFallbackReason = why;
       if (record.clockInterval) {
         clearInterval(record.clockInterval);
         record.clockInterval = null;
@@ -422,7 +435,7 @@ export class LiveGrid {
           hideOverlayWhenReady();
         }
       };
-      video.onerror = restoreSnapshotFallback;
+      video.onerror = () => restoreSnapshotFallback("video.onerror");
     }
 
     try {
@@ -446,11 +459,25 @@ export class LiveGrid {
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          restoreSnapshotFallback();
+          restoreSnapshotFallback(`pc ${pc.connectionState}`);
         }
       };
 
-      pc.addTransceiver("video", { direction: "recvonly" });
+      const videoTransceiver = pc.addTransceiver("video", { direction: "recvonly" });
+      try {
+        const caps = window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities
+          ? RTCRtpReceiver.getCapabilities("video")
+          : null;
+        if (caps && caps.codecs && videoTransceiver.setCodecPreferences) {
+          const h264 = caps.codecs.filter((c) => /H264/i.test(c.mimeType));
+          if (h264.length > 0) {
+            const rest = caps.codecs.filter((c) => !/H264/i.test(c.mimeType));
+            videoTransceiver.setCodecPreferences([...h264, ...rest]);
+          }
+        }
+      } catch (codecErr) {
+        console.warn("H264 codec preference unavailable:", codecErr);
+      }
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -462,9 +489,11 @@ export class LiveGrid {
       const ws = new WebSocket(wsUrl);
       record.ws = ws;
 
+      let timedOut = false;
       const timeoutId = setTimeout(() => {
+        timedOut = true;
         try { ws.close(); } catch {}
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("15s timeout");
       }, 15000);
 
       const iceCandidates = [];
@@ -524,11 +553,12 @@ export class LiveGrid {
 
       ws.onerror = (err) => {
         clearTimeout(timeoutId);
-        restoreSnapshotFallback();
+        restoreSnapshotFallback("ws error");
       };
 
       ws.onclose = () => {
         clearTimeout(timeoutId);
+        if (!hasRemote && !timedOut) restoreSnapshotFallback("ws close");
       };
 
       pc.onicecandidate = (e) => {
@@ -547,7 +577,7 @@ export class LiveGrid {
       // Do not claim live success until media actually plays (H265/WebRTC may fail).
     } catch (err) {
       console.warn(`Live Grid tile connection failed for ${cam.id}:`, err);
-      restoreSnapshotFallback();
+      restoreSnapshotFallback("exception");
     }
   }
 
@@ -576,6 +606,19 @@ export class LiveGrid {
     const record = this.streamPlayers.get(cameraId);
     if (record && record.video && record.isLive && this.isTabVisible) {
       record.video.play().catch(() => {});
+    }
+  }
+
+  updateCameraSnapshot(cameraId, snapshotUri = null) {
+    const record = this.streamPlayers.get(cameraId);
+    if (!record) return;
+    const rawUrl = snapshotUri || `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}`;
+    const snapUrl = resolveUrl(rawUrl.includes("?") ? rawUrl : `${rawUrl}?t=${Date.now()}`);
+    if (record.video) {
+      record.video.poster = snapUrl;
+    }
+    if (record.overlay && !record.isLive) {
+      record.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
   }
 

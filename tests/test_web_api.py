@@ -296,3 +296,44 @@ def test_entity_photo_upload_size_limit_exceeded(client: TestClient) -> None:
     res = client.post("/api/entities/pet-corgi/photos", files=files)
     assert res.status_code == 413
     assert "File too large. Max size is 15MB." in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse(
+    tmp_path: Path,
+) -> None:
+    """Verify _on_clip_ready persists media_uri to SQLite even with binary clip_frame_samples."""
+    from lookout.adapters.sqlite.repository import SqliteEventRepository
+
+    db_path = tmp_path / "lookout.db"
+    cfg = LookoutConfig(
+        system_name="Test Lookout",
+        storage=StorageConfig(base_path=str(tmp_path), database_path=str(db_path)),
+        cameras=[
+            CameraConfig(
+                id="front-porch",
+                name="Front Porch",
+                stream_url="rtsp://localhost:8554/front_porch",
+            ),
+        ],
+    )
+    repo = SqliteEventRepository(db_path=str(db_path))
+    app = create_app(config=cfg, repository=repo)
+
+    svc = app.state.event_service
+    evt = await svc.ingest_raw_event(
+        "front-porch",
+        {"metadata": {"trigger": "motion"}, "snapshot_uri": "/media/events/snap.jpg"},
+    )
+    evt.media_uri = f"/media/events/front-porch_{evt.id}.mp4"
+    evt.metadata["clip_frame_samples"] = [b"\xff\xd8\xff\xe0fake-jpeg-bytes\xff\xd9"]
+
+    q = await app.state.broadcast_hub.subscribe()
+    await app.state.on_clip_ready(evt)
+
+    saved = await repo.get_by_id(evt.id)
+    assert saved is not None
+    assert saved.media_uri == f"/media/events/front-porch_{evt.id}.mp4"
+    assert "clip_frame_samples" not in saved.metadata
+    assert saved.metadata.get("clip_frame_samples_count") == 1
+    assert not q.empty()

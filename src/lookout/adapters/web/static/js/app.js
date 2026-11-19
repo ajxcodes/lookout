@@ -496,8 +496,8 @@ class LookoutApp {
         }
       }
 
-      this.events = events;
-      this.timeline.setEvents(this.events);
+      this.timeline.setEvents(events);
+      this.events = this.timeline.events;
       if (this.currentEventItem) {
         this.timeline.setSelectedEvent(this.currentEventItem.id);
       }
@@ -526,17 +526,31 @@ class LookoutApp {
         const eventData = JSON.parse(e.data);
         const isNew = !this.timeline.events.some((ev) => ev.id === eventData.id);
         this.timeline.addEvent(eventData);
+        this.events = this.timeline.events;
         if (this.scrubber) this.scrubber.setEvents(this.events);
+
+        const snapUri = eventData.snapshot_url || eventData.snapshot_uri || null;
+        if (this.liveGrid && typeof this.liveGrid.updateCameraSnapshot === "function") {
+          this.liveGrid.updateCameraSnapshot(eventData.camera_id, snapUri);
+        }
+        if (this.livePlayer && typeof this.livePlayer.updateCameraSnapshot === "function") {
+          this.livePlayer.updateCameraSnapshot(eventData.camera_id, snapUri);
+        }
 
         if (isNew) {
           // Update counts only for new events
           const currentCounts = { ...this.cameraSwitcher.eventCounts };
           currentCounts[eventData.camera_id] = (currentCounts[eventData.camera_id] || 0) + 1;
           this.cameraSwitcher.setEventCounts(currentCounts);
-        } else if (this.currentEventItem && this.currentEventItem.id === eventData.id) {
+        }
+        if (this.currentEventItem && this.currentEventItem.id === eventData.id) {
           this.currentEventItem = eventData;
-          if (this.eventPlayer && eventData.media_uri) {
-            this.eventPlayer.loadEvent(eventData);
+          if (this.eventPlayer) {
+            if (eventData.media_uri) {
+              this.eventPlayer.loadEvent(eventData);
+            } else {
+              this.eventPlayer.updateAiDetailsCard(eventData);
+            }
           }
         }
       } catch (err) {

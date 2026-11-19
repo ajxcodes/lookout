@@ -43,9 +43,11 @@ def probe_wyze(
     is_port_open = driver.probe_socket("127.0.0.1", 5000) or driver.probe_socket("127.0.0.1", 8554)
 
     remote_reachable = False
+    # Collector's getattr-based probing, using #64's None-guarded ``wyze_cfg``.
     if wyze_cfg is not None:
-        if wyze_cfg.external_bridge_url:
-            res = driver.test_connection(wyze_cfg.external_bridge_url)
+        ext_url = getattr(wyze_cfg, "external_bridge_url", None)
+        if ext_url:
+            res = driver.test_connection(ext_url)
             remote_reachable = bool(
                 res.get("reachable") if hasattr(res, "get") else getattr(res, "reachable", False)
             )

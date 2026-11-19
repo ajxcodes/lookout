@@ -246,13 +246,19 @@ async def native_status(request: Request) -> dict[str, Any]:
     ring_cfg = getattr(active_config, "ring", None)
     stream_manager: dict[str, Any] | None = None
     if manager is not None:
+        from lookout.adapters.web.app import _redact_source
+
         stream_manager = {
             "running": bool(getattr(manager, "running", False)),
             "api_url": getattr(manager, "api_url", None),
-            "streams": dict(getattr(manager, "streams", {}) or {}),
+            "streams": {
+                name: _redact_source(source)
+                for name, source in (getattr(manager, "streams", {}) or {}).items()
+            },
             "binary": getattr(manager, "binary_path", None),
         }
     poller = getattr(request.app.state, "native_event_poller", None)
+    # #64: auth state + per-camera auth-required list.
     health = getattr(poller, "health", None) if poller is not None else None
     logged_out = {
         "wyze": bool(getattr(wyze_cfg, "logged_out", False)),
@@ -263,6 +269,36 @@ async def native_status(request: Request) -> dict[str, Any]:
         native_provider = str(getattr(cam, "native_provider", "") or "").lower()
         if native_provider in ("wyze", "ring") and logged_out.get(native_provider):
             auth_required_cameras.append(str(getattr(cam, "id", "")))
+    # Collector: per-camera failure/error detail from the poller.
+    poller_status = None
+    if poller is not None:
+        try:
+            raw = poller.status() if callable(getattr(poller, "status", None)) else None
+            if raw is not None and hasattr(raw, "__await__"):
+                raw = await raw
+            poller_status = raw
+        except Exception:  # noqa: BLE001
+            poller_status = None
+    event_poller_last_error = getattr(poller, "last_error", None)
+    if callable(event_poller_last_error):
+        event_poller_last_error = None
+    event_poller_last_success = getattr(poller, "last_success", None)
+    if callable(event_poller_last_success):
+        event_poller_last_success = None
+    event_poller_last_event_count = getattr(poller, "last_event_count", 0)
+    if callable(event_poller_last_event_count):
+        event_poller_last_event_count = 0
+    # Collect per-camera errors for convenience.
+    event_poller_errors: list[str] = []
+    event_poller_errors_by_camera: dict[str, Any] = {}
+    if isinstance(poller_status, dict):
+        for container_key in ("cameras", "health", "per_camera"):
+            container = poller_status.get(container_key)
+            if isinstance(container, dict):
+                for cam_id, health in container.items():
+                    if isinstance(health, dict) and health.get("last_error"):
+                        event_poller_errors.append(str(health["last_error"]))
+                        event_poller_errors_by_camera[str(cam_id)] = health.get("last_error")
     return {
         "status": "ok",
         "wyze_native_ingestion": bool(getattr(wyze_cfg, "native_ingestion", False)),
@@ -286,6 +322,12 @@ async def native_status(request: Request) -> dict[str, Any]:
         "event_poller_consecutive_failures": (
             int(health.get("consecutive_failures", 0)) if isinstance(health, dict) else 0
         ),
+        "event_poller": poller_status,
+        "event_poller_last_error": event_poller_last_error,
+        "event_poller_last_success": event_poller_last_success,
+        "event_poller_last_event_count": event_poller_last_event_count,
+        "event_poller_errors": event_poller_errors,
+        "event_poller_errors_by_camera": event_poller_errors_by_camera,
     }
 
 

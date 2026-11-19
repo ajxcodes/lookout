@@ -14,6 +14,7 @@ export class SettingsModal {
     this.facesContainer = this.modal ? (this.modal.querySelector("#face-gallery-list") || this.modal.querySelector("#faces-grid")) : null;
     this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
     this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
+    this.cameraNotificationsContainer = this.modal ? this.modal.querySelector("#camera-notifications-list") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
 
     this.archiveToggle = this.modal ? this.modal.querySelector("#setting-archive-enabled") : null;
@@ -171,6 +172,7 @@ export class SettingsModal {
     await this.loadFaces();
     await this.loadEntities();
     await this.loadIntegrations();
+    await this.loadCameraNotifications();
     await this.loadStorage();
   }
 
@@ -573,6 +575,114 @@ export class SettingsModal {
     } finally {
       this.triggerEvictionBtn.disabled = false;
       this.triggerEvictionBtn.textContent = "⚡ Run Eviction / Sync Now";
+    }
+  }
+
+  async loadCameraNotifications() {
+    if (!this.cameraNotificationsContainer) return;
+    this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">Loading cameras...</div>';
+    try {
+      const res = await fetch("/api/cameras");
+      if (!res.ok) throw new Error("Failed to load cameras");
+      const data = await res.json();
+      const cameras = data.cameras || [];
+      if (cameras.length === 0) {
+        this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">No cameras configured.</div>';
+        return;
+      }
+
+      this.cameraNotificationsContainer.innerHTML = "";
+      const eventTypes = ["motion", "sound", "person", "ding"];
+      const threatLevels = [
+        { value: "", label: "Global Default" },
+        { value: "INFO", label: "INFO" },
+        { value: "LOW", label: "LOW" },
+        { value: "MEDIUM", label: "MEDIUM" },
+        { value: "HIGH", label: "HIGH" },
+        { value: "CRITICAL", label: "CRITICAL" },
+      ];
+
+      for (const cam of cameras) {
+        const card = document.createElement("div");
+        card.className = "camera-notification-card";
+        card.style.cssText = "padding:10px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-subtle);display:flex;flex-direction:column;gap:8px;";
+
+        const enabled = cam.notifications_enabled !== false;
+        const minThreat = cam.notification_min_threat || "";
+        const selectedTypes = new Set(cam.notification_event_types || eventTypes);
+        const pass1 = cam.notify_pass1 !== false;
+        const pass2 = cam.notify_pass2 !== false;
+
+        card.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:0.85rem;">
+              <span>${cam.icon || "📷"}</span>
+              <span>${cam.name || cam.id}</span>
+              <span class="badge" style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:var(--bg-surface);">${cam.provider_badge || "generic"}</span>
+            </div>
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-enabled" ${enabled ? "checked" : ""}>
+              <span>Alerts</span>
+            </label>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:0.78rem;">
+            <label style="display:flex;align-items:center;gap:4px;">
+              <span>Min Threat:</span>
+              <select class="cam-notif-threat" style="padding:2px 6px;border-radius:4px;border:1px solid var(--border-subtle);background:var(--bg-surface);color:inherit;">
+                ${threatLevels.map((t) => `<option value="${t.value}" ${minThreat === t.value ? "selected" : ""}>${t.label}</option>`).join("")}
+              </select>
+            </label>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${eventTypes.map((t) => `<label style="display:flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" class="cam-notif-type" value="${t}" ${selectedTypes.has(t) ? "checked" : ""}><span>${t}</span></label>`).join("")}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font-size:0.78rem;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-pass1" ${pass1 ? "checked" : ""}>
+              <span>Pass 1 (Instant)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-pass2" ${pass2 ? "checked" : ""}>
+              <span>Pass 2 (Enriched Clip)</span>
+            </label>
+          </div>
+        `;
+
+        const saveChanges = async () => {
+          const payload = {
+            notifications_enabled: card.querySelector(".cam-notif-enabled").checked,
+            notification_min_threat: card.querySelector(".cam-notif-threat").value || null,
+            notification_event_types: Array.from(card.querySelectorAll(".cam-notif-type:checked")).map((el) => el.value),
+            notify_pass1: card.querySelector(".cam-notif-pass1").checked,
+            notify_pass2: card.querySelector(".cam-notif-pass2").checked,
+          };
+          try {
+            const patchRes = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/settings`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!patchRes.ok) throw new Error("Save failed");
+            if (this.feedbackEl) {
+              this.feedbackEl.style.color = "#10b981";
+              this.feedbackEl.textContent = `Saved notification settings for ${cam.name || cam.id}`;
+            }
+          } catch (err) {
+            if (this.feedbackEl) {
+              this.feedbackEl.style.color = "#ef4444";
+              this.feedbackEl.textContent = `Failed to save settings for ${cam.name || cam.id}`;
+            }
+          }
+        };
+
+        card.querySelectorAll("input, select").forEach((el) => {
+          el.addEventListener("change", saveChanges);
+        });
+
+        this.cameraNotificationsContainer.appendChild(card);
+      }
+    } catch (err) {
+      this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:#ef4444;">Failed to load camera notification settings.</div>';
     }
   }
 }

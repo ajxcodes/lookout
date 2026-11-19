@@ -115,7 +115,6 @@ def test_logout_does_not_remove_or_mutate_cameras(tmp_path: Path) -> None:
                 stream_url="ring:?camera_id=1",
                 native_provider="ring",
                 native_device_id="ring-dev-1",
-                mqtt_id="ring-mqtt-1",
                 notifications_muted=True,
             ),
             CameraConfig(

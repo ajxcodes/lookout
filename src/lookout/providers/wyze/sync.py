@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,47 +10,29 @@ if TYPE_CHECKING:
 
 
 def sync_wyze_environment(config: LookoutConfig, target_dir: Path) -> list[Path]:
-    """Synchronize Wyze bridge environment file with 0o600 permissions."""
+    """Generate wyze-bridge.env sidecar file when credentials are present."""
+    if config is None or config.wyze is None:
+        return []
+    wyze = config.wyze
+    if not (wyze.email or wyze.auth_token or wyze.api_key or wyze.key_id):
+        return []
+
     target_dir.mkdir(parents=True, exist_ok=True)
-    env_file = target_dir / "wyze-bridge.env"
+    env_path = target_dir / "wyze-bridge.env"
+    lines = []
+    if wyze.email:
+        lines.append(f"WYZE_EMAIL={wyze.email}")
+    if wyze.password:
+        lines.append(f"WYZE_PASSWORD={wyze.password}")
+    if wyze.auth_token:
+        lines.append(f"WYZE_ACCESS_TOKEN={wyze.auth_token}")
+    if wyze.api_key:
+        lines.append(f"WYZE_API_KEY={wyze.api_key}")
+    if wyze.key_id:
+        lines.append(f"KEY_ID={wyze.key_id}")
+    if wyze.totp_key:
+        lines.append(f"TOTP_KEY={wyze.totp_key}")
 
-    email = (config.wyze.email if config.wyze else None) or os.environ.get("WYZE_EMAIL") or ""
-    password = (
-        (config.wyze.password if config.wyze else None) or os.environ.get("WYZE_PASSWORD") or ""
-    )
-    token = (
-        (config.wyze.auth_token if config.wyze else None)
-        or os.environ.get("WYZE_ACCESS_TOKEN")
-        or ""
-    )
-    api_key = (
-        (config.wyze.api_key if config.wyze else None)
-        or os.environ.get("WYZE_API_KEY")
-        or os.environ.get("API_KEY")
-        or ""
-    )
-    key_id = (
-        (config.wyze.key_id if config.wyze else None)
-        or os.environ.get("WYZE_KEY_ID")
-        or os.environ.get("WYZE_API_ID")
-        or os.environ.get("API_ID")
-        or ""
-    )
-
-    lines = [
-        f"WYZE_EMAIL={email}",
-        f"WYZE_PASSWORD={password}",
-        f"WYZE_ACCESS_TOKEN={token}",
-        "WB_IP=0.0.0.0",
-        "ON_DEMAND=True",
-    ]
-    if api_key:
-        lines.append(f"API_KEY={api_key}")
-        lines.append(f"WYZE_API_KEY={api_key}")
-    if key_id:
-        lines.append(f"API_ID={key_id}")
-        lines.append(f"WYZE_API_ID={key_id}")
-
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    env_file.chmod(0o600)
-    return [env_file]
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    return [env_path]

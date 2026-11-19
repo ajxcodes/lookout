@@ -48,7 +48,7 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
 LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
 
-# Install system dependencies (FFmpeg, OpenCV/graphics runtime, curl, ca-certificates)
+# Install system dependencies (FFmpeg, Node.js 20 LTS, OpenCV/graphics runtime, curl, ca-certificates)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
@@ -58,6 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     curl \
     ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the embedded go2rtc binary used for native Wyze/Ring streaming.
@@ -100,6 +102,9 @@ RUN node --version && \
 RUN node -e "const fs = require('fs'); const p = '/app/node_modules/ring-client-api/package.json'; const manifest = JSON.parse(fs.readFileSync(p, 'utf8')); manifest.exports['./lib/rest-client.js'] = './lib/rest-client.js'; fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n')"
 
 WORKDIR /app
+
+# Install ring-client-api for the H.264 live stream bridge
+RUN npm install --no-save --omit=dev ring-client-api && chown -R lookout:lookout /app/node_modules
 
 # Copy virtual environment and application from builder
 COPY --from=builder --chown=lookout:lookout /app/.venv /app/.venv

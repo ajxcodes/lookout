@@ -45,8 +45,10 @@ def probe_ring(
     )
 
     remote_reachable = False
-    if ring_cfg is not None and ring_cfg.external_stream_url:
-        res = driver.test_connection(ring_cfg.external_stream_url)
+    # Collector's getattr-based probing, using #64's None-guarded ``ring_cfg``.
+    ext_url = getattr(ring_cfg, "external_stream_url", None)
+    if ext_url:
+        res = driver.test_connection(ext_url)
         remote_reachable = bool(
             res.get("reachable") if hasattr(res, "get") else getattr(res, "reachable", False)
         )
