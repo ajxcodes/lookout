@@ -274,6 +274,7 @@ class CameraSettingsRequest(BaseModel):
     notify_pass1: bool | None = None
     notify_pass2: bool | None = None
     stream_mode: str | None = None
+    continuous_recording: bool | None = None
 
 
 def _require_api_key(request: Request) -> None:

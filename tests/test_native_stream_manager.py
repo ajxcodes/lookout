@@ -598,3 +598,20 @@ async def test_prepopulated_exec_streams_are_not_restarted_on_ensure_stream(tmp_
     finally:
         await manager.stop()
         await client.aclose()
+
+
+def test_write_config_emits_preload_for_recorded_cameras(tmp_path: Any) -> None:
+    manager = NativeStreamManager(runtime_dir=tmp_path / "rt", binary_path="/bin/true")
+    manager.streams["cam1"] = "rtsp://example/cam1"
+    manager.set_recorded_cameras({"cam1"})
+    manager._write_config()
+    text = (tmp_path / "rt" / "go2rtc.yaml").read_text()
+    assert "preload:\n  cam1: video&audio" in text
+
+
+def test_write_config_omits_preload_when_empty(tmp_path: Any) -> None:
+    manager = NativeStreamManager(runtime_dir=tmp_path / "rt", binary_path="/bin/true")
+    manager.streams["cam1"] = "rtsp://example/cam1"
+    manager._write_config()
+    text = (tmp_path / "rt" / "go2rtc.yaml").read_text()
+    assert "preload:" not in text

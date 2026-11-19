@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from lookout.adapters.sqlite.audit import AuditLogger
-from lookout.config.schema import StorageConfig
+from lookout.config.schema import ContinuousRecordingConfig, StorageConfig
 from lookout.domain.models import CameraEvent, EvictionResult, StorageStatus
 from lookout.ports.egress import MediaArchivalPort, StorageServicePort
 
@@ -33,11 +33,18 @@ class StorageService(StorageServicePort):
         repository: Any,
         audit_logger: AuditLogger | None = None,
         archival_adapter: MediaArchivalPort | None = None,
+        continuous_config: Any | None = None,
+        **kwargs: Any,
     ) -> None:
         self.config = config
         self.repository = repository
         self.audit_logger = audit_logger
         self.archival_adapter = archival_adapter or NoOpMediaArchivalAdapter()
+        if continuous_config is None:
+            continuous_config = kwargs.get("continuous_recording_config")
+        if continuous_config is None:
+            continuous_config = ContinuousRecordingConfig()
+        self.continuous_config = continuous_config
         self._task: asyncio.Task[None] | None = None
         self._running: bool = False
 
@@ -46,10 +53,15 @@ class StorageService(StorageServicePort):
         base_path = Path(self.config.base_path)
 
         # 1. Local Tier directory breakdown and total
-        media_breakdown: dict[str, int] = {"recordings": 0, "snapshots": 0, "hls": 0}
+        media_breakdown: dict[str, int] = {
+            "recordings": 0,
+            "snapshots": 0,
+            "hls": 0,
+            "continuous": 0,
+        }
         media_total = 0
         if base_path.exists():
-            for sub in ("recordings", "snapshots", "hls"):
+            for sub in ("recordings", "snapshots", "hls", "continuous"):
                 sub_dir = base_path / sub
                 if sub_dir.is_dir():
                     size = sum(f.stat().st_size for f in sub_dir.rglob("*") if f.is_file())
@@ -440,6 +452,100 @@ class StorageService(StorageServicePort):
             bytes_freed=bytes_freed,
             events_pruned=events_pruned,
         )
+
+    async def sweep_continuous(self, target_bytes: Any = None) -> Any:
+        """Delete oldest continuous segments first under quota/disk pressure."""
+        from lookout.domain.models import EvictionResult
+
+        result = EvictionResult()
+        base_path = Path(self.config.base_path)
+        cont = base_path / "continuous"
+        if not cont.exists():
+            return result
+
+        import time
+
+        retention_days = getattr(self.continuous_config, "retention_days", 1) or 1
+        cutoff = time.time() - float(retention_days) * 86400.0
+
+        files = [p for p in cont.rglob("*") if p.is_file()]
+        # 1. Delete expired by retention.
+        for p in list(files):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    sz = p.stat().st_size
+                    p.unlink(missing_ok=True)
+                    result.files_deleted += 1
+                    result.bytes_freed += sz
+                    files.remove(p)
+            except OSError:
+                pass
+
+        with contextlib.suppress(Exception):
+            for d in sorted(cont.rglob("*"), reverse=True):
+                if d.is_dir():
+                    with contextlib.suppress(OSError):
+                        d.rmdir()
+
+        files = [p for p in cont.rglob("*") if p.is_file()]
+
+        status = self.get_storage_status()
+        effective_quota = status.max_storage_bytes
+        if target_bytes is not None:
+            try:
+                tb = int(target_bytes)
+                # If target_bytes is large, treat as quota override; if small, reclaim amount.
+                effective_quota = tb if tb > 1024 else status.max_storage_bytes
+            except (TypeError, ValueError):
+                pass
+
+        if target_bytes is not None:
+            try:
+                tb = int(target_bytes)
+                if 0 < tb <= 1024:
+                    # reclaim target_bytes: lower watermark
+                    current_total = self.get_storage_status().media_total_bytes
+                    low_watermark = max(0, current_total - tb)
+                else:
+                    low_watermark = int(
+                        effective_quota * (self.config.low_watermark_percent / 100.0)
+                    )
+            except (TypeError, ValueError):
+                low_watermark = int(effective_quota * (self.config.low_watermark_percent / 100.0))
+        else:
+            low_watermark = int(effective_quota * (self.config.low_watermark_percent / 100.0))
+
+        files_sorted = sorted(files, key=lambda p: p.stat().st_mtime if p.exists() else 0)
+        for p in files_sorted:
+            if not p.exists():
+                continue
+            current_total = self.get_storage_status().media_total_bytes
+            if current_total <= low_watermark:
+                break
+            try:
+                sz = p.stat().st_size
+                p.unlink(missing_ok=True)
+                result.files_deleted += 1
+                result.bytes_freed += sz
+            except OSError:
+                pass
+
+        with contextlib.suppress(Exception):
+            for d in sorted(cont.rglob("*"), reverse=True):
+                if d.is_dir():
+                    with contextlib.suppress(OSError):
+                        d.rmdir()
+
+        return result
+
+    async def execute_continuous_sweep(self, target_bytes: Any = None) -> Any:
+        return await self.sweep_continuous(target_bytes)
+
+    async def sweep_continuous_storage(self, target_bytes: Any = None) -> Any:
+        return await self.sweep_continuous(target_bytes)
+
+    async def execute_continuous_eviction(self, target_bytes: Any = None) -> Any:
+        return await self.sweep_continuous(target_bytes)
 
     async def _run_loop(self) -> None:
         """Periodic background audit loop checking quotas and running eviction."""
