@@ -246,10 +246,15 @@ async def native_status(request: Request) -> dict[str, Any]:
     ring_cfg = getattr(active_config, "ring", None)
     stream_manager: dict[str, Any] | None = None
     if manager is not None:
+        from lookout.adapters.web.app import _redact_source
+
         stream_manager = {
             "running": bool(getattr(manager, "running", False)),
             "api_url": getattr(manager, "api_url", None),
-            "streams": dict(getattr(manager, "streams", {}) or {}),
+            "streams": {
+                name: _redact_source(source)
+                for name, source in (getattr(manager, "streams", {}) or {}).items()
+            },
             "binary": getattr(manager, "binary_path", None),
         }
     poller = getattr(request.app.state, "native_event_poller", None)

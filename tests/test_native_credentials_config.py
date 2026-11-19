@@ -207,3 +207,54 @@ def test_status_reports_configuration_without_network_io(tmp_path: Path) -> None
     assert body["ring_configured"] is False
     assert body["stream_manager"] is not None
     assert body["stream_manager"]["running"] is False
+
+
+def test_native_status_redacts_ring_refresh_token(tmp_path: Path) -> None:
+    client, app = _client(tmp_path)
+    app.state.native_stream_manager.streams = {
+        "front_door": "ring:?camera_id=123&device_id=abc&refresh_token=SECRET123"
+    }
+
+    response = client.get("/api/native/status")
+
+    assert response.status_code == 200
+    assert "SECRET123" not in response.text
+    assert "refresh_token=[redacted]" in response.text
+    stream = response.json()["stream_manager"]["streams"]["front_door"]
+    assert "front_door" in response.json()["stream_manager"]["streams"]
+    assert "camera_id=123" in stream
+
+
+def test_native_status_redacts_bridge_refresh_token(tmp_path: Path) -> None:
+    client, app = _client(tmp_path)
+    app.state.native_stream_manager.streams = {
+        "front_door": (
+            "exec:node /app/ring_bridge/index.mjs --camera-id 123 --refresh-token SECRET123"
+        )
+    }
+
+    response = client.get("/api/native/status")
+
+    assert response.status_code == 200
+    assert "SECRET123" not in response.text
+    assert "--refresh-token [redacted]" in response.text
+
+
+def test_native_status_preserves_stream_shape_and_fields(tmp_path: Path) -> None:
+    client, app = _client(tmp_path)
+    app.state.native_stream_manager.streams = {
+        "front_door": "ring:?camera_id=123&device_id=abc&refresh_token=SECRET123",
+        "backyard_snapshot": ("ring:?camera_id=456&device_id=def&refresh_token=SECRET456&snapshot"),
+    }
+
+    response = client.get("/api/native/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["stream_manager"]["streams"]) == {"front_door", "backyard_snapshot"}
+    assert all(isinstance(v, str) for v in body["stream_manager"]["streams"].values())
+    assert isinstance(body["stream_manager"]["running"], bool)
+    assert "api_url" in body["stream_manager"]
+    assert "binary" in body["stream_manager"]
+    assert isinstance(body["ring_configured"], bool)
+    assert isinstance(body["wyze_configured"], bool)
