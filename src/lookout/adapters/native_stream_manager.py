@@ -520,8 +520,14 @@ class NativeStreamManager(VideoRecorderPort):
             if not self.running:
                 return
             client = await self._get_client()
-            with contextlib.suppress(Exception):
+            try:
                 await client.delete(f"{self._api_url}/api/streams", params={"src": str(camera_id)})
+            except Exception as exc:
+                logger.warning(
+                    "Failed to remove go2rtc stream '%s' during cleanup: %s",
+                    camera_id,
+                    exc,
+                )
 
     # Compatibility aliases used by the previous scaffold and application code.
     async def start_stream(self, *args: Any, **kwargs: Any) -> dict[str, Any]:

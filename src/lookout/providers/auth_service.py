@@ -168,7 +168,12 @@ def apply_credentials(
             raise ValueError("Ring issuer did not return a token")
         try:
             inner = decode_ring_token(str(section.refresh_token or section.auth_token or ""))
-        except RingAuthError:
+        except RingAuthError as exc:
+            logger.warning(
+                "Could not decode existing Ring token envelope; "
+                "starting from empty push-credential state: %s",
+                exc,
+            )
             inner = {}
         try:
             new_inner = decode_ring_token(str(raw))
