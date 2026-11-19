@@ -247,6 +247,9 @@ export class SetupWizard {
         name,
         stream_url,
         camera_type,
+        provider: camera_type === "ring" ? "ring" : camera_type === "wyze" ? "wyze" : (camera_type === "go2rtc" ? "go2rtc" : "generic"),
+        native_provider: camera_type === "ring" ? "ring" : camera_type === "wyze" ? "wyze" : null,
+        location: null,
         enabled: true,
         sensitivity: 0.5,
         record_duration: 10.0,
@@ -463,18 +466,6 @@ export class SetupWizard {
 
     if (this.currentStep === 5) {
       this.gatherStepData();
-      // Ensure at least one default camera exists if none was added
-      if (this.configData.cameras.length === 0) {
-        this.configData.cameras.push({
-          id: "front-porch",
-          name: "Front Porch",
-          stream_url: "rtsp://localhost:8554/front_porch",
-          camera_type: "generic",
-          enabled: true,
-          sensitivity: 0.5,
-          record_duration: 10.0,
-        });
-      }
       if (this.configData.notification_targets.length === 0) {
         this.configData.notification_targets.push({
           name: "default-target",
