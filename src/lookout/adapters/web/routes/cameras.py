@@ -57,13 +57,68 @@ async def list_cameras(request: Request) -> dict[str, Any]:
 
     from lookout.adapters.web.app import _redact_source
 
+    auth_required_cameras = []
+    for section_name in ("wyze", "ring"):
+        section = getattr(config, section_name, None)
+        if section is not None and getattr(section, "logged_out", False):
+            auth_required_cameras.append(section_name)
     cameras = []
     for cam in config.cameras:
-        card = build_camera_card_data(cam)
+        card = build_camera_card_data(
+            cam,
+            auth_required=str(getattr(cam, "native_provider", "") or "").lower()
+            in auth_required_cameras,
+        )
         if card.get("stream_url"):
             card["stream_url"] = _redact_source(card["stream_url"])
         cameras.append(card)
     return {"cameras": cameras}
+
+
+@router.delete("/cameras/{camera_id}")
+@router.delete("/v1/cameras/{camera_id}")
+async def remove_camera(camera_id: str, request: Request) -> dict[str, Any]:
+    """Explicitly remove a camera (any provider) without touching event history.
+
+    This is only ever called from the user-initiated "Remove camera" action;
+    logout and poller auth failures never invoke it.
+    """
+    from lookout.providers.config_io import atomic_write_config
+
+    config = request.app.state.config
+    cam = _get_camera(config, camera_id)
+    if cam is None:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+
+    native_provider = str(getattr(cam, "native_provider", "") or "").lower()
+    native_device_id = getattr(cam, "native_device_id", None)
+
+    config.cameras = [c for c in config.cameras if getattr(c, "id", None) != camera_id]
+
+    if native_provider in ("wyze", "ring") and native_device_id:
+        provider_cfg = getattr(config, native_provider, None)
+        if provider_cfg is not None:
+            ids = list(getattr(provider_cfg, "native_device_ids", []) or [])
+            if native_device_id in ids:
+                ids.remove(native_device_id)
+                provider_cfg.native_device_ids = ids
+
+    manager = getattr(request.app.state, "native_stream_manager", None)
+    if manager is not None:
+        remover = getattr(manager, "remove_stream", None)
+        if callable(remover):
+            try:
+                result = remover(camera_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # noqa: BLE001 - stream cleanup is best effort
+                pass
+
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path:
+        atomic_write_config(config, config_path)
+
+    return {"status": "removed", "camera_id": camera_id}
 
 
 @router.get("/cameras/{camera_id}/snapshot")

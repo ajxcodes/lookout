@@ -32,7 +32,9 @@ def infer_camera_icon(name_or_location: str | None) -> str:
     return "📹"
 
 
-def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str, Any]:
+def build_camera_card_data(
+    cam: CameraConfig, event_count: int = 0, *, auth_required: bool = False
+) -> dict[str, Any]:
     """Generate structured camera card metadata with provider and stream badges."""
     provider_candidate = cam.provider or cam.camera_type
     s_raw = f"{cam.id or ''} {cam.name or ''} {cam.stream_url or ''}".lower()
@@ -101,6 +103,8 @@ def build_camera_card_data(cam: CameraConfig, event_count: int = 0) -> dict[str,
         "ptz_enabled": getattr(cam, "ptz_enabled", False),
         "ptz_protocol": getattr(cam, "ptz_protocol", "none"),
         "ptz_max_speed": getattr(cam, "ptz_max_speed", 0.5),
+        "native_provider": getattr(cam, "native_provider", None),
+        "auth_required": bool(auth_required),
         "live_stream_url": getattr(cam, "live_stream_url", None),
         "live_source": getattr(cam, "live_stream_url", None),
         "has_live_stream": bool(getattr(cam, "live_stream_url", None)),

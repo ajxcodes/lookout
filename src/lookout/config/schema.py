@@ -264,6 +264,10 @@ class WyzeConfig(BaseModel):
     discovery_enabled: bool = Field(
         default=True, description="Whether native Wyze device discovery is enabled"
     )
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
+    )
     bridge_rtsp_url: str | None = Field(
         default=None, description="Optional RTSP URL for legacy/external Wyze bridge"
     )
@@ -306,6 +310,10 @@ class RingConfig(BaseModel):
     timestamp_overlay: bool = Field(
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
+    )
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
     )
 
 

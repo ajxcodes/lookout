@@ -258,6 +258,18 @@ async def native_status(request: Request) -> dict[str, Any]:
             "binary": getattr(manager, "binary_path", None),
         }
     poller = getattr(request.app.state, "native_event_poller", None)
+    # #64: auth state + per-camera auth-required list.
+    health = getattr(poller, "health", None) if poller is not None else None
+    logged_out = {
+        "wyze": bool(getattr(wyze_cfg, "logged_out", False)),
+        "ring": bool(getattr(ring_cfg, "logged_out", False)),
+    }
+    auth_required_cameras = []
+    for cam in getattr(active_config, "cameras", []) if active_config else []:
+        native_provider = str(getattr(cam, "native_provider", "") or "").lower()
+        if native_provider in ("wyze", "ring") and logged_out.get(native_provider):
+            auth_required_cameras.append(str(getattr(cam, "id", "")))
+    # Collector: per-camera failure/error detail from the poller.
     poller_status = None
     if poller is not None:
         try:
@@ -292,15 +304,24 @@ async def native_status(request: Request) -> dict[str, Any]:
         "wyze_native_ingestion": bool(getattr(wyze_cfg, "native_ingestion", False)),
         "ring_native_ingestion": bool(getattr(ring_cfg, "native_ingestion", False)),
         "wyze_configured": bool(
-            getattr(wyze_cfg, "auth_token", None)
-            or getattr(wyze_cfg, "refresh_token", None)
-            or getattr(wyze_cfg, "email", None)
+            not logged_out["wyze"]
+            and (
+                getattr(wyze_cfg, "auth_token", None)
+                or getattr(wyze_cfg, "refresh_token", None)
+                or getattr(wyze_cfg, "email", None)
+            )
         ),
         "ring_configured": bool(
-            getattr(ring_cfg, "refresh_token", None) or getattr(ring_cfg, "auth_token", None)
+            not logged_out["ring"]
+            and (getattr(ring_cfg, "refresh_token", None) or getattr(ring_cfg, "auth_token", None))
         ),
+        "logged_out": logged_out,
+        "auth_required_cameras": auth_required_cameras,
         "stream_manager": stream_manager,
         "event_poller_running": bool(getattr(poller, "running", False)),
+        "event_poller_consecutive_failures": (
+            int(health.get("consecutive_failures", 0)) if isinstance(health, dict) else 0
+        ),
         "event_poller": poller_status,
         "event_poller_last_error": event_poller_last_error,
         "event_poller_last_success": event_poller_last_success,

@@ -3,6 +3,7 @@
  */
 import { infer_camera_icon } from "./switcher.js";
 import { resolveUrl } from "../utils/url.js";
+import { buildCameraManagementControls } from "./camera-management.js";
 
 function resolveWsUrl(path) {
   if (!path) return path;
@@ -23,10 +24,22 @@ function resolveWsUrl(path) {
 }
 
 export class LiveGrid {
-  constructor({ container, densitySelector, onFocusCamera }) {
+  constructor({
+    container,
+    densitySelector,
+    onFocusCamera,
+    onRemoveCamera,
+    onReauthenticateCamera,
+    cameraManagementLabels,
+  }) {
     this.container = container;
     this.densitySelector = densitySelector;
     this.onFocusCamera = onFocusCamera;
+    // AC10: management bar callbacks are injected by the app so the controls
+    // are built directly into each rendered tile (no fragile post-hoc selector).
+    this.onRemoveCamera = onRemoveCamera;
+    this.onReauthenticateCamera = onReauthenticateCamera;
+    this.cameraManagementLabels = cameraManagementLabels;
     this.cameras = [];
     try {
       this.density = localStorage?.getItem("lookout_grid_density") || "auto";
@@ -254,6 +267,18 @@ export class LiveGrid {
       });
 
       tile.appendChild(stage);
+
+      // AC10: render the management bar as part of the tile so every camera
+      // (any provider, any auth state) exposes "Remove camera", and
+      // unauthorized native cameras show Reauthenticate / auth-required.
+      tile.appendChild(
+        buildCameraManagementControls(cam, {
+          onRemoveCamera: this.onRemoveCamera,
+          onReauthenticateCamera: this.onReauthenticateCamera,
+          labels: this.cameraManagementLabels,
+        })
+      );
+
       this.container.appendChild(tile);
 
       if (this.intersectionObserver) {

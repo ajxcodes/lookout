@@ -154,6 +154,25 @@ async def test_poller_ingests_metadata_when_snapshot_fails() -> None:
     assert "image" not in ingested[0]
 
 
+async def test_poller_consecutive_failures_resets_after_success() -> None:
+    """TR-15 (AC6): failures increment, a clean tick resets to zero."""
+    adapter = FakeAdapter()
+    other = FakeAdapter()
+
+    async def ingest(camera_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"id": "x"}
+
+    poller = NativeEventPoller(config=_config(), wyze=other, ring=adapter, ingest=ingest)
+    adapter.error = RuntimeError("ring history 500")
+    await poller._tick()
+    assert poller.consecutive_failures >= 1
+
+    adapter.error = None
+    await poller._tick()
+    assert poller.consecutive_failures == 0
+    assert poller.health["consecutive_failures"] == 0
+
+
 async def test_poller_start_uses_bounded_first_lookback_and_stops() -> None:
     adapter = FakeAdapter()
     other = FakeAdapter()

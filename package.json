@@ -1,5 +1,8 @@
 {
   "name": "lookout",
   "version": "0.3.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "ring-client-api": "14.3.0"
+  }
 }

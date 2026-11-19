@@ -48,6 +48,10 @@ async def providers_status(request: Request) -> dict[str, Any]:
             ),
         },
     }
+    for pid in ("wyze", "ring"):
+        native_block[pid]["logged_out"] = bool(
+            getattr(getattr(active_config, pid, None), "logged_out", False)
+        )
     manager = getattr(request.app.state, "native_stream_manager", None)
     if manager is not None:
         from lookout.adapters.web.app import _redact_source
@@ -61,6 +65,12 @@ async def providers_status(request: Request) -> dict[str, Any]:
         native_block["stream_manager"] = manager_status
     poller = getattr(request.app.state, "native_event_poller", None)
     native_block["event_poller_running"] = bool(getattr(poller, "running", False))
+    # #64: global poller failure count.
+    health = getattr(poller, "health", None) if poller is not None else None
+    native_block["event_poller_consecutive_failures"] = (
+        int(health.get("consecutive_failures", 0)) if isinstance(health, dict) else 0
+    )
+    # Collector: per-camera poller status and failure details.
     poller_status = None
     if poller is not None:
         try:
@@ -80,10 +90,10 @@ async def providers_status(request: Request) -> dict[str, Any]:
         for container_key in ("cameras", "health", "per_camera"):
             container = poller_status.get(container_key)
             if isinstance(container, dict):
-                for cam_id, health in container.items():
-                    if isinstance(health, dict) and health.get("last_error"):
-                        event_poller_errors.append(str(health["last_error"]))
-                        event_poller_errors_by_camera[str(cam_id)] = health.get("last_error")
+                for cam_id, cam_health in container.items():
+                    if isinstance(cam_health, dict) and cam_health.get("last_error"):
+                        event_poller_errors.append(str(cam_health["last_error"]))
+                        event_poller_errors_by_camera[str(cam_id)] = cam_health.get("last_error")
     native_block["event_poller_errors"] = event_poller_errors
     native_block["event_poller_errors_by_camera"] = event_poller_errors_by_camera
 

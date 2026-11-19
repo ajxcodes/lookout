@@ -35,6 +35,7 @@ class AuthResult(BaseModel):
     method: str | None = None
     message: str | None = None
     details: str | None = None
+    source: str | None = None
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)
