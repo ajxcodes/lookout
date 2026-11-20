@@ -21,13 +21,13 @@ def _awaitable_dict_cls() -> Any:
 
         return _AwaitableDict
     except Exception:  # pragma: no cover - fallback
-        return dict
+        return dict[str, Any]
 
 
 _AwaitableDict = _awaitable_dict_cls()
 
 
-class _AwaitableResult(dict):
+class _AwaitableResult(dict[str, Any]):
     def __await__(self) -> Any:
         async def _coro() -> _AwaitableResult:
             return self
@@ -496,6 +496,6 @@ def _resolve_continuous_config(config: Any) -> ContinuousRecordingConfig:
     if config is None:
         return ContinuousRecordingConfig()
     cc = getattr(config, "continuous_recording", None)
-    if cc is None:
+    if not isinstance(cc, ContinuousRecordingConfig):
         return ContinuousRecordingConfig()
     return cc
