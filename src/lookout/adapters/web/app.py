@@ -48,6 +48,7 @@ from lookout.adapters.web.routes import (
     native_alias_router,
     native_router,
     providers_router,
+    recordings_router,
     settings_router,
     setup_router,
     storage_router,
@@ -424,7 +425,41 @@ def create_app(
             or (active_config is not None and active_config.wyze.native_ingestion)
             or (active_config is not None and active_config.ring.native_ingestion)
         )
-        if native_enabled and native_manager is not None:
+        # Register every enabled camera (generic + native) in embedded go2rtc.
+        recorded_ids: set[str] = set()
+        if active_config is not None and native_manager is not None:
+            wyze_native = getattr(app.state, "wyze_native", None)
+            ring_native = getattr(app.state, "ring_native", None)
+            for cam in active_config.cameras:
+                if not getattr(cam, "enabled", True):
+                    continue
+                provider = (getattr(cam, "native_provider", None) or "").lower()
+                source = getattr(cam, "stream_url", None)
+                if provider == "wyze" and wyze_native is not None:
+                    try:
+                        source = wyze_native._resolve_source(cam.id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Skipping Wyze source pre-population for %s: %s", cam.id, exc)
+                elif provider == "ring" and ring_native is not None:
+                    try:
+                        source = ring_native._resolve_source(cam.id, snapshot=False)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Skipping Ring source pre-population for %s: %s", cam.id, exc)
+                if source:
+                    native_manager.streams.setdefault(cam.id, source)
+                # resolve recorded
+                cr = getattr(cam, "continuous_recording", None)
+                global_enabled = getattr(
+                    getattr(active_config, "continuous_recording", None), "enabled", True
+                )
+                if cr is None:
+                    cr = global_enabled
+                if cr and global_enabled:
+                    recorded_ids.add(str(cam.id))
+            if recorded_ids and hasattr(native_manager, "set_recorded_cameras"):
+                native_manager.set_recorded_cameras(recorded_ids)
+
+        if (native_enabled or recorded_ids) and native_manager is not None:
             ring_native = getattr(app.state, "ring_native", None)
             if ring_native is not None:
                 for cam in native_cameras:
@@ -446,22 +481,55 @@ def create_app(
                 logger.warning("Native streaming unavailable: %s", exc)
             except Exception as exc:
                 logger.warning("Failed to start native stream manager: %s", exc)
-            native_poller = NativeEventPoller(
-                config=active_config,
-                wyze=getattr(app.state, "wyze_native", None),
-                ring=getattr(app.state, "ring_native", None),
-                ingest=active_event_service.ingest_raw_event,
-                on_event=_broadcast_event,
-                on_clip_ready=_on_clip_ready,
-                stream_manager=native_manager,
-                record_clip=True,
-                clip_duration=10.0,
-                storage_base_path=media_dir,
-            )
-            app.state.native_event_poller = native_poller
-            native_poller.start()
+            if native_enabled:
+                native_poller = NativeEventPoller(
+                    config=active_config,
+                    wyze=getattr(app.state, "wyze_native", None),
+                    ring=getattr(app.state, "ring_native", None),
+                    ingest=active_event_service.ingest_raw_event,
+                    on_event=_broadcast_event,
+                    on_clip_ready=_on_clip_ready,
+                    stream_manager=native_manager,
+                    record_clip=True,
+                    clip_duration=10.0,
+                    storage_base_path=media_dir,
+                )
+                app.state.native_event_poller = native_poller
+                native_poller.start()
+
+        # Continuous recorder service (start if enabled).
+        recorder = getattr(app.state, "continuous_recorder", None)
+        if recorder is None:
+            try:
+                from lookout.adapters.continuous_recorder import ContinuousRecorderService
+
+                recorder = ContinuousRecorderService(
+                    config=active_config,
+                    cameras=(active_config.cameras if active_config is not None else []),
+                    storage_base_path=media_dir,
+                    native_rtsp_port=getattr(
+                        getattr(active_config, "go2rtc", None), "native_rtsp_port", None
+                    ),
+                )
+                app.state.continuous_recorder = recorder
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Continuous recorder unavailable: %s", exc)
+                app.state.continuous_recorder = None
+                recorder = None
+        if recorder is not None and getattr(
+            getattr(active_config, "continuous_recording", None), "enabled", True
+        ):
+            try:
+                await recorder.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Continuous recorder failed to start: %s", exc)
+
         yield
         logger.info("Lookout web application shutting down")
+        recorder = getattr(app.state, "continuous_recorder", None)
+        if recorder is not None:
+            with suppress(Exception):
+                await recorder.stop()
         shutdown_poller = getattr(app.state, "native_event_poller", None)
         if shutdown_poller is not None:
             await shutdown_poller.stop()
@@ -610,7 +678,7 @@ def create_app(
     native_manager = NativeStreamManager(config=active_config)
     app.state.native_stream_manager = native_manager
     app.state.on_clip_ready = _on_clip_ready
-
+    app.state.continuous_recorder = None
     wyze_native_config = active_config.wyze if active_config is not None else WyzeConfig()
     ring_native_config = active_config.ring if active_config is not None else RingConfig()
     app.state.wyze_native = WyzeNativeAdapter(
@@ -624,6 +692,34 @@ def create_app(
         cameras=(active_config.cameras if active_config is not None else []),
     )
 
+    # Pre-populate embedded go2rtc streams for all enabled cameras (no process start).
+    if active_config is not None and native_manager is not None:
+        wyze_native = app.state.wyze_native
+        ring_native = app.state.ring_native
+        recorded_ids: set[str] = set()
+        for cam in active_config.cameras:
+            if not getattr(cam, "enabled", True):
+                continue
+            provider = (getattr(cam, "native_provider", None) or "").lower()
+            source = getattr(cam, "stream_url", None)
+            if provider == "wyze" and wyze_native is not None:
+                with suppress(Exception):
+                    source = wyze_native._resolve_source(cam.id)
+            elif provider == "ring" and ring_native is not None:
+                with suppress(Exception):
+                    source = ring_native._resolve_source(cam.id, snapshot=False)
+            if source:
+                native_manager.streams.setdefault(cam.id, source)
+            cr = getattr(cam, "continuous_recording", None)
+            global_enabled = getattr(
+                getattr(active_config, "continuous_recording", None), "enabled", True
+            )
+            if cr is None:
+                cr = global_enabled
+            if cr and global_enabled:
+                recorded_ids.add(str(cam.id))
+        if recorded_ids and hasattr(native_manager, "set_recorded_cameras"):
+            native_manager.set_recorded_cameras(recorded_ids)
     # Build per-camera PTZ adapters based on configured protocol
     ptz_adapters: dict[str, Any] = {}
     default_ptz_adapter = Go2RtcPtzAdapter(config=(active_config.go2rtc if active_config else None))
@@ -674,10 +770,29 @@ def create_app(
         if (active_config and getattr(active_config, "storage", None) is not None)
         else StorageConfig()
     )
-    storage_svc = StorageService(config=storage_cfg, repository=active_repo)
+    storage_svc = StorageService(
+        config=storage_cfg,
+        repository=active_repo,
+        continuous_config=getattr(active_config, "continuous_recording", None),
+    )
     app.state.storage_service = storage_svc
 
-    # Mount REST API routers
+    # Continuous recorder service (instantiated eagerly so status/endpoints work).
+    try:
+        from lookout.adapters.continuous_recorder import ContinuousRecorderService
+
+        recorder = ContinuousRecorderService(
+            config=active_config,
+            cameras=(active_config.cameras if active_config is not None else []),
+            storage_base_path=media_dir,
+            native_rtsp_port=getattr(
+                getattr(active_config, "go2rtc", None), "native_rtsp_port", None
+            ),
+        )
+        app.state.continuous_recorder = recorder
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Continuous recorder unavailable: %s", exc)
+        app.state.continuous_recorder = None  # Mount REST API routers
     app.include_router(events_router, prefix="/api")
     app.include_router(native_router, prefix="/api")
     app.include_router(native_alias_router, prefix="/api")
@@ -688,6 +803,7 @@ def create_app(
     app.include_router(auth_router, prefix="/api")
     app.include_router(providers_router, prefix="/api")
     app.include_router(storage_router, prefix="/api")
+    app.include_router(recordings_router, prefix="/api")
     app.include_router(system_router, prefix="/api")
 
     # Static assets with no-cache revalidation
