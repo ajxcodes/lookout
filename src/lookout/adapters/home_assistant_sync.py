@@ -56,6 +56,16 @@ def _mask_none(v: Any) -> Any:
     return v
 
 
+def _omit_none(values: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *values* without keys whose value is ``None``.
+
+    Home Assistant rejects MQTT discovery payloads that carry an explicit
+    ``null`` for optional keys such as ``icon`` or ``device_class``. Omitting
+    those keys entirely keeps every discovery config valid.
+    """
+    return {key: value for key, value in values.items() if value is not None}
+
+
 class HomeAssistantSyncManager:
     """Best-effort synchronizer publishing Lookout cameras to Home Assistant."""
 
@@ -568,7 +578,10 @@ class HomeAssistantSyncManager:
         for state_topic in (sensor_state_topics or {}).values():
             states.append((state_topic, {"state": ""}))
         states.append(
-            (event_state_topic, {"link": event_url, "url": event_url, "event_type": "none"})
+            (
+                event_state_topic,
+                {"event_type": "lookout", "link": event_url, "url": event_url},
+            )
         )
         for topic, payload in states:
             try:
@@ -679,16 +692,18 @@ class HomeAssistantSyncManager:
             topics.append(cam_topic)
             await self._publish(
                 cam_topic,
-                {
-                    "name": entity_name,
-                    "unique_id": uid,
-                    "device_class": getattr(camera, "ha_device_class", None),
-                    "icon": getattr(camera, "ha_icon", None),
-                    "device": self._device(camera),
-                    "configuration_url": self._camera_config_url(camera),
-                    "topic": camera_image_topic,
-                    "state_topic": camera_state_topic,
-                },
+                _omit_none(
+                    {
+                        "name": entity_name,
+                        "unique_id": uid,
+                        "device_class": getattr(camera, "ha_device_class", None),
+                        "icon": getattr(camera, "ha_icon", None),
+                        "device": self._device(camera),
+                        "configuration_url": self._camera_config_url(camera),
+                        "topic": camera_image_topic,
+                        "state_topic": camera_state_topic,
+                    }
+                ),
                 retain=True,
             )
 
@@ -697,16 +712,18 @@ class HomeAssistantSyncManager:
             topics.append(motion_topic)
             await self._publish(
                 motion_topic,
-                {
-                    "name": f"{entity_name} Motion",
-                    "unique_id": motion_uid,
-                    "device_class": "motion",
-                    "device": self._device(camera),
-                    "state_topic": motion_state_topic,
-                    "value_template": "{{ value_json.state }}",
-                    "payload_on": "on",
-                    "payload_off": "off",
-                },
+                _omit_none(
+                    {
+                        "name": f"{entity_name} Motion",
+                        "unique_id": motion_uid,
+                        "device_class": "motion",
+                        "device": self._device(camera),
+                        "state_topic": motion_state_topic,
+                        "value_template": "{{ value_json.state }}",
+                        "payload_on": "on",
+                        "payload_off": "off",
+                    }
+                ),
                 retain=True,
             )
 
@@ -720,32 +737,44 @@ class HomeAssistantSyncManager:
                 topics.append(s_topic)
                 await self._publish(
                     s_topic,
-                    {
-                        "name": f"{entity_name} {label}",
-                        "unique_id": s_uid,
-                        "device": self._device(camera),
-                        "state_topic": s_state_topic,
-                        "value_template": "{{ value_json.state }}",
-                    },
+                    _omit_none(
+                        {
+                            "name": f"{entity_name} {label}",
+                            "unique_id": s_uid,
+                            "device": self._device(camera),
+                            "state_topic": s_state_topic,
+                            "value_template": "{{ value_json.state }}",
+                        }
+                    ),
                     retain=True,
                 )
 
             # event entity — deep link resolves to a concrete ingress URL.
             event_topic = f"homeassistant/event/{event_uid}/config"
             topics.append(event_topic)
+            event_types = list(getattr(camera, "ha_event_types", None) or [])
+            # The JSON state payload uses this sentinel event type; HA validates
+            # incoming event types against the discovered ``event_types`` list.
+            if "lookout" not in event_types:
+                event_types.insert(0, "lookout")
             await self._publish(
                 event_topic,
-                {
-                    "name": f"{entity_name} Events",
-                    "unique_id": event_uid,
-                    "event_types": list(getattr(camera, "ha_event_types", None) or []),
-                    "device": self._device(camera),
-                    "state_topic": event_state_topic,
-                    "value_template": "{{ value_json.link }}",
-                    "configuration_url": event_url,
-                    "link": event_url,
-                    "url": event_url,
-                },
+                _omit_none(
+                    {
+                        "name": f"{entity_name} Events",
+                        "unique_id": event_uid,
+                        "event_types": event_types,
+                        "device": self._device(camera),
+                        "state_topic": event_state_topic,
+                        # The state topic carries a JSON object (event_type/link/url).
+                        # Render the whole object back to JSON so HA's event platform
+                        # can parse it instead of seeing a bare URL string.
+                        "value_template": "{{ value_json | tojson }}",
+                        "configuration_url": event_url,
+                        "link": event_url,
+                        "url": event_url,
+                    }
+                ),
                 retain=True,
             )
 

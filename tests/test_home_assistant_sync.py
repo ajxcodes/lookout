@@ -70,6 +70,45 @@ async def test_sync_camera_publishes_retained_discovery() -> None:
 
 
 @pytest.mark.asyncio
+async def test_discovery_payloads_omit_none_values() -> None:
+    """HA rejects discovery configs that carry explicit ``null`` optional keys."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    await manager.sync_camera(camera)
+
+    configs = [json.loads(p) for (t, p, _) in mqtt.published if t.endswith("/config")]
+    assert configs
+    for cfg in configs:
+        assert not any(value is None for value in cfg.values()), cfg
+
+    # Optional camera keys with no configured value are omitted entirely.
+    camera_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam1/config"
+    )
+    assert "icon" not in camera_cfg
+    assert "device_class" not in camera_cfg
+
+    # Explicitly configured optional values are still published.
+    mqtt.published.clear()
+    styled = CameraConfig(
+        id="cam2",
+        name="Styled Cam",
+        stream_url="rtsp://example/cam2",
+        ha_device_class="door",
+        ha_icon="mdi:door",
+    )
+    await manager.sync_camera(styled)
+    styled_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam2/config"
+    )
+    assert styled_cfg["device_class"] == "door"
+    assert styled_cfg["icon"] == "mdi:door"
+
+
+@pytest.mark.asyncio
 async def test_remove_camera_clears_retained_discovery() -> None:
     mqtt = FakeMqtt()
     http = FakeHttp()
@@ -227,13 +266,45 @@ async def test_event_deep_link_is_concrete_and_placeholder_free() -> None:
     assert event_cfg["link"] == f"{ingress}/events"
     assert event_cfg["url"] == f"{ingress}/events"
     assert event_cfg["configuration_url"] == f"{ingress}/events"
-    assert event_cfg["value_template"] == "{{ value_json.link }}"
+    assert event_cfg["value_template"] == "{{ value_json | tojson }}"
 
     event_state = next(
         json.loads(p) for (t, p, _) in mqtt.published if t == "lookout/cam1/event/state"
     )
     assert event_state["link"] == f"{ingress}/events"
     assert event_state["url"] == f"{ingress}/events"
+
+
+@pytest.mark.asyncio
+async def test_event_state_payload_is_valid_json_with_event_type() -> None:
+    """The event state topic carries a HA-parseable JSON event payload."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    ingress = "http://ha:8123/api/hassio_ingress/abc"
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123",
+        access_token="token",
+        mqtt_client=mqtt,
+        ingress_url=ingress,
+    )
+    await manager.sync_camera(camera)
+
+    raw = next(p for (t, p, _) in mqtt.published if t == "lookout/cam1/event/state")
+    assert isinstance(raw, str)
+    payload = json.loads(raw)  # HA logs an error if this is not JSON
+    assert payload["event_type"] == "lookout"
+    assert payload["link"] == f"{ingress}/events"
+    assert payload["url"] == payload["link"]
+
+    event_cfg = next(
+        json.loads(p)
+        for (t, p, _) in mqtt.published
+        if t == "homeassistant/event/cam1_event/config"
+    )
+    # The template renders the whole JSON object, preserving ``event_type`` so
+    # HA's event platform can parse it instead of a bare URL string.
+    assert "tojson" in event_cfg["value_template"]
+    assert "lookout" in event_cfg["event_types"]
 
 
 @pytest.mark.asyncio
