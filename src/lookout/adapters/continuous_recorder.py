@@ -288,6 +288,13 @@ class ContinuousRecorderService:
                     if hasattr(proc, "wait"):
                         try:
                             await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except TimeoutError:
+                            # wait_for timed out: kill and reap, no leaked proc.
+                            with contextlib.suppress(Exception):
+                                if hasattr(proc, "kill"):
+                                    proc.kill()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await proc.wait()
                         except (asyncio.CancelledError, Exception):
                             with contextlib.suppress(Exception):
                                 if hasattr(proc, "kill"):
@@ -320,6 +327,12 @@ class ContinuousRecorderService:
                     if hasattr(proc, "wait"):
                         try:
                             await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except TimeoutError:
+                            with contextlib.suppress(Exception):
+                                if hasattr(proc, "kill"):
+                                    proc.kill()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await proc.wait()
                         except (asyncio.CancelledError, Exception):
                             with contextlib.suppress(Exception):
                                 if hasattr(proc, "kill"):
@@ -391,9 +404,23 @@ class ContinuousRecorderService:
         for _cid, proc in list(self._processes.items()):
             if proc is None:
                 continue
-            with contextlib.suppress(Exception):
-                if hasattr(proc, "wait"):
+            if hasattr(proc, "wait"):
+                try:
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except TimeoutError:
+                    # Timed out: kill and reap, no leaked process.
+                    with contextlib.suppress(Exception):
+                        if hasattr(proc, "kill"):
+                            proc.kill()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await proc.wait()
+                except (asyncio.CancelledError, Exception):
+                    with contextlib.suppress(Exception):
+                        if hasattr(proc, "kill"):
+                            proc.kill()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await proc.wait()
+            # Fallback kill if still alive.
             with contextlib.suppress(Exception):
                 if hasattr(proc, "kill") and getattr(proc, "returncode", None) is None:
                     proc.kill()

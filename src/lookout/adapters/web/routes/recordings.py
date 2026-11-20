@@ -20,6 +20,31 @@ def _base_path(request: Request) -> Path:
     return Path("./data")
 
 
+def _allowed_roots(request: Request, base: Path) -> list[Path]:
+    roots = [base]
+    cfg = getattr(request.app.state, "config", None)
+    if cfg is not None and getattr(cfg, "storage", None) is not None:
+        ap = getattr(cfg.storage, "archive_path", None)
+        if ap:
+            roots.append(Path(ap))
+    return roots
+
+
+def _is_within_allowed(path: Path, roots: list[Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in roots:
+        try:
+            root_resolved = root.resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return True
+    return False
+
+
 def _recorder(request: Request) -> Any:
     return getattr(request.app.state, "continuous_recorder", None)
 
@@ -144,6 +169,9 @@ async def _attach(request: Request, body: AttachRequest) -> Any:
     if not seg_path.is_file():
         raise HTTPException(status_code=404, detail="segment not found")
 
+    # Prevent directory traversal: resolved path must stay within allowed roots.
+    if not _is_within_allowed(seg_path, _allowed_roots(request, base)):
+        raise HTTPException(status_code=400, detail="segment path outside allowed directory")
     repo = getattr(request.app.state, "repository", None)
     event_id = _event_value(body)
     event = None
