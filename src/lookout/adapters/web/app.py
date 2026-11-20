@@ -57,6 +57,7 @@ from lookout.adapters.web.routes import (
     system_router,
 )
 from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
+from lookout.config.deep_links import get_deep_link_base
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, RingConfig, StorageConfig, WyzeConfig
 from lookout.domain.models import ThreatLevel
@@ -310,7 +311,8 @@ def _build_notification(
         return None, ThreatLevel.LOW, "default"
     ha_url = (cfg.home_assistant_url or "").rstrip("/")
     public_url = (cfg.public_url or "").rstrip("/")
-    deep_base = f"{ha_url}/lookout/viewer" if ha_url else public_url or None
+    # Shared with the HA sync manager so ntfy and discovery links stay in sync.
+    deep_base = get_deep_link_base(cfg)
     dispatcher = NtfyDispatcher(
         destination=target.destination,
         deep_link_base_url=deep_base,

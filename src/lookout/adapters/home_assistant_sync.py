@@ -8,9 +8,11 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import httpx
 
+from lookout.config.deep_links import FALLBACK_DEEP_LINK_BASE, get_deep_link_base
 from lookout.config.schema import LookoutConfig
 
 _paho_mod: Any = None
@@ -79,6 +81,7 @@ class HomeAssistantSyncManager:
         api_key: Any = None,
         auth_token: Any = None,
         ingress_url: Any = None,
+        deep_link_base: Any = None,
         cameras: Any = None,
         storage_base_path: Any = None,
         base_path: Any = None,
@@ -161,6 +164,16 @@ class HomeAssistantSyncManager:
         if not resolved_ingress:
             resolved_ingress = self.base_url
         self.ingress_url = str(resolved_ingress).rstrip("/")
+
+        # Shared deep-link base (used by ntfy notifications too). An explicit
+        # constructor override wins; otherwise resolve from config via the
+        # shared helper (ingress_url > home_assistant_url/viewer > public_url).
+        resolved_deep = (
+            deep_link_base or kwargs.get("deep_link_base") or kwargs.get("deep_link_base_url")
+        )
+        if resolved_deep is None:
+            resolved_deep = get_deep_link_base(self.config)
+        self.deep_link_base = str(resolved_deep).rstrip("/") if resolved_deep else None
 
         # MQTT / broker settings
         self.mqtt_host = (
@@ -516,21 +529,29 @@ class HomeAssistantSyncManager:
             or getattr(camera, "id", "camera")
         )
 
-    def _camera_config_url(self, camera: Any) -> str:
-        cam_id = getattr(camera, "id", "")
-        return f"{self.ingress_url}/cameras/{cam_id}/live"
+    def _deep_link(self, camera_id: Any, *, live: bool = False) -> str:
+        """Build a viewer deep link on the shared base using query parameters.
 
-    def _event_url(self, event_id: Any = None) -> str:
-        """Return a concrete events deep link (no placeholder tokens).
-
-        Home Assistant configuration URLs must resolve to a real page, so the
-        default points at the ingress events list. A concrete event id simply
-        extends that path.
+        The base is the same one ntfy notifications use. When no base is
+        configured we still produce a sensible relative viewer link so a
+        generated URL is never empty. No path segments (``/cameras/...`` or
+        ``/events/...``) and no ``{event_id}`` placeholders are appended.
         """
-        base = f"{self.ingress_url}/events"
-        if event_id is None:
-            return base
-        return f"{base}/{event_id}"
+        base = (self.deep_link_base or FALLBACK_DEEP_LINK_BASE).rstrip("/")
+        params: dict[str, str] = {"camera_id": str(camera_id)}
+        if live:
+            params["live"] = "true"
+        query = urlencode(params, quote_via=quote)
+        sep = "&" if "?" in base else "?"
+        return f"{base}{sep}{query}"
+
+    def _camera_config_url(self, camera: Any) -> str:
+        """Camera entity deep link: ``<base>?camera_id=<id>&live=true``."""
+        return self._deep_link(getattr(camera, "id", ""), live=True)
+
+    def _event_url(self, camera: Any) -> str:
+        """Event entity deep link: ``<base>?camera_id=<id>``."""
+        return self._deep_link(getattr(camera, "id", ""))
 
     def _device(self, camera: Any) -> dict[str, Any]:
         return {
@@ -685,7 +706,7 @@ class HomeAssistantSyncManager:
             motion_state_topic = f"lookout/{uid}/motion/state"
             event_uid = f"{uid}_event"
             event_state_topic = f"lookout/{uid}/event/state"
-            event_url = self._event_url()
+            event_url = self._event_url(camera)
 
             # Camera (MQTT image topic + state topic)
             cam_topic = f"homeassistant/camera/{uid}/config"

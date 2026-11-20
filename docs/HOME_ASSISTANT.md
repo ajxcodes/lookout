@@ -64,7 +64,63 @@ Lookout publishes retained discovery topics under `homeassistant/<component>/<un
 
 ## Ingress deep links
 
-Camera entities carry a `configuration_url` pointing at the Lookout ingress live view for that camera; event entities carry `link` / `url` attributes pointing at the corresponding Lookout event page. Inside HA these open in the Lookout ingress panel within the HA chrome. Set `home_assistant.ingress_url` (or `home_assistant_url`) to the HA ingress base URL so the links are correct.
+Both ntfy notifications and MQTT discovery entities share **one** deep-link base, resolved in this order (highest priority first):
+
+1. `home_assistant.ingress_url` — the HA ingress URL for the Lookout panel;
+2. `<home_assistant_url>/lookout/viewer` — when only the top-level HA URL is set;
+3. `public_url` — when no HA is configured (a plain Lookout browser link);
+4. otherwise a relative `/lookout/viewer` fallback so links are never empty.
+
+The base always points at the Lookout **viewer panel**. Links are formed with viewer query parameters only — no path segments such as `/cameras/...` or `/events/...`:
+
+- Camera entity `configuration_url`: `<base>?camera_id=<id>&live=true`
+- Event entity `configuration_url` / `link` / `url` and its state payload: `<base>?camera_id=<id>`
+
+This keeps existing ntfy notification links working when the same base is reused for HA entities. Set `home_assistant.ingress_url` (or `home_assistant_url`) to the HA ingress base URL so the links open inside the HA chrome.
+
+### HA panel_iframe
+
+Expose Lookout as a sidebar panel in `configuration.yaml` at the `lookout/viewer` path. The trailing `?camera_id=...&live=true` / `?camera_id=...` query parameters are appended to this path by the deep links above:
+
+```yaml
+panel_iframe:
+  lookout:
+    title: Lookout
+    icon: mdi:security-camera
+    url: /api/hassio_ingress/<token>/lookout/viewer
+```
+
+When using a reverse proxy instead of the HA ingress add-on, point the panel at the proxied `lookout/viewer` path (for example `https://ha.example.com/lookout/viewer`).
+
+### Traefik route
+
+Route the `lookout/viewer` path prefix to the Lookout service and strip the prefix before forwarding so the SPA receives the paths it expects:
+
+```yaml
+http:
+  routers:
+    lookout-viewer:
+      rule: "PathPrefix(`/lookout/viewer`)"
+      service: lookout
+      entryPoints: [websecure]
+      tls: {}
+  services:
+    lookout:
+      loadBalancer:
+        servers:
+          - url: "http://lookout:8000"
+  middlewares:
+    lookout-strip-prefix:
+      stripPrefix:
+        prefixes:
+          - /lookout/viewer
+```
+
+Attach `lookout-strip-prefix` to the `lookout-viewer` router (`middlewares: [lookout-strip-prefix]`). With `home_assistant_url: "https://ha.example.com"` configured, the shared base becomes `https://ha.example.com/lookout/viewer`, so both ntfy links and HA entity links resolve through this route.
+
+### No Home Assistant configured
+
+When neither `home_assistant.ingress_url` nor `home_assistant_url` is configured, both consumers fall back to `public_url` (for example `https://lookout.example.com`). Notifications and HA sync entities then link directly to the standalone Lookout browser UI instead of an HA panel — no HA chrome and no `/lookout/viewer` path is added.
 
 ## Status API
 
