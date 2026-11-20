@@ -38,3 +38,41 @@ def test_test_connection_endpoint(tmp_path) -> None:
     assert resp.status_code == 200
     assert "ok" in resp.json()
     assert isinstance(resp.json()["ok"], bool)
+
+
+@pytest.mark.asyncio
+async def test_status_exposes_mode(tmp_path) -> None:
+    """TR-15: the status endpoint exposes the manager's mode."""
+    config = LookoutConfig()
+    client, app, _ = make_client(tmp_path, config)
+    manager = getattr(app.state, "ha_sync", None)
+    assert manager is not None
+
+    resp = client.get("/api/home-assistant/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"]["mode"] == manager.mode
+    assert data.get("mode") == manager.mode
+
+
+@pytest.mark.asyncio
+async def test_put_config_masked_secrets_do_not_overwrite_manager(tmp_path) -> None:
+    """Masked/placeholder secrets from the UI must not clobber stored credentials."""
+    config = LookoutConfig(
+        home_assistant=HomeAssistantConfig(
+            access_token="real-token",
+            mqtt_password="real-password",
+        )
+    )
+    client, app, _ = make_client(tmp_path, config)
+    manager = app.state.ha_sync
+    manager.access_token = "real-token"
+    manager.mqtt_password = "real-password"
+
+    resp = client.put(
+        "/api/home-assistant/config",
+        json={"access_token": "********", "mqtt_password": "masked"},
+    )
+    assert resp.status_code == 200
+    assert manager.access_token == "real-token"
+    assert manager.mqtt_password == "real-password"

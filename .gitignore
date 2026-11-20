@@ -17,6 +17,10 @@ data/sidecars/
 dist/
 build/
 
+# Runtime config and its timestamped backups (keep config.example.yaml tracked)
+config.yaml
+config.yaml.bak.*
+
 
 # codeloop / codeloop ephemeral runtime state
 !.agyloop/

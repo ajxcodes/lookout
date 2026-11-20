@@ -775,6 +775,20 @@ export class SettingsModal {
       const st = status.status || status || {};
 
       const ha = cfg.home_assistant && typeof cfg.home_assistant === "object" ? cfg.home_assistant : cfg;
+      const MQTT_ONLY_MSG = "MQTT-only mode — no HA credentials configured";
+      const mode = st.mode || status.mode || cfg.mode || ha.mode || "";
+      const mqttOnly = mode === "mqtt-only";
+      const rawLastError = String(st.last_error || "");
+      const isHttp401 = /HTTP\s*401/i.test(rawLastError);
+      // A bare HTTP 401 in mqtt-only mode is misleading (no REST call is made
+      // there). Suppress only that text; genuine sync/MQTT errors must stay
+      // visible (AC8). In REST mode, keep the friendlier credential hint.
+      let lastError = rawLastError || null;
+      if (isHttp401) {
+        lastError = mqttOnly
+          ? null
+          : rawLastError.replace(/HTTP\s*401/i, "Authentication failed (check HA credentials)");
+      }
 
       this.homeAssistantContainer.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -785,10 +799,6 @@ export class SettingsModal {
           <div>
             <label class="setting-desc" style="font-weight:600;" for="ha-base-url">HA Base URL</label>
             <input class="input-control" type="text" id="ha-base-url" value="${ha.base_url || ""}" placeholder="http://homeassistant:8123">
-          </div>
-          <div>
-            <label class="setting-desc" style="font-weight:600;" for="ha-access-token">Access Token</label>
-            <input class="input-control" type="password" id="ha-access-token" value="" placeholder="${ha.access_token || "masked"}">
           </div>
           <div>
             <label class="setting-desc" style="font-weight:600;" for="ha-ingress-url">Ingress URL</label>
@@ -806,11 +816,20 @@ export class SettingsModal {
             <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-username">MQTT Username</label>
             <input class="input-control" type="text" id="ha-mqtt-username" value="${ha.mqtt_username || ""}">
           </div>
-          <div>
-            <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-password">MQTT Password</label>
-            <input class="input-control" type="password" id="ha-mqtt-password" value="" placeholder="${ha.mqtt_password || "masked"}">
-          </div>
         </div>
+        <details id="ha-advanced" style="margin-top:8px;">
+          <summary style="cursor:pointer;font-size:0.8rem;font-weight:600;">Advanced (access token)</summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="ha-access-token">Access Token</label>
+              <input class="input-control" type="password" id="ha-access-token" value="" placeholder="${ha.access_token || "masked"}">
+            </div>
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-password">MQTT Password</label>
+              <input class="input-control" type="password" id="ha-mqtt-password" value="" placeholder="${ha.mqtt_password || "masked"}">
+            </div>
+          </div>
+        </details>
         <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
           <button class="btn btn-primary" id="ha-save-btn" type="button">Save</button>
           <button class="btn" id="ha-test-btn" type="button">Test Connection</button>
@@ -818,8 +837,10 @@ export class SettingsModal {
           <span id="ha-test-result" style="font-size:0.75rem;"></span>
         </div>
         <div style="margin-top:10px;font-size:0.8rem;">
+          <div><strong>Mode:</strong> ${mqttOnly ? "MQTT-only" : "REST"}</div>
           <div><strong>Last sync:</strong> ${st.last_sync || "never"}</div>
-          <div><strong>Last error:</strong> ${st.last_error || "none"}</div>
+          <div><strong>Last error:</strong> ${lastError || "none"}</div>
+          <div class="text-muted" style="font-size:0.7rem;">${mqttOnly ? MQTT_ONLY_MSG : "Connection settings under Advanced are optional for MQTT discovery."}</div>
         </div>
         <div style="margin-top:10px;">
           <div style="font-weight:600;font-size:0.8rem;margin-bottom:4px;">Published entities</div>
@@ -880,10 +901,18 @@ export class SettingsModal {
             const res = await fetch(resolveUrl("/api/home-assistant/test"), { method: "POST" });
             const data = await res.json();
             if (resultEl) {
-              resultEl.textContent = data.ok ? `OK (${data.status})` : `Failed: ${data.error || ""}`;
-              resultEl.style.color = data.ok ? "#10b981" : "#ef4444";
+              const effectiveMode = data.mode || mode;
+              if (effectiveMode === "mqtt-only") {
+                resultEl.textContent = data.message || MQTT_ONLY_MSG;
+                resultEl.style.color = "#10b981";
+              } else {
+                resultEl.textContent = data.ok ? `OK (${data.status || "connected"})` : `Failed: ${data.error || ""}`;
+                resultEl.style.color = data.ok ? "#10b981" : "#ef4444";
+              }
             }
           } catch (e) {
+            // A thrown fetch/JSON error is always a failure - never show the
+            // green MQTT-only placeholder success message here.
             if (resultEl) {
               resultEl.textContent = "Error";
               resultEl.style.color = "#ef4444";

@@ -270,6 +270,18 @@ async def add_camera(request: Request) -> dict[str, Any]:
             status_code = 500
         raise HTTPException(status_code=int(status_code), detail=str(exc)) from None
 
+    # Best-effort Home Assistant sync for each newly persisted camera.
+    ha_sync = getattr(request.app.state, "ha_sync", None)
+    if ha_sync is not None:
+        for cam in candidates:
+            try:
+                if getattr(cam, "ha_enabled", True):
+                    res = ha_sync.sync_camera(cam)
+                    if inspect.isawaitable(res):
+                        await res
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.warning("Home Assistant sync failed for %s: %s", cam.id, exc)
+
     # Build redacted response.
     primary = candidates[0]
     card = build_camera_card_data(primary)

@@ -29,6 +29,11 @@ paho = _paho_mod
 
 logger = logging.getLogger(__name__)
 
+# Default HA endpoint. Treated as "unset" for auto-detection so that a
+# configured top-level ``home_assistant_url`` can take precedence.
+DEFAULT_HA_BASE_URL = "http://localhost:8123"
+MQTT_ONLY_MESSAGE = "MQTT-only mode — no HA credentials configured"
+
 
 class _Status(dict[str, Any]):
     """Dict-like status object supporting attribute access."""
@@ -83,7 +88,11 @@ class HomeAssistantSyncManager:
         if self.config is None and isinstance(kwargs.get("lookout_config"), LookoutConfig):
             self.config = kwargs.get("lookout_config")
 
-        # Base URL
+        # Base URL — zero-config auto-detection:
+        #   1. explicit constructor kwarg / alias
+        #   2. home_assistant.base_url when it is set to a non-default value
+        #   3. top-level home_assistant_url
+        #   4. localhost fallback
         resolved_base = (
             base_url
             or kwargs.get("base_url")
@@ -95,12 +104,15 @@ class HomeAssistantSyncManager:
         )
         if resolved_base is None and self.config is not None:
             ha_cfg = getattr(self.config, "home_assistant", None)
-            if ha_cfg is not None:
-                resolved_base = getattr(ha_cfg, "base_url", None)
+            explicit_ha_base = getattr(ha_cfg, "base_url", None) if ha_cfg is not None else None
+            if explicit_ha_base and str(explicit_ha_base).rstrip("/") != DEFAULT_HA_BASE_URL.rstrip(
+                "/"
+            ):
+                resolved_base = explicit_ha_base
             if resolved_base is None:
                 resolved_base = getattr(self.config, "home_assistant_url", None)
         if not resolved_base:
-            resolved_base = "http://localhost:8123"
+            resolved_base = DEFAULT_HA_BASE_URL
         self.base_url = str(resolved_base).rstrip("/")
 
         # Access token
@@ -119,6 +131,14 @@ class HomeAssistantSyncManager:
             if ha_cfg is not None:
                 resolved_token = getattr(ha_cfg, "access_token", None)
         self.access_token = resolved_token
+
+        # Optional proxy/Remote-User credential. HA ingress can authenticate the
+        # browser session and forward identity via Remote-* headers; when such a
+        # trusted proxy credential is supplied the REST API is usable even
+        # without a long-lived token.
+        self.remote_user = kwargs.get("remote_user")
+        self.proxy_credential = kwargs.get("proxy_credential")
+        self.use_proxy_auth = bool(kwargs.get("use_proxy_auth") or kwargs.get("trusted_proxy"))
 
         # Ingress URL
         resolved_ingress = ingress_url or kwargs.get("ingress_url") or kwargs.get("ingress")
@@ -283,6 +303,24 @@ class HomeAssistantSyncManager:
         self._last_sync: str | None = None
         self._last_error: str | None = None
         self._load_state()
+
+    @property
+    def mode(self) -> str:
+        """``rest`` when HA REST credentials exist, otherwise ``mqtt-only``.
+
+        MQTT discovery needs no HA credential. Only when a long-lived token (or
+        a trusted proxy/Remote-User credential) is available do we make REST
+        calls, so we never surface a spurious HTTP 401 in the common zero-config
+        deployment.
+        """
+        if self.access_token or self.remote_user or self.proxy_credential or self.use_proxy_auth:
+            return "rest"
+        ha_cfg = getattr(self.config, "home_assistant", None) if self.config is not None else None
+        if ha_cfg is not None:
+            for attr in ("remote_user", "proxy_credential", "use_proxy_auth", "trusted_proxy"):
+                if getattr(ha_cfg, attr, None):
+                    return "rest"
+        return "mqtt-only"
 
     def _load_state(self) -> None:
         try:
@@ -468,18 +506,21 @@ class HomeAssistantSyncManager:
             or getattr(camera, "id", "camera")
         )
 
-    def _config_url(self) -> str:
-        return f"{self.ingress_url}/cameras/{''}".rstrip("/")  # placeholder guard
-
-    # We'll build per camera below.
-
     def _camera_config_url(self, camera: Any) -> str:
         cam_id = getattr(camera, "id", "")
         return f"{self.ingress_url}/cameras/{cam_id}/live"
 
     def _event_url(self, event_id: Any = None) -> str:
-        eid = event_id if event_id is not None else "{event_id}"
-        return f"{self.ingress_url}/events/{eid}"
+        """Return a concrete events deep link (no placeholder tokens).
+
+        Home Assistant configuration URLs must resolve to a real page, so the
+        default points at the ingress events list. A concrete event id simply
+        extends that path.
+        """
+        base = f"{self.ingress_url}/events"
+        if event_id is None:
+            return base
+        return f"{base}/{event_id}"
 
     def _device(self, camera: Any) -> dict[str, Any]:
         return {
@@ -487,10 +528,6 @@ class HomeAssistantSyncManager:
             "name": getattr(camera, "name", None) or getattr(camera, "id", ""),
             "configuration_url": self._camera_config_url(camera),
         }
-
-    def _publish_sync(self, topic: str, payload: Any, retain: bool = True) -> None:
-        # helper not used; async version below
-        pass
 
     async def _publish(self, topic: str, payload: Any, retain: bool = True) -> None:
         mqtt = self._get_mqtt_client()
@@ -509,7 +546,81 @@ class HomeAssistantSyncManager:
         if inspect.isawaitable(result):
             await result
 
+    async def _publish_initial_states(
+        self,
+        *,
+        camera_state_topic: str,
+        motion_state_topic: str,
+        sensor_state_topics: dict[str, str] | None = None,
+        event_state_topic: str,
+        event_url: str,
+    ) -> None:
+        """Publish benign, non-placeholder initial payloads for discovery state topics.
+
+        MQTT discovery entities with a ``state_topic`` stay "unknown" until a
+        value arrives on that topic. These publishes are best effort so a
+        partial failure never aborts discovery.
+        """
+        states: list[tuple[str, dict[str, Any]]] = [
+            (camera_state_topic, {"state": "idle"}),
+            (motion_state_topic, {"state": "off"}),
+        ]
+        for state_topic in (sensor_state_topics or {}).values():
+            states.append((state_topic, {"state": ""}))
+        states.append(
+            (event_state_topic, {"link": event_url, "url": event_url, "event_type": "none"})
+        )
+        for topic, payload in states:
+            try:
+                await self._publish(topic, payload, retain=True)
+            except Exception as exc:  # noqa: BLE001 - initial state is best effort
+                logger.debug("Failed to publish initial state to %s: %s", topic, exc)
+
+    async def _rest_cleanup_camera(self, cid: str) -> None:
+        """Best-effort removal of HA device/entity registry entries in REST mode.
+
+        MQTT retained-config clearing is the primary cleanup path; this REST
+        call additionally removes registry entries when HA credentials are
+        available. Any failure is swallowed so camera removal never breaks.
+        """
+        if self.mode != "rest":
+            return
+        client = self._get_http_client()
+        if client is None:
+            return
+        headers: dict[str, str] = {}
+        if self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        if self.remote_user:
+            headers["Remote-User"] = str(self.remote_user)
+        identifier = f"lookout_{cid}"
+        try:
+            requester = getattr(client, "delete", None)
+            if not callable(requester):
+                return
+            target = f"{self.base_url}/api/devices/{identifier}"
+            resp = requester(target, headers=headers)
+            if inspect.isawaitable(resp):
+                resp = await resp
+            status = getattr(resp, "status_code", None)
+            if status is not None and not (200 <= int(status) < 300):
+                logger.info("HA device registry cleanup returned HTTP %s for %s", status, cid)
+        except Exception as exc:  # noqa: BLE001 - REST cleanup is best effort
+            logger.info("HA REST cleanup for %s skipped: %s", cid, exc)
+
     async def test_connection(self) -> dict[str, Any]:
+        if self.mode == "mqtt-only":
+            # No HA REST credential is configured. MQTT discovery is still
+            # fully functional, so report an actionable non-error result rather
+            # than issuing an unauthenticated call that would fail with 401.
+            result: dict[str, Any] = {
+                "ok": True,
+                "mode": "mqtt-only",
+                "message": MQTT_ONLY_MESSAGE,
+            }
+            self._last_error = None
+            self._save_state()
+            return result
         client = self._get_http_client()
         url = f"{self.base_url}/api/"
         headers: dict[str, str] = {}
@@ -528,7 +639,7 @@ class HomeAssistantSyncManager:
                 raise RuntimeError("HTTP client unavailable")
             status = getattr(resp, "status_code", None)
             ok = status is not None and 200 <= int(status) < 300
-            result = {"ok": bool(ok), "status": status}
+            result = {"ok": bool(ok), "status": status, "mode": "rest"}
             if not ok:
                 result["error"] = f"HTTP {status}"
             self._last_error = None if ok else str(result.get("error"))
@@ -541,7 +652,7 @@ class HomeAssistantSyncManager:
             self._last_error = err
             self._save_state()
             logger.warning("HA test_connection failed: %s", err)
-            return {"ok": False, "status": None, "error": err}
+            return {"ok": False, "status": None, "error": err, "mode": "rest"}
 
     async def sync_camera(self, camera: Any) -> dict[str, Any]:
         topics: list[str] = []
@@ -550,69 +661,113 @@ class HomeAssistantSyncManager:
                 # treat disabled as removal
                 return await self.remove_camera(getattr(camera, "id", None))
             uid = self._unique_id(camera)
+            cam_id = str(getattr(camera, "id", ""))
+            entity_name = self._entity_name(camera)
+
+            # Every discovery payload advertises a concrete state/image topic;
+            # without one an MQTT discovery entity can never report state.
+            camera_image_topic = f"lookout/{uid}/camera/image"
+            camera_state_topic = f"lookout/{uid}/camera/state"
+            motion_uid = f"{uid}_motion"
+            motion_state_topic = f"lookout/{uid}/motion/state"
+            event_uid = f"{uid}_event"
+            event_state_topic = f"lookout/{uid}/event/state"
+            event_url = self._event_url()
+
+            # Camera (MQTT image topic + state topic)
             cam_topic = f"homeassistant/camera/{uid}/config"
             topics.append(cam_topic)
             await self._publish(
                 cam_topic,
                 {
-                    "name": self._entity_name(camera),
+                    "name": entity_name,
                     "unique_id": uid,
                     "device_class": getattr(camera, "ha_device_class", None),
                     "icon": getattr(camera, "ha_icon", None),
                     "device": self._device(camera),
                     "configuration_url": self._camera_config_url(camera),
+                    "topic": camera_image_topic,
+                    "state_topic": camera_state_topic,
                 },
                 retain=True,
             )
 
             # binary sensor (motion)
-            motion_uid = f"{uid}_motion"
             motion_topic = f"homeassistant/binary_sensor/{motion_uid}/config"
             topics.append(motion_topic)
             await self._publish(
                 motion_topic,
                 {
-                    "name": f"{self._entity_name(camera)} Motion",
+                    "name": f"{entity_name} Motion",
                     "unique_id": motion_uid,
                     "device_class": "motion",
                     "device": self._device(camera),
+                    "state_topic": motion_state_topic,
+                    "value_template": "{{ value_json.state }}",
+                    "payload_on": "on",
+                    "payload_off": "off",
                 },
                 retain=True,
             )
 
             # sensors
+            sensor_state_topics: dict[str, str] = {}
             for comp_suffix, label in (("threat_level", "Threat Level"), ("latency", "Latency")):
                 s_uid = f"{uid}_{comp_suffix}"
+                s_state_topic = f"lookout/{uid}/{comp_suffix}/state"
+                sensor_state_topics[comp_suffix] = s_state_topic
                 s_topic = f"homeassistant/sensor/{s_uid}/config"
                 topics.append(s_topic)
                 await self._publish(
                     s_topic,
                     {
-                        "name": f"{self._entity_name(camera)} {label}",
+                        "name": f"{entity_name} {label}",
                         "unique_id": s_uid,
                         "device": self._device(camera),
+                        "state_topic": s_state_topic,
+                        "value_template": "{{ value_json.state }}",
                     },
                     retain=True,
                 )
 
-            # event entity
-            event_uid = f"{uid}_event"
+            # event entity — deep link resolves to a concrete ingress URL.
             event_topic = f"homeassistant/event/{event_uid}/config"
             topics.append(event_topic)
             await self._publish(
                 event_topic,
                 {
-                    "name": f"{self._entity_name(camera)} Events",
+                    "name": f"{entity_name} Events",
                     "unique_id": event_uid,
                     "event_types": list(getattr(camera, "ha_event_types", None) or []),
                     "device": self._device(camera),
-                    "link": self._event_url(),
-                    "url": self._event_url(),
+                    "state_topic": event_state_topic,
+                    "value_template": "{{ value_json.link }}",
+                    "configuration_url": event_url,
+                    "link": event_url,
+                    "url": event_url,
                 },
                 retain=True,
             )
 
-            cam_id = str(getattr(camera, "id", ""))
+            # Publish benign initial state payloads so entities are not stuck
+            # "unknown" and the event deep link is immediately available.
+            await self._publish_initial_states(
+                camera_state_topic=camera_state_topic,
+                motion_state_topic=motion_state_topic,
+                sensor_state_topics=sensor_state_topics,
+                event_state_topic=event_state_topic,
+                event_url=event_url,
+            )
+            # Track state topics too so removal clears every retained payload.
+            topics.extend(
+                [
+                    camera_state_topic,
+                    motion_state_topic,
+                    *sensor_state_topics.values(),
+                    event_state_topic,
+                ]
+            )
+
             self._published_topics[cam_id] = topics
             self._published_timestamps[cam_id] = _now_iso()
             self._last_sync = _now_iso()
@@ -643,6 +798,13 @@ class HomeAssistantSyncManager:
         # If no tracked topics, best-effort derive
         if not topics:
             topics = [f"homeassistant/camera/{cid}/config"]
+        # REST mode: best-effort removal of the HA device/entity registry entry.
+        # This is deliberately independent of MQTT cleanup so camera removal is
+        # never blocked by an unavailable HA instance.
+        try:
+            await self._rest_cleanup_camera(cid)
+        except Exception as exc:  # noqa: BLE001 - REST cleanup is best effort
+            logger.info("HA REST cleanup for %s failed: %s", cid, exc)
         try:
             for topic in topics:
                 await self._publish(topic, "", retain=True)
@@ -681,6 +843,7 @@ class HomeAssistantSyncManager:
     def get_status(self) -> _Status:
         status = _Status()
         status["ok"] = self._last_error is None
+        status["mode"] = self.mode
         status["last_sync"] = self._last_sync
         status["last_error"] = self._last_error
         status["cameras"] = dict(self._published_timestamps)

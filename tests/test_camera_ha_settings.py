@@ -40,3 +40,21 @@ def test_remove_camera_triggers_ha_cleanup(tmp_path) -> None:
     resp = client.delete("/api/cameras/cam1")
     assert resp.status_code == 200
     mock_mgr.remove_camera.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_add_camera_triggers_ha_sync(tmp_path) -> None:
+    """AC3: adding a camera best-effort syncs it to Home Assistant."""
+    config = LookoutConfig(storage=StorageConfig(base_path=str(tmp_path / "media")))
+    client, app, _ = make_client(tmp_path, config)
+    mock_mgr = MagicMock()
+    app.state.ha_sync = mock_mgr
+
+    resp = client.post(
+        "/api/cameras",
+        json={"id": "cam-new", "name": "New Cam", "stream_url": "rtsp://example/new"},
+    )
+    assert resp.status_code == 200
+    mock_mgr.sync_camera.assert_called_once()
+    synced = mock_mgr.sync_camera.call_args[0][0]
+    assert getattr(synced, "id", None) == "cam-new"
