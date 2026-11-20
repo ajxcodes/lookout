@@ -453,6 +453,39 @@ class StorageService(StorageServicePort):
             events_pruned=events_pruned,
         )
 
+    def _continuous_retention_cutoff(self) -> float:
+        """Return the mtime cutoff for continuous segment retention."""
+        import time
+
+        retention_days = getattr(self.continuous_config, "retention_days", 1) or 1
+        return time.time() - float(retention_days) * 86400.0
+
+    def _continuous_low_watermark(
+        self, target_bytes: Any, effective_quota: int, status: Any
+    ) -> int:
+        """Compute the low-watermark byte threshold for continuous sweeping."""
+        eq = effective_quota
+        if target_bytes is not None:
+            try:
+                tb = int(target_bytes)
+                if tb > 1024:
+                    eq = tb
+            except (TypeError, ValueError):
+                pass
+
+        if target_bytes is not None:
+            try:
+                tb = int(target_bytes)
+                if 0 < tb <= 1024:
+                    current_total = getattr(status, "media_total_bytes", None)
+                    if current_total is None:
+                        current_total = self.get_storage_status().media_total_bytes
+                    return max(0, int(current_total) - tb)
+            except (TypeError, ValueError):
+                pass
+
+        return int(eq * (self.config.low_watermark_percent / 100.0))
+
     async def sweep_continuous(self, target_bytes: Any = None) -> Any:
         """Delete oldest continuous segments first under quota/disk pressure."""
         from lookout.domain.models import EvictionResult
@@ -463,10 +496,7 @@ class StorageService(StorageServicePort):
         if not cont.exists():
             return result
 
-        import time
-
-        retention_days = getattr(self.continuous_config, "retention_days", 1) or 1
-        cutoff = time.time() - float(retention_days) * 86400.0
+        cutoff = self._continuous_retention_cutoff()
 
         files = [p for p in cont.rglob("*") if p.is_file()]
         # 1. Delete expired by retention.
@@ -491,29 +521,7 @@ class StorageService(StorageServicePort):
 
         status = self.get_storage_status()
         effective_quota = status.max_storage_bytes
-        if target_bytes is not None:
-            try:
-                tb = int(target_bytes)
-                # If target_bytes is large, treat as quota override; if small, reclaim amount.
-                effective_quota = tb if tb > 1024 else status.max_storage_bytes
-            except (TypeError, ValueError):
-                pass
-
-        if target_bytes is not None:
-            try:
-                tb = int(target_bytes)
-                if 0 < tb <= 1024:
-                    # reclaim target_bytes: lower watermark
-                    current_total = self.get_storage_status().media_total_bytes
-                    low_watermark = max(0, current_total - tb)
-                else:
-                    low_watermark = int(
-                        effective_quota * (self.config.low_watermark_percent / 100.0)
-                    )
-            except (TypeError, ValueError):
-                low_watermark = int(effective_quota * (self.config.low_watermark_percent / 100.0))
-        else:
-            low_watermark = int(effective_quota * (self.config.low_watermark_percent / 100.0))
+        low_watermark = self._continuous_low_watermark(target_bytes, effective_quota, status)
 
         files_sorted = sorted(files, key=lambda p: p.stat().st_mtime if p.exists() else 0)
         for p in files_sorted:

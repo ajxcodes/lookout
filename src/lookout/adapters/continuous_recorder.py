@@ -279,6 +279,22 @@ class ContinuousRecorderService:
                 else:
                     await asyncio.sleep(1)
             except asyncio.CancelledError:
+                # Ensure the spawned subprocess is terminated and awaited so
+                # external cancellation does not leave zombie processes.
+                if proc is not None:
+                    with contextlib.suppress(Exception):
+                        if hasattr(proc, "terminate"):
+                            proc.terminate()
+                    if hasattr(proc, "wait"):
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except (asyncio.CancelledError, Exception):
+                            with contextlib.suppress(Exception):
+                                if hasattr(proc, "kill"):
+                                    proc.kill()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await proc.wait()
+                self._processes.pop(cid, None)
                 raise
             except Exception as exc:  # noqa: BLE001
                 state["last_error"] = str(exc)
@@ -297,6 +313,20 @@ class ContinuousRecorderService:
             try:
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
+                if proc is not None:
+                    with contextlib.suppress(Exception):
+                        if hasattr(proc, "terminate"):
+                            proc.terminate()
+                    if hasattr(proc, "wait"):
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except (asyncio.CancelledError, Exception):
+                            with contextlib.suppress(Exception):
+                                if hasattr(proc, "kill"):
+                                    proc.kill()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await proc.wait()
+                self._processes.pop(cid, None)
                 raise
             backoff = min(backoff * 2, 60)
 
