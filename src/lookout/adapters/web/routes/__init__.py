@@ -6,6 +6,7 @@ from lookout.adapters.web.routes.home_assistant import router as home_assistant_
 from lookout.adapters.web.routes.native import native_alias_router
 from lookout.adapters.web.routes.native import router as native_router
 from lookout.adapters.web.routes.providers import router as providers_router
+from lookout.adapters.web.routes.recordings import router as recordings_router
 from lookout.adapters.web.routes.settings import router as settings_router
 from lookout.adapters.web.routes.setup import router as setup_router
 from lookout.adapters.web.routes.storage import router as storage_router
@@ -20,6 +21,7 @@ __all__ = [
     "native_alias_router",
     "native_router",
     "providers_router",
+    "recordings_router",
     "settings_router",
     "setup_router",
     "storage_router",

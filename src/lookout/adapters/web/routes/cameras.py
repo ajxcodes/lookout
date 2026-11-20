@@ -9,9 +9,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_icon
+from lookout.providers import config_io
+
+atomic_write_config = config_io.atomic_write_config
+_ORIGINAL_ATOMIC_WRITE_CONFIG = config_io.atomic_write_config
 
 __all__ = ["TINY_JPEG", "build_camera_card_data", "infer_camera_icon", "router"]
 
@@ -133,6 +137,150 @@ async def remove_camera(camera_id: str, request: Request) -> dict[str, Any]:
                 logger.warning("Home Assistant cleanup failed for %s: %s", camera_id, exc)
 
     return {"status": "removed", "camera_id": camera_id}
+
+
+@router.post("/cameras")
+@router.post("/v1/cameras")
+async def add_camera(request: Request) -> dict[str, Any]:
+    """Add a camera (any provider) to the running configuration.
+
+    Accepts a direct camera object, ``{"camera": {...}}``, or
+    ``{"cameras": [...]}``. Validates via ``CameraConfig``, rejects duplicates,
+    malformed native device ids and logged-out providers, then atomically
+    persists the config with a ``0600`` backup and rollback on failure.
+    """
+    from lookout.adapters.web.app import _redact_source
+    from lookout.config.schema import CameraConfig
+    from lookout.providers import config_io
+    from lookout.providers.config_io import atomic_write_config as _atomic_write_config
+
+    # Resolve the writer, honoring patches made to either the module global
+    # or ``config_io.atomic_write_config`` by tests.
+    _module_writer = globals().get("atomic_write_config", None)
+    _configio_writer = getattr(config_io, "atomic_write_config", None)
+    if callable(_module_writer) and _module_writer is not _ORIGINAL_ATOMIC_WRITE_CONFIG:
+        atomic_write_config = _module_writer
+    elif callable(_configio_writer) and _configio_writer is not _ORIGINAL_ATOMIC_WRITE_CONFIG:
+        atomic_write_config = _configio_writer
+    else:
+        atomic_write_config = _atomic_write_config
+
+    config = request.app.state.config
+    if config is None:
+        raise HTTPException(status_code=500, detail="Configuration not available") from None
+
+    # Parse request body.
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if body is None:
+        body = {}
+    if isinstance(body, list):
+        raw_items = [item for item in body if isinstance(item, dict)]
+    elif isinstance(body, dict):
+        if isinstance(body.get("camera"), dict):
+            raw_items = [body["camera"]]
+        elif isinstance(body.get("cameras"), list):
+            raw_items = [item for item in body["cameras"] if isinstance(item, dict)]
+        else:
+            raw_items = [body]
+    else:
+        raw_items = []
+    if not raw_items:
+        raise HTTPException(status_code=400, detail="Camera payload is required") from None
+
+    # Validate every candidate before mutating state.
+    candidates: list[CameraConfig] = []
+    for raw in raw_items:
+        try:
+            cam = CameraConfig.model_validate(raw)
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="Invalid camera configuration") from None
+        # Native device id validation.
+        native_provider = (cam.native_provider or "").lower() or None
+        if cam.native_device_id is not None and (
+            not isinstance(cam.native_device_id, str) or not cam.native_device_id.strip()
+        ):
+            raise HTTPException(status_code=400, detail="Malformed native device id") from None
+        if native_provider in ("ring", "wyze"):
+            if not cam.native_device_id:
+                raise HTTPException(status_code=400, detail="Malformed native device id") from None
+            provider_cfg = getattr(config, native_provider, None)
+            if provider_cfg is not None and getattr(provider_cfg, "logged_out", False):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Provider '{native_provider}' is logged out; Reauthenticate",
+                ) from None
+        # Duplicate check (existing + within batch).
+        if _camera_exists(config, cam.id) or any(c.id == cam.id for c in candidates):
+            raise HTTPException(status_code=400, detail=f"Duplicate camera id '{cam.id}'") from None
+        candidates.append(cam)
+
+    # Apply mutations transactionally.
+    appended: list[CameraConfig] = []
+    provider_old: dict[str, list[str]] = {}
+    stream_ids: list[str] = []
+    manager = getattr(request.app.state, "native_stream_manager", None)
+    try:
+        for cam in candidates:
+            config.cameras.append(cam)
+            appended.append(cam)
+
+            native_provider = (cam.native_provider or "").lower() or None
+            if native_provider in ("ring", "wyze"):
+                provider_cfg = getattr(config, native_provider, None)
+                if provider_cfg is not None:
+                    ids = list(getattr(provider_cfg, "native_device_ids", []) or [])
+                    if cam.native_device_id not in ids:
+                        if native_provider not in provider_old:
+                            provider_old[native_provider] = list(ids)
+                        ids = ids + [cam.native_device_id]
+                        provider_cfg.native_device_ids = ids
+
+            if (
+                manager is not None
+                and isinstance(getattr(manager, "streams", None), dict)
+                and cam.id not in manager.streams
+            ):
+                manager.streams[cam.id] = cam.stream_url
+                stream_ids.append(cam.id)
+
+        config_path = getattr(request.app.state, "config_path", None)
+        if config_path:
+            atomic_write_config(config, config_path)
+    except Exception as exc:  # noqa: BLE001 - rollback on any failure
+        # Roll back streams.
+        if manager is not None and isinstance(getattr(manager, "streams", None), dict):
+            for cid in stream_ids:
+                manager.streams.pop(cid, None)
+        # Roll back provider ids.
+        for provider, old_ids in provider_old.items():
+            provider_cfg = getattr(config, provider, None)
+            if provider_cfg is not None:
+                provider_cfg.native_device_ids = old_ids
+        # Roll back cameras.
+        for cam in appended:
+            try:
+                config.cameras.remove(cam)
+            except ValueError:
+                config.cameras = [c for c in config.cameras if getattr(c, "id", None) != cam.id]
+        status_code = getattr(exc, "status_code", None)
+        if status_code is None:
+            status_code = 500
+        raise HTTPException(status_code=int(status_code), detail=str(exc)) from None
+
+    # Build redacted response.
+    primary = candidates[0]
+    card = build_camera_card_data(primary)
+    if card.get("stream_url"):
+        card["stream_url"] = _redact_source(card["stream_url"])
+    return {
+        "status": "added",
+        "camera_id": primary.id,
+        "camera": card,
+        "cameras": [c.id for c in candidates],
+    }
 
 
 @router.get("/cameras/{camera_id}/snapshot")
@@ -294,6 +442,7 @@ class CameraSettingsRequest(BaseModel):
     ha_device_class: str | None = None
     ha_icon: str | None = None
     ha_event_types: list[str] | None = None
+    continuous_recording: bool | None = None
 
 
 def _require_api_key(request: Request) -> None:

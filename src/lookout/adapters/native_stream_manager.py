@@ -107,6 +107,8 @@ class NativeStreamManager(VideoRecorderPort):
         self.last_error: str | None = None
         # camera_id -> go2rtc source URL
         self.streams: dict[str, str] = {}
+        # set of camera ids that should stay connected with no consumer (preload)
+        self.recorded_cameras: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -157,6 +159,13 @@ class NativeStreamManager(VideoRecorderPort):
         with contextlib.suppress(OSError):
             os.chmod(self.runtime_dir, 0o700)
 
+    def set_recorded_cameras(self, cameras: Any) -> None:
+        """Set the set of camera ids that should be preloaded in go2rtc."""
+        try:
+            self.recorded_cameras = {str(c) for c in (cameras or [])}
+        except TypeError:
+            self.recorded_cameras = {str(cameras)} if cameras is not None else set()
+
     def _write_config(self) -> None:
         self._ensure_runtime_dir()
         config_path = self.runtime_dir / "go2rtc.yaml"
@@ -189,6 +198,10 @@ class NativeStreamManager(VideoRecorderPort):
         # An empty mapping must be left as a bare `streams:` key. Writing `  {}`
         # makes go2rtc's own YAML patcher fail (`did not find expected key`) when
         # a stream is added through `PUT /api/streams`.
+        if self.recorded_cameras:
+            lines.append("preload:")
+            for name in sorted(self.recorded_cameras):
+                lines.append(f"  {name}: video&audio")
         config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with contextlib.suppress(OSError):
             os.chmod(config_path, 0o600)

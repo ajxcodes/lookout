@@ -614,6 +614,7 @@ export class SettingsModal {
         const selectedTypes = new Set(cam.notification_event_types || eventTypes);
         const pass1 = cam.notify_pass1 !== false;
         const pass2 = cam.notify_pass2 !== false;
+        const continuousRecording = cam.continuous_recording !== false;
 
         card.innerHTML = `
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -647,6 +648,10 @@ export class SettingsModal {
               <input type="checkbox" class="cam-notif-pass2" ${pass2 ? "checked" : ""}>
               <span>Pass 2 (Enriched Clip)</span>
             </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-continuous-recording" ${continuousRecording ? "checked" : ""}>
+              <span>Record continuously</span>
+            </label>
           </div>
           <div class="camera-ha-section" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);">
             <div style="font-weight:600;font-size:0.8rem;margin-bottom:4px;">Home Assistant</div>
@@ -674,6 +679,7 @@ export class SettingsModal {
             notification_event_types: Array.from(card.querySelectorAll(".cam-notif-type:checked")).map((el) => el.value),
             notify_pass1: card.querySelector(".cam-notif-pass1").checked,
             notify_pass2: card.querySelector(".cam-notif-pass2").checked,
+            continuous_recording: card.querySelector(".cam-continuous-recording").checked,
           };
           try {
             const patchRes = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/settings`, {

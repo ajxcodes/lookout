@@ -106,6 +106,23 @@ class PtzPresetConfig(BaseModel):
     zoom: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized zoom position")
 
 
+class ContinuousRecordingConfig(BaseModel):
+    """Configuration for always-on continuous recording into the shared pool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether continuous recording is active")
+    segment_seconds: int = Field(
+        default=60, ge=1, description="Length of each recorded segment in seconds"
+    )
+    retention_days: int = Field(
+        default=1, ge=1, description="Target retention in days (FIFO rollover is the hard limit)"
+    )
+    max_storage_gb: float = Field(
+        default=50.0, gt=0.0, description="Shared storage cap in gigabytes"
+    )
+
+
 class CameraConfig(BaseModel):
     """Configuration for an ingested camera feed."""
 
@@ -194,6 +211,13 @@ class CameraConfig(BaseModel):
     ha_event_types: list[str] = Field(
         default_factory=lambda: ["motion", "person", "sound", "ding"],
         description="Lookout event types mapped to Home Assistant event entities",
+    )
+    continuous_recording: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this camera records continuously (None inherits the global "
+            "continuous_recording.enabled setting)"
+        ),
     )
 
     @model_validator(mode="after")
@@ -447,6 +471,11 @@ class StorageConfig(BaseModel):
     low_watermark_percent: float = Field(
         default=90.0, gt=0.0, le=100.0, description="Safe buffer target percentage of quota"
     )
+
+    @property
+    def max_storage_bytes(self) -> int:
+        return int(self.max_storage_gb * (1024**3))
+
     warning_threshold_percent: float = Field(
         default=90.0, gt=0.0, le=100.0, description="Warning alert trigger"
     )
@@ -654,6 +683,10 @@ class LookoutConfig(BaseModel):
     zones: list[PolygonZoneConfig] = Field(default_factory=list)
     light_ml: LightMLConfig = Field(default_factory=LightMLConfig)
     mqtt: MqttConfig = Field(default_factory=MqttConfig)
+    continuous_recording: ContinuousRecordingConfig = Field(
+        default_factory=ContinuousRecordingConfig,
+        description="Always-on continuous recording policy",
+    )
     public_url: str | None = Field(
         default=None, description="Public base URL of Lookout (used for notification links/media)"
     )

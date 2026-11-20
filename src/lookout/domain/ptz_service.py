@@ -347,7 +347,8 @@ class PtzControlService:
             camera.notify_pass2 = bool(settings["notify_pass2"])
         if "stream_mode" in settings:
             camera.stream_mode = settings["stream_mode"]
-        # persist config
+        if "continuous_recording" in settings:
+            camera.continuous_recording = settings["continuous_recording"]  # persist config
         if self.config_path:
             try:
                 from pathlib import Path

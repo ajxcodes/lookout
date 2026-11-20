@@ -60,6 +60,7 @@ class LookoutApp {
     this.scrubberEl = document.getElementById("scrubber-container");
     this.settingsModalEl = document.getElementById("settings-modal");
     this.openSettingsBtn = document.getElementById("open-settings-btn");
+    this.addCameraBtn = document.getElementById("add-camera-btn");
 
     // Speed toggles
     this.speed1x = document.getElementById("speed-1x");
@@ -233,6 +234,9 @@ class LookoutApp {
       this.openSettingsBtn.addEventListener("click", () => {
         this.settingsModal.open();
       });
+    }
+    if (this.addCameraBtn) {
+      this.addCameraBtn.addEventListener("click", () => this.addCamera());
     }
 
     // Playback control buttons
@@ -408,6 +412,40 @@ class LookoutApp {
   // AC10: management controls are rendered directly into each LiveGrid tile
   // (see components/camera-management.js) rather than attached after the fact
   // with a selector that did not match the real `.camera-grid-tile` elements.
+
+  async addCamera() {
+    try {
+      const id = window.prompt("Camera ID:");
+      if (!id) return;
+      const name = window.prompt("Display name:", id) || id;
+      const streamUrl = window.prompt("Stream URL (rtsp/http/https/ring/wyze):");
+      if (!streamUrl) return;
+      const provider = window.prompt("Native provider (ring/wyze/blank for generic):", "") || null;
+      const nativeDeviceId = provider ? window.prompt("Native device id:", "") || null : null;
+      const body = {
+        id: id.trim(),
+        name: name.trim(),
+        stream_url: streamUrl.trim(),
+        camera_type: provider || "generic",
+      };
+      if (provider) {
+        body.native_provider = provider.trim();
+        if (nativeDeviceId) body.native_device_id = nativeDeviceId.trim();
+      }
+      const res = await fetch(resolveUrl("/api/cameras"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) await this.fetchCameras();
+      else {
+        const data = await res.json().catch(() => ({}));
+        window.alert(data.detail || "Failed to add camera");
+      }
+    } catch (err) {
+      console.warn("Camera add failed:", err);
+    }
+  }
 
   async removeCamera(cam) {
     if (!window.confirm(`Remove camera '${cam.name || cam.id}'? Recorded history is kept.`)) {
