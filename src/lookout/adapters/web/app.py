@@ -1,6 +1,7 @@
 """FastAPI application factory, lifespan management, and static file mounting."""
 
 import asyncio
+import inspect
 import logging
 import os
 import re
@@ -45,6 +46,7 @@ from lookout.adapters.web.routes import (
     cameras_router,
     entities_router,
     events_router,
+    home_assistant_router,
     native_alias_router,
     native_router,
     providers_router,
@@ -55,6 +57,7 @@ from lookout.adapters.web.routes import (
     system_router,
 )
 from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
+from lookout.config.deep_links import get_deep_link_base
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, RingConfig, StorageConfig, WyzeConfig
 from lookout.domain.models import ThreatLevel
@@ -308,7 +311,8 @@ def _build_notification(
         return None, ThreatLevel.LOW, "default"
     ha_url = (cfg.home_assistant_url or "").rstrip("/")
     public_url = (cfg.public_url or "").rstrip("/")
-    deep_base = f"{ha_url}/lookout/viewer" if ha_url else public_url or None
+    # Shared with the HA sync manager so ntfy and discovery links stay in sync.
+    deep_base = get_deep_link_base(cfg)
     dispatcher = NtfyDispatcher(
         destination=target.destination,
         deep_link_base_url=deep_base,
@@ -413,6 +417,15 @@ def create_app(
                 logger.warning("Sidecar configuration synchronization error: %s", exc)
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             app.state.storage_service.start()
+
+        ha_sync_startup = getattr(app.state, "ha_sync", None)
+        if ha_sync_startup is not None:
+            try:
+                _res = ha_sync_startup.sync_all()
+                if inspect.isawaitable(_res):
+                    await _res
+            except Exception as exc:
+                logger.warning("Home Assistant sync reconciliation error: %s", exc)
 
         native_manager = getattr(app.state, "native_stream_manager", None)
         native_cameras = (
@@ -542,6 +555,10 @@ def create_app(
                 await native_manager.stop()
         if hasattr(app.state, "storage_service") and app.state.storage_service is not None:
             await app.state.storage_service.stop()
+        ha_sync_shutdown = getattr(app.state, "ha_sync", None)
+        if ha_sync_shutdown is not None:
+            with suppress(Exception):
+                await ha_sync_shutdown.aclose()
 
     app = FastAPI(
         title="Lookout",
@@ -777,6 +794,16 @@ def create_app(
     )
     app.state.storage_service = storage_svc
 
+    # Home Assistant sync manager.
+    from lookout.adapters.home_assistant_sync import HomeAssistantSyncManager
+
+    ha_sync = HomeAssistantSyncManager(
+        config=active_config,
+        storage_base_path=str(media_dir),
+        cameras=(active_config.cameras if active_config is not None else []),
+    )
+    app.state.ha_sync = ha_sync
+
     # Continuous recorder service (instantiated eagerly so status/endpoints work).
     try:
         from lookout.adapters.continuous_recorder import ContinuousRecorderService
@@ -792,13 +819,16 @@ def create_app(
         app.state.continuous_recorder = recorder
     except Exception as exc:  # noqa: BLE001
         logger.warning("Continuous recorder unavailable: %s", exc)
-        app.state.continuous_recorder = None  # Mount REST API routers
+        app.state.continuous_recorder = None
+
+    # Mount REST API routers
     app.include_router(events_router, prefix="/api")
     app.include_router(native_router, prefix="/api")
     app.include_router(native_alias_router, prefix="/api")
     app.include_router(cameras_router, prefix="/api")
     app.include_router(entities_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
+    app.include_router(home_assistant_router, prefix="/api")
     app.include_router(setup_router, prefix="/api")
     app.include_router(auth_router, prefix="/api")
     app.include_router(providers_router, prefix="/api")

@@ -117,4 +117,12 @@ def build_camera_card_data(
         ),
         "notify_pass1": getattr(cam, "notify_pass1", True),
         "notify_pass2": getattr(cam, "notify_pass2", True),
+        "ha_enabled": getattr(cam, "ha_enabled", True),
+        "ha_entity_name": getattr(cam, "ha_entity_name", None),
+        "ha_unique_id": getattr(cam, "ha_unique_id", None),
+        "ha_device_class": getattr(cam, "ha_device_class", None),
+        "ha_icon": getattr(cam, "ha_icon", None),
+        "ha_event_types": list(
+            getattr(cam, "ha_event_types", ["motion", "person", "sound", "ding"])
+        ),
     }

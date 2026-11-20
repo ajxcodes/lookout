@@ -197,6 +197,21 @@ class CameraConfig(BaseModel):
     native_device_id: str | None = Field(
         default=None, description="Native provider device id for this camera"
     )
+    ha_enabled: bool = Field(
+        default=True, description="Whether this camera is published to Home Assistant"
+    )
+    ha_entity_name: str | None = Field(
+        default=None, description="Home Assistant entity name / display name"
+    )
+    ha_unique_id: str | None = Field(
+        default=None, description="Home Assistant unique id (defaults to camera id)"
+    )
+    ha_device_class: str | None = Field(default=None, description="Home Assistant device class")
+    ha_icon: str | None = Field(default=None, description="Home Assistant icon")
+    ha_event_types: list[str] = Field(
+        default_factory=lambda: ["motion", "person", "sound", "ding"],
+        description="Lookout event types mapped to Home Assistant event entities",
+    )
     continuous_recording: bool | None = Field(
         default=None,
         description=(
@@ -615,6 +630,29 @@ class MqttConfig(BaseModel):
     )
 
 
+class HomeAssistantConfig(BaseModel):
+    """Configuration for Home Assistant integration and sync."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether Home Assistant sync is active")
+    base_url: str | None = Field(
+        default="http://localhost:8123", description="Home Assistant base URL"
+    )
+    access_token: str | None = Field(
+        default=None, description="Long-lived Home Assistant access token"
+    )
+    ingress_url: str | None = Field(
+        default=None, description="Home Assistant ingress URL for deep links"
+    )
+    mqtt_host: str | None = Field(default=None, description="Optional MQTT broker host override")
+    mqtt_port: int | None = Field(
+        default=None, ge=1, le=65535, description="Optional MQTT broker port override"
+    )
+    mqtt_username: str | None = Field(default=None, description="Optional MQTT username override")
+    mqtt_password: str | None = Field(default=None, description="Optional MQTT password override")
+
+
 class LookoutConfig(BaseModel):
     """Top-level configuration schema for Lookout."""
 
@@ -655,6 +693,9 @@ class LookoutConfig(BaseModel):
     home_assistant_url: str | None = Field(
         default=None,
         description="Home Assistant base URL; when set, notification links open its Lookout panel",
+    )
+    home_assistant: HomeAssistantConfig = Field(
+        default_factory=HomeAssistantConfig, description="Home Assistant integration settings"
     )
 
     @model_validator(mode="after")
@@ -716,6 +757,11 @@ SENSITIVE_KEYS: set[str] = {
     "totp_key",
     "key_id",
     "client_secret",
+    "home_assistant_access_token",
+    "home_assistant_token",
+    "ha_access_token",
+    "access_token",
+    "mqtt_password",
 }
 
 

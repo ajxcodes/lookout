@@ -286,6 +286,8 @@ You can run automated local smoke tests using Docker or Podman:
 
 For complete documentation on quality gates and Home Assistant test fixtures, see [docs/TESTING.md](docs/TESTING.md).
 
+For Home Assistant setup, see [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
+
 ---
 
 ## Contributing & Developer Guide

@@ -10,6 +10,8 @@ DEFAULT_NAME = "Lookout"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_API_KEY = "api_key"
+CONF_ACCESS_TOKEN = "access_token"
+CONF_INGRESS_URL = "ingress_url"
 
 PLATFORMS = ["camera", "binary_sensor", "sensor", "select"]
 
