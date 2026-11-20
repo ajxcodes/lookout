@@ -1,6 +1,7 @@
 """REST API endpoints for camera discovery, snapshot serving, and WebRTC metadata."""
 
 import inspect
+import logging
 import os
 import secrets
 from pathlib import Path
@@ -15,6 +16,8 @@ from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_ic
 __all__ = ["TINY_JPEG", "build_camera_card_data", "infer_camera_icon", "router"]
 
 router = APIRouter(tags=["cameras"])
+
+logger = logging.getLogger(__name__)
 
 # Valid 1x1 pixel baseline JPEG binary (633 bytes) for placeholder/idle snapshot delivery
 TINY_JPEG = (
@@ -117,6 +120,17 @@ async def remove_camera(camera_id: str, request: Request) -> dict[str, Any]:
     config_path = getattr(request.app.state, "config_path", None)
     if config_path:
         atomic_write_config(config, config_path)
+
+    ha_sync = getattr(request.app.state, "ha_sync", None)
+    if ha_sync is not None:
+        remover = getattr(ha_sync, "remove_camera", None)
+        if callable(remover):
+            try:
+                result = remover(camera_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.warning("Home Assistant cleanup failed for %s: %s", camera_id, exc)
 
     return {"status": "removed", "camera_id": camera_id}
 
@@ -274,6 +288,12 @@ class CameraSettingsRequest(BaseModel):
     notify_pass1: bool | None = None
     notify_pass2: bool | None = None
     stream_mode: str | None = None
+    ha_enabled: bool | None = None
+    ha_entity_name: str | None = None
+    ha_unique_id: str | None = None
+    ha_device_class: str | None = None
+    ha_icon: str | None = None
+    ha_event_types: list[str] | None = None
 
 
 def _require_api_key(request: Request) -> None:
@@ -453,13 +473,54 @@ async def camera_settings(
         if status is not None:
             raise HTTPException(status_code=int(status), detail=str(exc)) from None
         raise HTTPException(status_code=500, detail=str(exc)) from None
+
+    # Apply HA-specific fields (not handled by ptz_service)
+    ha_fields = (
+        "ha_enabled",
+        "ha_entity_name",
+        "ha_unique_id",
+        "ha_device_class",
+        "ha_icon",
+        "ha_event_types",
+    )
+    for hf in ha_fields:
+        if hf in settings:
+            setattr(cam, hf, settings[hf])
+
+    config = request.app.state.config
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path and config is not None:
+        try:
+            from lookout.providers.config_io import atomic_write_config
+
+            atomic_write_config(config, config_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Best-effort HA sync
+    ha_sync = getattr(request.app.state, "ha_sync", None)
+    if ha_sync is not None:
+        try:
+            if getattr(cam, "ha_enabled", True):
+                res = ha_sync.sync_camera(cam)
+                if inspect.isawaitable(res):
+                    await res
+            else:
+                res = ha_sync.remove_camera(camera_id)
+                if inspect.isawaitable(res):
+                    await res
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Home Assistant sync failed for %s: %s", camera_id, exc)
+
     return {
         "status": "ok",
         "enabled": getattr(cam, "enabled", None),
+        "ha_enabled": getattr(cam, "ha_enabled", None),
         "camera": {
             "id": camera_id,
             "enabled": getattr(cam, "enabled", None),
             "notifications_enabled": getattr(cam, "notifications_enabled", True),
+            "ha_enabled": getattr(cam, "ha_enabled", None),
         },
     }
 

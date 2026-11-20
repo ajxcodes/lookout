@@ -118,6 +118,12 @@ immich:
     - "Alice"
   enabled: true
 
+home_assistant:
+  enabled: true
+  base_url: "http://localhost:8123"
+  access_token: "long-lived-access-token"
+  ingress_url: "http://localhost:8123/api/hassio_ingress/lookout"
+
 audio_classifier:
   model_path: "models/yamnet.tflite"
   confidence_threshold: 0.5
