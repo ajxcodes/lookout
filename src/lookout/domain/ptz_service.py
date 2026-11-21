@@ -313,6 +313,14 @@ class PtzControlService:
     ) -> Any:
         camera = self._camera(camera_id)
         settings = settings or kwargs
+        if "name" in settings and settings["name"] is not None:
+            camera.name = str(settings["name"]).strip()
+        if "location" in settings:
+            loc = settings["location"]
+            if isinstance(loc, str) and loc.strip():
+                camera.location = loc.strip()
+            else:
+                camera.location = loc if loc is not None else None
         if "enabled" in settings:
             camera.enabled = bool(settings["enabled"])
         if "sensitivity" in settings:

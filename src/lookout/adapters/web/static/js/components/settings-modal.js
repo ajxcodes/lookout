@@ -17,6 +17,7 @@ export class SettingsModal {
     this.cameraNotificationsContainer = this.modal ? this.modal.querySelector("#camera-notifications-list") : null;
     this.homeAssistantContainer = this.modal ? this.modal.querySelector("#home-assistant-settings") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
+    this.currentResetScope = null;
 
     this.archiveToggle = this.modal ? this.modal.querySelector("#setting-archive-enabled") : null;
     this.archiveFields = this.modal ? this.modal.querySelector("#archive-settings-fields") : null;
@@ -114,6 +115,20 @@ export class SettingsModal {
       });
     }
 
+    // Reset section multi-confirmation flow.
+    const resetButtons = this.modal ? this.modal.querySelectorAll(".reset-btn") : [];
+    resetButtons.forEach((btn) => {
+      btn.addEventListener("click", () => this.startReset(btn.getAttribute("data-scope")));
+    });
+    const resetConfirmBtn = this.modal ? this.modal.querySelector("#reset-confirm-btn") : null;
+    if (resetConfirmBtn) {
+      resetConfirmBtn.addEventListener("click", () => this.confirmReset());
+    }
+    const resetCancelBtn = this.modal ? this.modal.querySelector("#reset-cancel-btn") : null;
+    if (resetCancelBtn) {
+      resetCancelBtn.addEventListener("click", () => this.cancelReset());
+    }
+
     this.modal.addEventListener("click", (e) => {
       if (e.target === this.modal) {
         this.close();
@@ -184,6 +199,62 @@ export class SettingsModal {
     if (this.onClose) {
       this.onClose();
     }
+  }
+
+  async startReset(scope) {
+    this.currentResetScope = scope;
+    const summaryEl = this.modal ? this.modal.querySelector("#reset-impact-summary") : null;
+    try {
+      const res = await fetch(resolveUrl("/api/system/reset/preview"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (summaryEl) {
+        summaryEl.textContent =
+          data.summary || data.impact_summary || data.impact || JSON.stringify(data);
+      }
+    } catch (err) {
+      if (summaryEl) summaryEl.textContent = "Preview failed.";
+    }
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "block";
+    const input = this.modal ? this.modal.querySelector("#reset-confirm-input") : null;
+    if (input) input.value = "";
+  }
+
+  cancelReset() {
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "none";
+    this.currentResetScope = null;
+  }
+
+  async confirmReset() {
+    const input = this.modal ? this.modal.querySelector("#reset-confirm-input") : null;
+    if (!input || input.value !== "RESET") {
+      window.alert('Type "RESET" to confirm.');
+      return;
+    }
+    // Second confirmation dialog.
+    if (!window.confirm("This action cannot be undone. Proceed?")) {
+      return;
+    }
+    const scope = this.currentResetScope;
+    try {
+      const res = await fetch(resolveUrl("/api/system/reset/execute"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "RESET", scope }),
+      });
+      if (res.ok) {
+        await this.open();
+      }
+    } catch (err) {
+      console.error("Reset failed:", err);
+    }
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "none";
   }
 
   async loadEntities() {
