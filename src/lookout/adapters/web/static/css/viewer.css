@@ -426,11 +426,18 @@ body {
 .timeline-list {
   flex: 1 1 0%;
   min-height: 0;
+  max-height: 70vh;
+  height: 60vh;
   overflow-y: auto;
   padding: var(--space-sm);
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+}
+
+.timeline-section.collapsed .timeline-list,
+.timeline-section.collapsed .filter-bar {
+  display: none;
 }
 
 .timeline-group-header {

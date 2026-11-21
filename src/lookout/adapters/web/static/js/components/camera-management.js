@@ -77,5 +77,43 @@ export function buildCameraManagementControls(cam, handlers = {}) {
   });
   bar.appendChild(remove);
 
+  // Always-visible per-camera gear icon opening a settings menu/popover.
+  const gear = document.createElement("button");
+  gear.type = "button";
+  gear.className = "camera-gear-btn";
+  gear.textContent = "⚙";
+  gear.title = "Camera settings";
+  const menu = document.createElement("div");
+  menu.className = "camera-gear-menu";
+  menu.style.display = "none";
+  menu.innerHTML = `
+    <button type="button" class="gear-action-settings">Camera settings</button>
+    <button type="button" class="gear-action-notifications">Notification granularity</button>
+    <button type="button" class="gear-action-remove">Remove camera</button>
+    ${authRequired ? '<button type="button" class="gear-action-reauth">Reauthenticate</button>' : ""}
+  `;
+  gear.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === "none" ? "block" : "none";
+  });
+  const menuRemove = menu.querySelector(".gear-action-remove");
+  if (menuRemove) {
+    menuRemove.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (typeof handlers.onRemoveCamera === "function") handlers.onRemoveCamera(cam);
+      menu.style.display = "none";
+    });
+  }
+  const menuReauth = menu.querySelector(".gear-action-reauth");
+  if (menuReauth) {
+    menuReauth.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (typeof handlers.onReauthenticateCamera === "function") handlers.onReauthenticateCamera(cam);
+      menu.style.display = "none";
+    });
+  }
+  bar.appendChild(gear);
+  bar.appendChild(menu);
+
   return bar;
 }

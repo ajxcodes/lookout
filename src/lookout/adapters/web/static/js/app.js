@@ -235,6 +235,26 @@ class LookoutApp {
         this.settingsModal.open();
       });
     }
+
+    // Collapsible events panel (timeline aside) with persisted state.
+    const eventsToggle = document.getElementById("events-panel-toggle");
+    const timelineAside = document.querySelector(".timeline-section");
+    if (eventsToggle && timelineAside) {
+      try {
+        if (localStorage.getItem("lookout_events_collapsed") === "1") {
+          timelineAside.classList.add("collapsed");
+        }
+      } catch (_) {}
+      eventsToggle.addEventListener("click", () => {
+        timelineAside.classList.toggle("collapsed");
+        try {
+          localStorage.setItem(
+            "lookout_events_collapsed",
+            timelineAside.classList.contains("collapsed") ? "1" : "0"
+          );
+        } catch (_) {}
+      });
+    }
     if (this.addCameraBtn) {
       this.addCameraBtn.addEventListener("click", () => this.addCamera());
     }

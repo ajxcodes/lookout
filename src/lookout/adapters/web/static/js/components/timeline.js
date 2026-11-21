@@ -14,6 +14,9 @@ export class TimelineList {
     this.selectedEventId = null;
     this.cameras = [];
     this.camerasMap = {};
+    this.pageSize = 25;
+    this.visibleCount = this.pageSize;
+    this._observer = null;
   }
 
   setCameras(cameras) {
@@ -31,6 +34,7 @@ export class TimelineList {
     this.events = Array.isArray(events)
       ? [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
       : [];
+    this.visibleCount = this.pageSize;
     this.render();
   }
 
@@ -47,6 +51,11 @@ export class TimelineList {
 
   removeEvent(eventId) {
     this.events = this.events.filter((e) => e.id !== eventId);
+    this.render();
+  }
+
+  loadMore() {
+    this.visibleCount = Math.min(this.events.length, this.visibleCount + this.pageSize);
     this.render();
   }
 
@@ -161,7 +170,19 @@ export class TimelineList {
 
     let currentGroup = null;
 
-    this.events.forEach((evt) => {
+    // Fixed-height scroll container support for infinite scroll.
+    if (this.container && !this._scrollBound) {
+      this.container.style.maxHeight = this.container.style.maxHeight || "60vh";
+      this.container.style.overflowY = "auto";
+      this.container.addEventListener("scroll", () => {
+        if (this.container.scrollTop + this.container.clientHeight >= this.container.scrollHeight - 20) {
+          this.loadMore();
+        }
+      });
+      this._scrollBound = true;
+    }
+
+    this.events.slice(0, this.visibleCount).forEach((evt) => {
       const groupName = this.getGroupBucket(evt.timestamp);
       if (groupName !== currentGroup) {
         currentGroup = groupName;
@@ -272,5 +293,23 @@ export class TimelineList {
 
       this.container.appendChild(card);
     });
+
+    // Infinite scroll sentinel
+    if (this.visibleCount < this.events.length) {
+      const sentinel = document.createElement("div");
+      sentinel.className = "timeline-load-more-sentinel";
+      sentinel.textContent = "Loading more...";
+      this.container.appendChild(sentinel);
+      if ("IntersectionObserver" in window && !this._observer) {
+        this._observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) this.loadMore();
+          });
+        });
+      }
+      if (this._observer) {
+        this._observer.observe(sentinel);
+      }
+    }
   }
 }

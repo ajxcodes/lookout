@@ -51,6 +51,7 @@ from lookout.adapters.web.routes import (
     native_router,
     providers_router,
     recordings_router,
+    reset_router,
     settings_router,
     setup_router,
     storage_router,
@@ -834,6 +835,7 @@ def create_app(
     app.include_router(providers_router, prefix="/api")
     app.include_router(storage_router, prefix="/api")
     app.include_router(recordings_router, prefix="/api")
+    app.include_router(reset_router, prefix="/api")
     app.include_router(system_router, prefix="/api")
 
     # Static assets with no-cache revalidation
