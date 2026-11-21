@@ -230,9 +230,14 @@ async def _execute_reset(scope: Any, request: Request) -> dict[str, Any]:
         elif s == "event_history":
             if repo is not None:
                 try:
-                    events = await repo.find(limit=1000000)
-                    for ev in events:
-                        await repo.delete(ev.id)
+                    # Delete in bounded batches to avoid loading the entire
+                    # event table into memory at once (see critique warning).
+                    while True:
+                        batch = await repo.find(limit=500)
+                        if not batch:
+                            break
+                        for ev in batch:
+                            await repo.delete(ev.id)
                 except Exception:
                     pass
         elif s == "media_files" and config is not None and hasattr(config, "storage"):

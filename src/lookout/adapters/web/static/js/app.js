@@ -45,6 +45,7 @@ class LookoutApp {
     this.viewGridBtn = document.getElementById("view-grid-btn");
     this.viewFocusBtn = document.getElementById("view-focus-btn");
     this.backToGridBtn = document.getElementById("back-to-grid-btn");
+    this.focusSettingsBtn = document.getElementById("focus-settings-btn");
     this.returnToLiveBtn = document.getElementById("return-to-live-btn");
     this.densitySelect = document.getElementById("grid-density-select");
 
@@ -112,7 +113,6 @@ class LookoutApp {
       onFocusCamera: (cam) => this.switchToFocus(cam),
       onRemoveCamera: (cam) => this.removeCamera(cam),
       onReauthenticateCamera: (cam) => this.reauthenticateCamera(cam),
-      onOpenCameraSettings: (cam) => this.openCameraSettings(cam),
       cameraManagementLabels: CAMERA_MANAGEMENT_LABELS,
     });
 
@@ -254,6 +254,15 @@ class LookoutApp {
 
     if (this.backToGridBtn) {
       this.backToGridBtn.addEventListener("click", () => this.switchToGrid());
+    }
+    if (this.focusSettingsBtn) {
+      this.focusSettingsBtn.addEventListener("click", () => {
+        if (this.activeCamera) this.openCameraSettings(this.activeCamera);
+      });
+    }
+    const brandHome = document.getElementById("brand-home-link");
+    if (brandHome) {
+      brandHome.addEventListener("click", (e) => { e.preventDefault(); this.switchToGrid(); });
     }
 
     if (this.fullscreenBtn) {

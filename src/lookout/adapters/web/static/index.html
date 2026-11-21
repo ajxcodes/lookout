@@ -13,16 +13,8 @@
   <!-- Header Bar -->
   <header class="app-header">
     <div class="brand-section">
-      <div class="brand-logo">
-        <span class="brand-mark" aria-label="Lookout logo">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
-            <circle cx="12" cy="12" r="3" fill="currentColor" />
-          </svg>
-        </span>
-        <span class="live-pulse"></span>
-        <span>Lookout</span>
-      </div>
+      <a class="brand-logo" href="#" id="brand-home-link" style="text-decoration:none;color:inherit;font-weight:700;font-size:1.125rem;">Lookout</a>
+      <!-- brand-mark -->
     </div>
 
     <div class="header-actions">
@@ -40,10 +32,9 @@
           <option value="4-col">4-Col</option>
         </select>
       </div>
-      <button class="btn" id="add-camera-btn" type="button">+ Add camera</button>
       <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
       <div class="add-camera-menu-wrapper" style="position:relative;display:inline-block;">
-    <button class="btn" id="add-camera-dropdown-btn" type="button">+ Add</button>
+    <button class="btn" id="add-camera-dropdown-btn" type="button">+</button>
     <div class="add-camera-dropdown" id="add-camera-dropdown" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);min-width:180px;z-index:200;">
       <button class="dropdown-item" data-action="camera" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">📷 Add Camera</button>
       <button class="dropdown-item" data-action="provider" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">🔌 Connect Provider</button>
@@ -78,6 +69,7 @@
       <div class="focus-stage" id="focus-stage" style="display:none;">
         <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
           <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
+          <button class="btn btn-sm" id="focus-settings-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Camera settings">⚙ Settings</button>
           <button class="btn btn-sm" id="fullscreen-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Fullscreen">⛶ Fullscreen</button>
           <button class="btn btn-sm" id="maximize-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Maximize in app">( ) Maximize</button>
           <button class="btn btn-sm" id="return-to-live-btn" type="button" style="display:none;font-size:0.75rem;padding:3px 10px;font-weight:600;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);align-items:center;gap:6px;cursor:pointer;">
@@ -256,7 +248,7 @@
         </section>
         <div class="setting-group" id="camera-notifications-setting-group">
           <label class="setting-label">Camera Notification Granularity</label>
-          <p class="setting-desc">Configure per-camera alert toggles, minimum threat levels, event types, and Pass 1 / Pass 2 delivery.</p>
+          <p class="setting-desc">Per-camera notification settings are managed from each camera's focus view (⚙ Settings). This section is kept for quick access.</p>
           <div id="camera-notifications-list" style="display:flex;flex-direction:column;gap:10px;margin-top:8px;"></div>
         </div>
 

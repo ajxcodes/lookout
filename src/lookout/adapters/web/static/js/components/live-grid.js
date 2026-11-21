@@ -23,6 +23,7 @@ function resolveWsUrl(path) {
   return `${wsProto}//${host}${clean}`;
 }
 
+// camera-gear-btn moved to focus view per AC20
 export class LiveGrid {
   constructor({
     container,
@@ -30,7 +31,6 @@ export class LiveGrid {
     onFocusCamera,
     onRemoveCamera,
     onReauthenticateCamera,
-    onOpenCameraSettings,
     cameraManagementLabels,
   }) {
     this.container = container;
@@ -40,9 +40,17 @@ export class LiveGrid {
     // are built directly into each rendered tile (no fragile post-hoc selector).
     this.onRemoveCamera = onRemoveCamera;
     this.onReauthenticateCamera = onReauthenticateCamera;
-    this.onOpenCameraSettings = onOpenCameraSettings;
     this.cameraManagementLabels = cameraManagementLabels;
     this.cameras = [];
+    // Close PTZ <details> when clicking outside (critique suggestion).
+    if (!LiveGrid._ptzOutsideBound) {
+      LiveGrid._ptzOutsideBound = true;
+      document.addEventListener("click", (e) => {
+        document.querySelectorAll("details.ptz-controls[open]").forEach((d) => {
+          if (!d.contains(e.target)) d.open = false;
+        });
+      });
+    }
     try {
       this.density = localStorage?.getItem("lookout_grid_density") || "auto";
     } catch (_) {
@@ -157,7 +165,6 @@ export class LiveGrid {
         <div class="tile-title">
           <span class="cam-icon" title="Camera icon (decorative)">${icon}</span>
           <span class="cam-name">${cam.name || cam.id}</span>
-          <button type="button" class="camera-gear-btn" title="Camera settings">⚙</button>
         </div>
         <div class="tile-badges">
           <span class="badge-provider ${provider}" title="Provider badge">${provider.charAt(0).toUpperCase() + provider.slice(1)}</span>
@@ -165,17 +172,6 @@ export class LiveGrid {
         </div>
       `;
       tile.appendChild(header);
-
-      // Wire the per-tile header gear icon to open camera settings.
-      const headerGear = header.querySelector(".camera-gear-btn");
-      if (headerGear) {
-        headerGear.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (typeof this.onOpenCameraSettings === "function") {
-            this.onOpenCameraSettings(cam);
-          }
-        });
-      }
 
       const stage = document.createElement("div");
       stage.className = "tile-stage";
@@ -296,7 +292,6 @@ export class LiveGrid {
         buildCameraManagementControls(cam, {
           onRemoveCamera: this.onRemoveCamera,
           onReauthenticateCamera: this.onReauthenticateCamera,
-          onOpenCameraSettings: this.onOpenCameraSettings,
           labels: this.cameraManagementLabels,
         })
       );

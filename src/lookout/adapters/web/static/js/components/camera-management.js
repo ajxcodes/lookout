@@ -43,53 +43,15 @@ export function buildCameraManagementControls(cam, handlers = {}) {
   bar.className = "camera-management-controls";
   bar.dataset.managementAttached = "1";
 
-  // Informational auth badge + suggestion for unauthorized native cameras.
+  // Grid tile no longer shows remove-camera or settings (gear) buttons (AC20).
+  // Auth-required badge is kept as an informational indicator only.
   const authRequired = isNativeCamera(cam) && cam.auth_required === true;
   if (authRequired) {
     const badge = document.createElement("span");
     badge.className = "auth-required-badge";
     badge.textContent = labels.authRequired;
     bar.appendChild(badge);
-
-    if (typeof handlers.onReauthenticateCamera === "function") {
-      const reauth = document.createElement("button");
-      reauth.type = "button";
-      reauth.className = "camera-reauthenticate-btn";
-      reauth.textContent = labels.reauthenticate;
-      reauth.addEventListener("click", (e) => {
-        e.stopPropagation();
-        handlers.onReauthenticateCamera(cam);
-      });
-      bar.appendChild(reauth);
-    }
   }
-
-  // Universal, non-gated explicit removal control (with confirmation in app.js).
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "camera-remove-btn";
-  remove.textContent = labels.remove;
-  remove.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (typeof handlers.onRemoveCamera === "function") {
-      handlers.onRemoveCamera(cam);
-    }
-  });
-  bar.appendChild(remove);
-
-  // Always-visible per-camera gear icon opening the camera settings modal.
-  const gear = document.createElement("button");
-  gear.type = "button";
-  gear.className = "camera-gear-btn";
-  gear.textContent = "⚙";
-  gear.title = "Camera settings";
-  gear.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (typeof handlers.onOpenCameraSettings === "function") {
-      handlers.onOpenCameraSettings(cam);
-    }
-  });
-  bar.appendChild(gear);
 
   return bar;
 }
