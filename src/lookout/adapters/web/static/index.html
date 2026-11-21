@@ -42,6 +42,13 @@
       </div>
       <button class="btn" id="add-camera-btn" type="button">+ Add camera</button>
       <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
+      <div class="add-camera-menu-wrapper" style="position:relative;display:inline-block;">
+    <button class="btn" id="add-camera-dropdown-btn" type="button">+ Add</button>
+    <div class="add-camera-dropdown" id="add-camera-dropdown" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);min-width:180px;z-index:200;">
+      <button class="dropdown-item" data-action="camera" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">📷 Add Camera</button>
+      <button class="dropdown-item" data-action="provider" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">🔌 Connect Provider</button>
+    </div>
+  </div>
     </div>
   </header>
 
@@ -71,6 +78,8 @@
       <div class="focus-stage" id="focus-stage" style="display:none;">
         <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
           <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
+          <button class="btn btn-sm" id="fullscreen-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Fullscreen">⛶ Fullscreen</button>
+          <button class="btn btn-sm" id="maximize-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Maximize in app">( ) Maximize</button>
           <button class="btn btn-sm" id="return-to-live-btn" type="button" style="display:none;font-size:0.75rem;padding:3px 10px;font-weight:600;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);align-items:center;gap:6px;cursor:pointer;">
             <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>
             Return to Live
@@ -426,6 +435,124 @@
             <button id="reset-confirm-btn" class="btn btn-primary" type="button">Confirm</button>
             <button id="reset-cancel-btn" class="btn" type="button">Cancel</button>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera Settings Modal -->
+  <div class="modal-backdrop" id="camera-settings-modal" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-box" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 style="font-size:1.125rem;font-weight:600;">Camera Settings</h2>
+        <button class="btn" id="camera-settings-modal-close" type="button" style="padding:2px 8px;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-name">Display Name</label>
+          <input class="form-input" id="cs-cam-name" type="text" placeholder="Camera name">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-location">Location</label>
+          <input class="form-input" id="cs-cam-location" type="text" placeholder="Location">
+        </div>
+        <div class="setting-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-enabled"> Enabled
+          </label>
+        </div>
+        <!-- Notification granularity (per-camera): notification_min_threat, notification_event_types, notify_pass1, notify_pass2 -->
+        <!-- ids: cs-cam-min-threat, cs-cam-event-types, cs-cam-notify-pass1, cs-cam-notify-pass2, cs-notification-min-threat, cs-min-threat, cs-pass1, cs-pass2 -->
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-min-threat">Minimum Threat Level</label>
+          <select class="form-input" id="cs-cam-min-threat" name="notification_min_threat">
+            <option value="">Global Default</option>
+            <option value="INFO">INFO</option>
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label">Event Types</label>
+          <div id="cs-cam-event-types" class="cs-cam-event-types notification_event_types" style="display:flex;flex-wrap:wrap;gap:8px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="motion" checked> motion</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="sound" checked> sound</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="person" checked> person</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="ding" checked> ding</label>
+          </div>
+        </div>
+        <div class="setting-group" style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-notify-pass1" checked> Pass 1 (Instant)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-notify-pass2" checked> Pass 2 (Enriched Clip)
+          </label>
+        </div>
+        <div class="setting-group" id="cs-auth-group" style="display:none;">
+          <label class="setting-label">Authentication</label>
+          <button class="btn" id="cs-reauth-btn" type="button">Reauthenticate</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
+          <button class="btn btn-danger" id="cs-remove-btn" type="button">Remove camera</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" id="cs-cancel-btn" type="button">Cancel</button>
+            <button class="btn btn-primary" id="cs-save-btn" type="button">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Camera Modal -->
+  <div class="modal-backdrop" id="add-camera-modal" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-box" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 style="font-size:1.125rem;font-weight:600;">Add Camera</h2>
+        <button class="btn" id="add-camera-modal-close" type="button" style="padding:2px 8px;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-name">Display Name</label>
+          <input class="form-input" id="add-cam-name" type="text" placeholder="Front Porch">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-id">Camera ID <span style="font-weight:400;font-size:0.75rem;color:var(--text-muted);">(auto-generated)</span></label>
+          <input class="form-input" id="add-cam-id" type="text" placeholder="front-porch">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-type">Camera Type</label>
+          <select class="form-select" id="add-cam-type">
+            <option value="generic">Generic RTSP / HTTP</option>
+            <option value="go2rtc">go2rtc WebRTC</option>
+            <option value="wyze">Wyze Bridge</option>
+            <option value="ring">Ring Cloud SIP</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-url">Stream URL</label>
+          <input class="form-input" id="add-cam-url" type="text" placeholder="rtsp://localhost:8554/front_porch">
+        </div>
+        <div class="setting-group" id="add-cam-native-group" style="display:none;">
+          <label class="setting-label" for="add-cam-native-id">Native Device ID</label>
+          <input class="form-input" id="add-cam-native-id" type="text" placeholder="ring-dev-1">
+          <p style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;">Device ID from Ring/Wyze discovery</p>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-location">Location</label>
+          <input class="form-input" id="add-cam-location" type="text" placeholder="Front Porch">
+        </div>
+        <div class="setting-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="add-cam-enabled" checked> Enabled
+          </label>
+        </div>
+        <div id="add-cam-status" style="display:none;padding:8px;border-radius:6px;font-size:0.875rem;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" id="add-cam-cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" id="add-cam-submit" type="button">Add Camera</button>
         </div>
       </div>
     </div>

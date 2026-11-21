@@ -438,6 +438,8 @@ class PtzActionRequest(BaseModel):
 
 
 class CameraSettingsRequest(BaseModel):
+    name: str | None = None
+    location: str | None = None
     enabled: bool | None = None
     sensitivity: float | None = None
     mute: bool | None = None

@@ -183,6 +183,9 @@ body {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
+  max-width: calc(65vh * 16 / 9);
+  max-height: 65vh;
+  margin: 0 auto;
   background-color: #000000;
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -1107,6 +1110,20 @@ body {
   flex-direction: column;
   gap: var(--space-md);
   width: 100%;
+}
+
+.focus-stage.maximized {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg-app);
+  padding: var(--space-md);
+  overflow: auto;
+}
+
+.focus-stage.maximized .video-container {
+  max-width: none;
+  max-height: 80vh;
 }
 
 .live-grid-container {

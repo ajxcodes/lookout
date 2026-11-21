@@ -34,3 +34,5 @@ config.yaml.bak.*
 
 # Antigravity Persistent Plans
 artifacts/plans/
+deploy-smoke.sh
+.deploy-smoke.yaml

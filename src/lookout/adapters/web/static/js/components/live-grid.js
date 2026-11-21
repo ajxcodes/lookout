@@ -30,6 +30,7 @@ export class LiveGrid {
     onFocusCamera,
     onRemoveCamera,
     onReauthenticateCamera,
+    onOpenCameraSettings,
     cameraManagementLabels,
   }) {
     this.container = container;
@@ -39,6 +40,7 @@ export class LiveGrid {
     // are built directly into each rendered tile (no fragile post-hoc selector).
     this.onRemoveCamera = onRemoveCamera;
     this.onReauthenticateCamera = onReauthenticateCamera;
+    this.onOpenCameraSettings = onOpenCameraSettings;
     this.cameraManagementLabels = cameraManagementLabels;
     this.cameras = [];
     try {
@@ -164,6 +166,17 @@ export class LiveGrid {
       `;
       tile.appendChild(header);
 
+      // Wire the per-tile header gear icon to open camera settings.
+      const headerGear = header.querySelector(".camera-gear-btn");
+      if (headerGear) {
+        headerGear.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (typeof this.onOpenCameraSettings === "function") {
+            this.onOpenCameraSettings(cam);
+          }
+        });
+      }
+
       const stage = document.createElement("div");
       stage.className = "tile-stage";
 
@@ -283,6 +296,7 @@ export class LiveGrid {
         buildCameraManagementControls(cam, {
           onRemoveCamera: this.onRemoveCamera,
           onReauthenticateCamera: this.onReauthenticateCamera,
+          onOpenCameraSettings: this.onOpenCameraSettings,
           labels: this.cameraManagementLabels,
         })
       );
