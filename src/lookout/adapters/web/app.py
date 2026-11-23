@@ -766,7 +766,10 @@ def create_app(
             config=active_config,
             wyze=app.state.wyze_native,
             ring=app.state.ring_native,
-            fallback=Go2RtcAdapter(config=(active_config.go2rtc if active_config else None)),
+            fallback=Go2RtcAdapter(
+                config=(active_config.go2rtc if active_config else None),
+                lookout_config=active_config,
+            ),
         ),
         config=active_config,
         config_path=resolved_config_path,

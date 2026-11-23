@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from lookout.config.schema import resolve_record_audio
 from lookout.ports.egress import VideoRecorderPort
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class NativeStreamManager(VideoRecorderPort):
         if config is None and args:
             config = args[0] if hasattr(args[0], "go2rtc") else None
         self.config = config or kwargs.get("config")
+        self.record_audio = resolve_record_audio(None, self.config)
 
         go2rtc_cfg = getattr(self.config, "go2rtc", None)
         self.binary_path = (
@@ -438,7 +440,8 @@ class NativeStreamManager(VideoRecorderPort):
             return False
         raw_cam_id = f"{cam_id}_raw"
         transcode_src = (
-            f"ffmpeg:{raw_cam_id}#video=h264#raw=-probesize 5000000 -analyzeduration 5000000"
+            f"ffmpeg:{raw_cam_id}#video=h264#audio=aac"
+            "#raw=-probesize 5000000 -analyzeduration 5000000"
         )
         client = await self._get_client()
         raw_resp = await client.put(
@@ -476,8 +479,9 @@ class NativeStreamManager(VideoRecorderPort):
         """Register (or update) a transcoded H.264 stream for a camera.
 
         The stream is registered under ``{camera_id}_h264`` with source
-        ``ffmpeg:{camera_id}#video=h264``. Delegates to :meth:`ensure_stream`
-        so idempotency and re-registration semantics are preserved.
+        ``ffmpeg:{camera_id}#video=h264#audio=aac``. Delegates to
+        :meth:`ensure_stream` so idempotency and re-registration semantics are
+        preserved.
         """
         normalized = str(camera_id)
         if shutil.which("ffmpeg") is None:
@@ -486,7 +490,7 @@ class NativeStreamManager(VideoRecorderPort):
                 f"for camera '{normalized}'"
             )
         h264_name = f"{normalized}_h264"
-        h264_source = f"ffmpeg:{normalized}#video=h264"
+        h264_source = f"ffmpeg:{normalized}#video=h264#audio=aac"
         await self.ensure_stream(h264_name, h264_source)
 
     # Compatibility aliases for H.264 transcoding helpers.
@@ -612,9 +616,15 @@ class NativeStreamManager(VideoRecorderPort):
 
     async def clip(self, camera_id: str, duration_seconds: float) -> bytes:
         """Record an MP4 clip from a go2rtc stream."""
+        params: dict[str, Any] = {
+            "src": str(camera_id),
+            "duration": max(1, int(round(duration_seconds))),
+        }
+        if resolve_record_audio(str(camera_id), self.config):
+            params["mp4"] = "all"
         content = await self._request_media(
             "/api/stream.mp4",
-            {"src": str(camera_id), "duration": max(1, int(round(duration_seconds)))},
+            params,
             error_context="Clip",
         )
         if _MP4_FTYP not in content[:64]:

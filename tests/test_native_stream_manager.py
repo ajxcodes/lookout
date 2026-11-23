@@ -423,16 +423,15 @@ async def test_ensure_h264_transcode_registers_ffmpeg_for_h265_only(tmp_path: An
         changed = await manager.ensure_h264_transcode("ring_cam")
         assert changed is True
         assert any("name=ring_cam_raw" in u for u in put_urls)
-        assert any(
-            "name=ring_cam&" in u
-            and (
-                "ffmpeg%3Aring_cam_raw%23video%3Dh264%23raw%3D-probesize+5000000+-analyzeduration+5000000"
-                in u
-                or "ffmpeg:ring_cam_raw#video=h264#raw=-probesize 5000000 -analyzeduration 5000000"
-                in u
-            )
-            for u in put_urls
+        encoded = (
+            "ffmpeg%3Aring_cam_raw%23video%3Dh264%23audio%3Daac"
+            "%23raw%3D-probesize+5000000+-analyzeduration+5000000"
         )
+        decoded = (
+            "ffmpeg:ring_cam_raw#video=h264#audio=aac"
+            "#raw=-probesize 5000000 -analyzeduration 5000000"
+        )
+        assert any("name=ring_cam&" in u and (encoded in u or decoded in u) for u in put_urls)
     finally:
         await client.aclose()
 
