@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.app import create_app
-from lookout.config.schema import CameraConfig, LookoutConfig, StorageConfig
+from lookout.config.schema import CameraConfig, LookoutConfig, ResidentConfig, StorageConfig
 from lookout.domain.models import (
     BoundingBox,
     CameraEvent,
@@ -210,6 +210,100 @@ def test_entities_api_endpoints_crud(client: TestClient) -> None:
 
     del_res = client.delete("/api/entities/civic-test-1")
     assert del_res.status_code == 200
+
+
+def test_entities_emoji_crud_and_update(client: TestClient) -> None:
+    """TR-5 (AC1/AC2/AC7): POST/GET/upsert round trip with a settable emoji."""
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "pet-emoji-1",
+            "name": "Mochi",
+            "entity_type": "pet",
+            "species": "dog",
+            "emoji": "🐕",
+        },
+    )
+    assert create_res.status_code == 200
+
+    get_res = client.get("/api/entities/pet-emoji-1")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Mochi"
+    assert get_res.json()["emoji"] == "🐕"
+
+    before_len = len(client.get("/api/entities").json()["entities"])
+
+    update_res = client.post(
+        "/api/entities",
+        json={
+            "id": "pet-emoji-1",
+            "name": "Mochi Jr",
+            "entity_type": "pet",
+            "species": "dog",
+            "emoji": "🦮",
+        },
+    )
+    assert update_res.status_code == 200
+
+    updated = client.get("/api/entities/pet-emoji-1").json()
+    assert updated["name"] == "Mochi Jr"
+    assert updated["emoji"] == "🦮"
+
+    after = client.get("/api/entities").json()["entities"]
+    assert len(after) == before_len
+    assert sum(1 for e in after if e["id"] == "pet-emoji-1") == 1
+
+    # The upsert replaces (never appends to) the in-memory and matcher stores.
+    assert set(client.app.state.custom_entities) == {"pet-emoji-1"}
+    matcher = client.app.state.event_service.entity_matcher
+    if matcher is not None:
+        assert sum(1 for p in matcher.pets if p.id == "pet-emoji-1") == 1
+
+    del_res = client.delete("/api/entities/pet-emoji-1")
+    assert del_res.status_code == 200
+
+
+def test_list_entities_emits_emoji_for_all_sources(client: TestClient) -> None:
+    """TR-9 (AC2/AC3): every listed entity exposes a resolved, non-null emoji."""
+    config = client.app.state.config
+    assert config is not None
+    config.residents.append(ResidentConfig(id="res-config-1", name="Config Resident"))
+
+    # Posting a pending entity with an emoji also persists it in members_repo.
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "member-emoji-1",
+            "name": "Cat",
+            "entity_type": "pet",
+            "species": "cat",
+            "emoji": "🐈",
+        },
+    )
+    assert create_res.status_code == 200
+
+    # A runtime-only custom entity carrying an explicit emoji (no member row).
+    client.app.state.custom_entities["custom-emoji-1"] = {
+        "id": "custom-emoji-1",
+        "name": "Custom Fox",
+        "entity_type": "pet",
+        "species": "fox",
+        "attributes": {},
+        "enrolled_photos": [],
+        "enrolled_faces": [],
+        "emoji": "🦊",
+    }
+
+    res = client.get("/api/entities")
+    assert res.status_code == 200
+    entities = res.json()["entities"]
+    assert entities
+    assert all(e.get("emoji") for e in entities), "every entity must emit a non-null emoji"
+
+    by_id = {e["id"]: e for e in entities}
+    assert by_id["res-config-1"]["emoji"] == "👤"
+    assert by_id["member-emoji-1"]["emoji"] == "🐈"
+    assert by_id["custom-emoji-1"]["emoji"] == "🦊"
 
 
 def test_enrich_event_endpoint(client: TestClient) -> None:

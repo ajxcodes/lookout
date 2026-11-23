@@ -21,6 +21,7 @@ class ResidentConfig(BaseModel):
     enrolled_faces: list[str] = Field(
         default_factory=list, description="List of face embedding or reference image paths"
     )
+    emoji: str = Field(default="👤", description="Display emoji for this catalog entity")
 
 
 class PetConfig(BaseModel):
@@ -34,6 +35,7 @@ class PetConfig(BaseModel):
     breed: str | None = Field(default=None, description="Animal breed")
     color: str | None = Field(default=None, description="Coat color")
     enrolled_photos: list[str] = Field(default_factory=list, description="List of reference photos")
+    emoji: str = Field(default="🐶", description="Display emoji for this catalog entity")
 
 
 class VehicleConfig(BaseModel):
@@ -50,6 +52,7 @@ class VehicleConfig(BaseModel):
     enrolled_photos: list[str] = Field(
         default_factory=list, description="List of reference photo paths or filenames"
     )
+    emoji: str = Field(default="🚗", description="Display emoji for this catalog entity")
 
 
 class PolygonZoneConfig(BaseModel):

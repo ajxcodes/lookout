@@ -272,35 +272,86 @@ export class SettingsModal {
         return;
       }
 
+      const defaultEmoji = {
+        resident: "👤",
+        pet: "🐶",
+        vehicle: "🚗",
+        thing: "📦",
+      };
+
       entities.forEach((ent) => {
         const row = document.createElement("div");
         row.className = "entity-row";
 
-        let icon = "👤";
-        if (ent.entity_type === "vehicle") icon = "🚗";
-        else if (ent.entity_type === "pet") icon = "🐶";
-
-        row.innerHTML = `
-          <div class="entity-meta">
-            <span>${icon}</span>
-            <div>
-              <div style="font-size:0.8125rem;font-weight:600;">${ent.name}</div>
-              <div class="text-muted" style="font-size:0.6875rem;">${ent.entity_type} ${ent.species ? `(${ent.species})` : ""}</div>
+        const renderView = () => {
+          const icon = ent.emoji || defaultEmoji[ent.entity_type] || "👤";
+          row.innerHTML = `
+            <div class="entity-meta">
+              <span>${icon}</span>
+              <div>
+                <div style="font-size:0.8125rem;font-weight:600;">${ent.name}</div>
+                <div class="text-muted" style="font-size:0.6875rem;">${ent.entity_type} ${ent.species ? `(${ent.species})` : ""}</div>
+              </div>
             </div>
-          </div>
-          <div class="entity-actions">
-            <button class="btn" style="padding:2px 6px;font-size:0.6875rem;" title="Delete entity">✕</button>
-          </div>
-        `;
+            <div class="entity-actions">
+              <button class="btn entity-edit" style="padding:2px 6px;font-size:0.6875rem;" title="Edit entity">Edit</button>
+              <button class="btn entity-delete" style="padding:2px 6px;font-size:0.6875rem;" title="Delete entity">✕</button>
+            </div>
+          `;
 
-        const delBtn = row.querySelector("button");
-        delBtn.addEventListener("click", async () => {
-          await fetch(resolveUrl(`/api/entities/${encodeURIComponent(ent.id)}`), {
-            method: "DELETE",
+          row.querySelector(".entity-edit").addEventListener("click", renderEdit);
+          row.querySelector(".entity-delete").addEventListener("click", async () => {
+            await fetch(resolveUrl(`/api/entities/${encodeURIComponent(ent.id)}`), {
+              method: "DELETE",
+            });
+            await this.loadEntities();
           });
-          await this.loadEntities();
-        });
+        };
 
+        const renderEdit = () => {
+          const currentEmoji = ent.emoji || defaultEmoji[ent.entity_type] || "👤";
+          row.innerHTML = `
+            <div class="entity-edit-form" style="display:flex;flex-direction:column;gap:6px;width:100%;">
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input class="input-control entity-emoji-input" type="text" value="${currentEmoji}" title="Emoji" style="width:52px;text-align:center;" />
+                <input class="input-control entity-name-input" type="text" value="${ent.name}" title="Name" style="flex:1;" />
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-primary entity-save" style="padding:2px 8px;font-size:0.6875rem;">Save</button>
+                <button class="btn entity-cancel" style="padding:2px 8px;font-size:0.6875rem;">Cancel</button>
+              </div>
+            </div>
+          `;
+
+          row.querySelector(".entity-cancel").addEventListener("click", renderView);
+          row.querySelector(".entity-save").addEventListener("click", async () => {
+            const name = row.querySelector(".entity-name-input").value.trim() || ent.name;
+            const emoji = row.querySelector(".entity-emoji-input").value.trim() || currentEmoji;
+            try {
+              const saveRes = await fetch(resolveUrl("/api/entities"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  id: ent.id,
+                  name: name,
+                  emoji: emoji,
+                  entity_type: ent.entity_type,
+                  species: ent.species,
+                  attributes: ent.attributes || {},
+                  enrolled_photos: ent.enrolled_photos || [],
+                  enrolled_faces: ent.enrolled_faces || [],
+                }),
+              });
+              if (saveRes.ok) {
+                await this.loadEntities();
+              }
+            } catch (err) {
+              console.warn("Failed to save entity:", err);
+            }
+          });
+        };
+
+        renderView();
         this.entitiesContainer.appendChild(row);
       });
     } catch (err) {

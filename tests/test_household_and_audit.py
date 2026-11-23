@@ -64,6 +64,33 @@ async def test_household_members_crud(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_member_attributes_persist_custom_emoji(tmp_path: Path) -> None:
+    """TR-7 (AC6): a custom emoji in attributes survives a SQLite save/reload round trip."""
+    db_file = tmp_path / "member_emoji_test.db"
+    repo = HouseholdMembersRepository(db_path=db_file)
+
+    emoji_member = HouseholdMember(
+        id="pet-emoji",
+        name="Mochi",
+        member_type="pet",
+        species="dog",
+        attributes={"emoji": "🦮"},
+    )
+    await repo.save(emoji_member)
+
+    reloaded = await repo.get_by_id("pet-emoji")
+    assert reloaded is not None
+    assert reloaded.attributes["emoji"] == "🦮"
+
+    # A member saved without an emoji must neither crash nor fabricate an attribute.
+    plain_member = HouseholdMember(id="res-plain", name="Alex", member_type="resident")
+    await repo.save(plain_member)
+    plain = await repo.get_by_id("res-plain")
+    assert plain is not None
+    assert "emoji" not in plain.attributes
+
+
+@pytest.mark.asyncio
 async def test_audit_log_recording_and_query(tmp_path: Path) -> None:
     """TR-26: Verify structured audit logging and retrieval."""
     db_file = tmp_path / "audit_test.db"

@@ -96,3 +96,14 @@ def test_entity_visual_feature_matching_replaces_generic_labels() -> None:
 
     assert "Silver Honda Civic" in annotated_event.matched_entities
     assert "Mochi" in annotated_event.matched_entities
+
+
+def test_entity_config_emoji_defaults_and_override() -> None:
+    """TR-6 (AC4): entity configs carry type-appropriate emoji defaults and keep overrides."""
+    assert ResidentConfig(id="r", name="R").emoji == "👤"
+    assert PetConfig(id="p", name="P").emoji == "🐶"
+    assert VehicleConfig(id="v", name="V").emoji == "🚗"
+
+    assert ResidentConfig(id="r", name="R", emoji="🧑‍💻").emoji == "🧑‍💻"
+    assert PetConfig(id="p", name="P", emoji="🐱").emoji == "🐱"
+    assert VehicleConfig(id="v", name="V", emoji="🚌").emoji == "🚌"
