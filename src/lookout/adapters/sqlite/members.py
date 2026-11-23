@@ -34,10 +34,11 @@ def _row_to_member(row: sqlite3.Row) -> HouseholdMember:
     if updated.tzinfo is None:
         updated = updated.replace(tzinfo=UTC)
 
+    row_dict = dict(row)
     attributes: dict[str, Any] = {}
-    if "attributes_json" in row and row["attributes_json"]:
+    if "attributes_json" in row_dict and row_dict["attributes_json"]:
         try:
-            attributes = json.loads(row["attributes_json"])
+            attributes = json.loads(row_dict["attributes_json"])
         except Exception:
             attributes = {}
 
