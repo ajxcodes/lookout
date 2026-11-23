@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from lookout.config.schema import ContinuousRecordingConfig, TranscodeConfig
+from lookout.config.schema import ContinuousRecordingConfig, TranscodeConfig, resolve_record_audio
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +177,14 @@ class ContinuousRecorderService:
         port = int(kwargs.get("native_rtsp_port", self.native_rtsp_port))
         segment_seconds = int(kwargs.get("segment_seconds", self.segment_seconds))
         output = str(self._segment_path(cid))
+
+        explicit_audio = kwargs.get("record_audio")
+        if explicit_audio is not None:
+            record_audio = bool(explicit_audio)
+        else:
+            record_audio = resolve_record_audio(cid, self.config)
+
+        codec_filter = "?video=h264,h265&audio=all" if record_audio else "?video=h264,h265"
         cmd = [
             str(self.ffmpeg_path),
             "-hide_banner",
@@ -185,21 +193,29 @@ class ContinuousRecorderService:
             "-rtsp_transport",
             "tcp",
             "-i",
-            f"rtsp://127.0.0.1:{port}/{cid}?mp4",
-            "-c",
-            "copy",
-            "-f",
-            "segment",
-            "-segment_time",
-            str(segment_seconds),
-            "-reset_timestamps",
-            "1",
-            "-strftime",
-            "1",
-            "-strftime_mkdir",
-            "1",
-            output,
+            f"rtsp://127.0.0.1:{port}/{cid}{codec_filter}",
+            "-map",
+            "0:v:0",
         ]
+        if record_audio:
+            cmd.extend(["-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "96k"])
+        else:
+            cmd.extend(["-an", "-c:v", "copy"])
+        cmd.extend(
+            [
+                "-f",
+                "segment",
+                "-segment_time",
+                str(segment_seconds),
+                "-reset_timestamps",
+                "1",
+                "-strftime",
+                "1",
+                "-strftime_mkdir",
+                "1",
+                output,
+            ]
+        )
         return cmd
 
     # Aliases for command building.

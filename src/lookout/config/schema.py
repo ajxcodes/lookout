@@ -752,6 +752,34 @@ class LookoutConfig(BaseModel):
         return self
 
 
+def resolve_record_audio(camera: Any, config: Any | None = None) -> bool:
+    """Resolve the effective ``record_audio`` value for a camera.
+
+    Precedence: a per-camera ``record_audio`` override, then the global
+    ``transcode.record_audio`` value, then ``True``. ``camera`` may be a
+    :class:`CameraConfig`, a lightweight camera stub, or a camera-id string
+    (looked up in ``config.cameras``).
+    """
+    if isinstance(camera, str):
+        matched: Any = None
+        for candidate in getattr(config, "cameras", None) or []:
+            if str(getattr(candidate, "id", "")) == camera:
+                matched = candidate
+                break
+        camera = matched
+
+    override = getattr(camera, "record_audio", None)
+    if override is not None:
+        return bool(override)
+
+    transcode = getattr(config, "transcode", None)
+    global_value = getattr(transcode, "record_audio", None)
+    if global_value is not None:
+        return bool(global_value)
+
+    return True
+
+
 SENSITIVE_KEYS: set[str] = {
     "password",
     "auth_token",

@@ -4,11 +4,12 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 
 from lookout.adapters.tempfile import TempMediaManager
-from lookout.config.schema import Go2RtcConfig
+from lookout.config.schema import Go2RtcConfig, resolve_record_audio
 from lookout.ports.egress import VideoRecorderPort
 
 logger = logging.getLogger(__name__)
@@ -22,10 +23,13 @@ class Go2RtcAdapter(VideoRecorderPort):
         config: Go2RtcConfig | None = None,
         temp_manager: TempMediaManager | None = None,
         client: httpx.AsyncClient | None = None,
+        lookout_config: Any | None = None,
     ) -> None:
         self.config = config or Go2RtcConfig()
         self.temp_manager = temp_manager or TempMediaManager()
         self._external_client = client
+        self.lookout_config = lookout_config
+        self.record_audio = resolve_record_audio(None, self.lookout_config)
 
     @asynccontextmanager
     async def _get_client(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -40,6 +44,8 @@ class Go2RtcAdapter(VideoRecorderPort):
         """Record video clip via go2rtc stream API with snapshot fallback."""
         url = f"{self.config.api_url.rstrip('/')}/api/stream.mp4"
         params: dict[str, str | float] = {"src": camera_id, "duration": duration_seconds}
+        if resolve_record_audio(str(camera_id), self.lookout_config):
+            params["mp4"] = "all"
 
         try:
             async with (
