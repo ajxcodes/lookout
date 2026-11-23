@@ -13,10 +13,8 @@
   <!-- Header Bar -->
   <header class="app-header">
     <div class="brand-section">
-      <div class="brand-logo">
-        <span class="live-pulse"></span>
-        <span>Lookout</span>
-      </div>
+      <a class="brand-logo" href="#" id="brand-home-link" style="text-decoration:none;color:inherit;font-weight:700;font-size:1.125rem;">Lookout</a>
+      <!-- brand-mark -->
     </div>
 
     <div class="header-actions">
@@ -34,8 +32,14 @@
           <option value="4-col">4-Col</option>
         </select>
       </div>
-      <button class="btn" id="add-camera-btn" type="button">+ Add camera</button>
       <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
+      <div class="add-camera-menu-wrapper" style="position:relative;display:inline-block;">
+    <button class="btn" id="add-camera-dropdown-btn" type="button">+</button>
+    <div class="add-camera-dropdown" id="add-camera-dropdown" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);min-width:180px;z-index:200;">
+      <button class="dropdown-item" data-action="camera" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">📷 Add Camera</button>
+      <button class="dropdown-item" data-action="provider" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">🔌 Connect Provider</button>
+    </div>
+  </div>
     </div>
   </header>
 
@@ -53,6 +57,9 @@
   <main class="viewer-main" id="viewer-main">
     <!-- Left Stage: Live Grid or Single Camera Focus Video & Acoustic Visualizer -->
     <section class="stage-section" id="stage-section">
+      <!-- 24-Hour Continuous Scrubber Timeline Bar (above camera stage) -->
+      <div id="scrubber-container" class="scrubber-container"></div>
+
       <!-- Multi-Camera Live Grid View (Default Landing in Stage) -->
       <section class="live-grid-section" id="live-grid-section">
         <div class="live-grid-container density-auto" id="live-grid-container"></div>
@@ -62,6 +69,9 @@
       <div class="focus-stage" id="focus-stage" style="display:none;">
         <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
           <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
+          <button class="btn btn-sm" id="focus-settings-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Camera settings">⚙ Settings</button>
+          <button class="btn btn-sm" id="fullscreen-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Fullscreen">⛶ Fullscreen</button>
+          <button class="btn btn-sm" id="maximize-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Maximize in app">( ) Maximize</button>
           <button class="btn btn-sm" id="return-to-live-btn" type="button" style="display:none;font-size:0.75rem;padding:3px 10px;font-weight:600;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);align-items:center;gap:6px;cursor:pointer;">
             <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>
             Return to Live
@@ -152,13 +162,16 @@
 
     <!-- Right Drawer: Taxonomy Filters & Chronological Timeline -->
     <aside class="timeline-section">
+      <div class="timeline-section-header" style="display:flex;align-items:center;justify-content:space-between;padding:8px;">
+        <span style="font-weight:600;font-size:0.85rem;">Events</span>
+        <button id="events-panel-toggle" class="events-panel-toggle timeline-collapse" type="button" title="Collapse events panel" style="padding:2px 8px;">▾</button>
+      </div>
       <div class="filter-bar" id="filter-bar"></div>
       <div class="timeline-list" id="timeline-list"></div>
     </aside>
   </main>
 
-  <!-- 24-Hour Continuous Scrubber Timeline Bar -->
-  <footer id="scrubber-container"></footer>
+  <!-- (scrubber moved into stage section above) -->
 
   <!-- Admin / Settings Modal Dialog -->
   <div class="modal-backdrop" id="settings-modal" role="dialog" aria-modal="true">
@@ -169,7 +182,21 @@
       </div>
 
       <div class="modal-body">
+        <nav class="settings-nav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border-subtle);">
+          <a href="#section-ai" class="btn btn-sm" style="font-size:0.7rem;">AI</a>
+          <a href="#section-catalog" class="btn btn-sm" style="font-size:0.7rem;">Catalog</a>
+          <a href="#section-faces" class="btn btn-sm" style="font-size:0.7rem;">Faces</a>
+          <a href="#section-ha" class="btn btn-sm" style="font-size:0.7rem;">HA</a>
+          <a href="#section-cameras" class="btn btn-sm" style="font-size:0.7rem;">Cameras</a>
+          <a href="#section-integrations" class="btn btn-sm" style="font-size:0.7rem;">Integrations</a>
+          <a href="#section-storage" class="btn btn-sm" style="font-size:0.7rem;">Storage</a>
+          <a href="#section-hardware" class="btn btn-sm" style="font-size:0.7rem;">Hardware</a>
+          <a href="#section-reset" class="btn btn-sm" style="font-size:0.7rem;">Reset</a>
+        </nav>
         <!-- Runtime AI Mode Toggle -->
+        <section class="settings-section" data-section="ai-runtime" id="section-ai">
+          <h3 class="settings-section-title">AI Runtime</h3>
+        </section>
         <div class="setting-group">
           <label class="setting-label" for="setting-ai-mode">Runtime AI Inference Mode</label>
           <p class="setting-desc">Switch active model cascade dynamically without restarting background services.</p>
@@ -184,6 +211,9 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Unified Entity Reference Catalog Manager -->
+        <section class="settings-section" data-section="entity-catalog" id="section-catalog">
+          <h3 class="settings-section-title">Entity Catalog</h3>
+        </section>
         <div class="setting-group">
           <label class="setting-label">Entity Reference Catalog (People, Pets & Vehicles)</label>
           <p class="setting-desc">Manage enrolled household people, pets (Mochi), and vehicles (Civic) for visual matching.</p>
@@ -193,6 +223,9 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Face Gallery Manager -->
+        <section class="settings-section" data-section="face-gallery" id="section-faces">
+          <h3 class="settings-section-title">Face Gallery</h3>
+        </section>
         <div class="setting-group">
           <label class="setting-label">Face Recognition Gallery</label>
           <p class="setting-desc">Enrolled reference photos for household resident recognition.</p>
@@ -209,6 +242,9 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Home Assistant Integration -->
+        <section class="settings-section" data-section="home-assistant" id="section-ha">
+          <h3 class="settings-section-title">Home Assistant</h3>
+        </section>
         <div class="setting-group" id="home-assistant-setting-group">
           <label class="setting-label">Home Assistant</label>
           <p class="setting-desc">Connection settings, test, and sync status.</p>
@@ -218,15 +254,21 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Per-Camera Notification Granularity -->
+        <section class="settings-section" data-section="camera-notifications" id="section-cameras">
+          <h3 class="settings-section-title">Camera Notifications</h3>
+        </section>
         <div class="setting-group" id="camera-notifications-setting-group">
           <label class="setting-label">Camera Notification Granularity</label>
-          <p class="setting-desc">Configure per-camera alert toggles, minimum threat levels, event types, and Pass 1 / Pass 2 delivery.</p>
+          <p class="setting-desc">Per-camera notification settings are managed from each camera's focus view (open a camera, then ⚙ Settings). Quick links:</p>
           <div id="camera-notifications-list" style="display:flex;flex-direction:column;gap:10px;margin-top:8px;"></div>
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Sidecar Integrations & Credentials Manager -->
+        <section class="settings-section" data-section="integrations" id="section-integrations">
+          <h3 class="settings-section-title">Integrations</h3>
+        </section>
         <div class="setting-group" id="integrations-setting-group">
           <label class="setting-label">Sidecar Bridges & Cloud Integrations</label>
           <p class="setting-desc">Status of Wyze, Ring, and go2rtc camera stream bridge sidecars.</p>
@@ -236,6 +278,9 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Two-Tier Media Storage & Looping Retention -->
+        <section class="settings-section" data-section="storage" id="section-storage">
+          <h3 class="settings-section-title">Storage</h3>
+        </section>
         <div class="setting-group" id="storage-retention-group">
           <label class="setting-label">Storage Quotas & Looping Retention Policy</label>
           <p class="setting-desc">Two-tier media management across local hot edge storage and warm network share (ms).</p>
@@ -330,6 +375,9 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Edge Hardware Sizing Profiles & Diagnostic Benchmark -->
+        <section class="settings-section" data-section="hardware" id="section-hardware">
+          <h3 class="settings-section-title">Hardware</h3>
+        </section>
         <div class="setting-group" id="hardware-benchmark-group">
           <label class="setting-label">Hardware Acceleration & Edge Sizing Profiles</label>
           <p class="setting-desc">Declarative appliance presets for Intel N100, Raspberry Pi 5, HA Green/Yellow, and Apple Silicon with empirical diagnostics.</p>
@@ -346,6 +394,168 @@
             <button class="btn" id="run-benchmark-btn" type="button">⚡ Run Benchmark</button>
           </div>
           <div id="benchmark-feedback" style="margin-top:10px;font-size:0.75rem;display:none;background:var(--bg-subtle);padding:var(--space-sm);border-radius:var(--radius-sm);border:1px solid var(--border-subtle);"></div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Reset Section -->
+        <section class="settings-section" data-section="reset" id="section-reset">
+          <h3 class="settings-section-title">Reset</h3>
+        </section>
+        <div class="setting-group" id="reset-section">
+          <label class="setting-label">Reset &amp; Factory Restore</label>
+          <p class="setting-desc">Selective reset actions. Each requires multiple confirmation steps.</p>
+
+          <div class="reset-option" data-scope="camera_config" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);">
+            <span>Reset camera configuration (remove all cameras, keep provider auth)</span>
+            <button class="btn reset-btn" data-scope="camera_config" type="button">Reset</button>
+          </div>
+          <div class="reset-option" data-scope="provider_auth" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);">
+            <span>Reset provider authentication (logout all providers)</span>
+            <button class="btn reset-btn" data-scope="provider_auth" type="button">Reset</button>
+          </div>
+          <div class="reset-option" data-scope="notification_settings" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);">
+            <span>Reset notification settings (restore defaults)</span>
+            <button class="btn reset-btn" data-scope="notification_settings" type="button">Reset</button>
+          </div>
+          <div class="reset-option" data-scope="storage_settings" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);">
+            <span>Reset storage settings (restore defaults)</span>
+            <button class="btn reset-btn" data-scope="storage_settings" type="button">Reset</button>
+          </div>
+          <div class="reset-option" data-scope="event_history" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);">
+            <span>Clear all event history</span>
+            <button class="btn reset-btn" data-scope="event_history" type="button">Reset</button>
+          </div>
+          <div class="reset-option" data-scope="media_files" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
+            <span>Clear all media files</span>
+            <button class="btn reset-btn" data-scope="media_files" type="button">Reset</button>
+          </div>
+
+          <div id="reset-impact-summary" class="reset-impact-summary" style="margin-top:10px;font-size:0.8rem;color:var(--text-muted);"></div>
+          <div id="reset-confirm-wrap" style="display:none;margin-top:10px;">
+            <p class="setting-desc">Type "RESET" to confirm, then confirm again.</p>
+            <input id="reset-confirm-input" type="text" placeholder="RESET" style="padding:4px 8px;">
+            <button id="reset-confirm-btn" class="btn btn-primary" type="button">Confirm</button>
+            <button id="reset-cancel-btn" class="btn" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera Settings Modal -->
+  <div class="modal-backdrop" id="camera-settings-modal" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-box" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 style="font-size:1.125rem;font-weight:600;">Camera Settings</h2>
+        <button class="btn" id="camera-settings-modal-close" type="button" style="padding:2px 8px;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-name">Display Name</label>
+          <input class="form-input" id="cs-cam-name" type="text" placeholder="Camera name">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-location">Location</label>
+          <input class="form-input" id="cs-cam-location" type="text" placeholder="Location">
+        </div>
+        <div class="setting-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-enabled"> Enabled
+          </label>
+        </div>
+        <!-- Notification granularity (per-camera): notification_min_threat, notification_event_types, notify_pass1, notify_pass2 -->
+        <!-- ids: cs-cam-min-threat, cs-cam-event-types, cs-cam-notify-pass1, cs-cam-notify-pass2, cs-notification-min-threat, cs-min-threat, cs-pass1, cs-pass2 -->
+        <div class="setting-group">
+          <label class="setting-label" for="cs-cam-min-threat">Minimum Threat Level</label>
+          <select class="form-input" id="cs-cam-min-threat" name="notification_min_threat">
+            <option value="">Global Default</option>
+            <option value="INFO">INFO</option>
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label">Event Types</label>
+          <div id="cs-cam-event-types" class="cs-cam-event-types notification_event_types" style="display:flex;flex-wrap:wrap;gap:8px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="motion" checked> motion</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="sound" checked> sound</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="person" checked> person</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="cs-cam-event-type" value="ding" checked> ding</label>
+          </div>
+        </div>
+        <div class="setting-group" style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-notify-pass1" checked> Pass 1 (Instant)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-notify-pass2" checked> Pass 2 (Enriched Clip)
+          </label>
+        </div>
+        <div class="setting-group" id="cs-auth-group" style="display:none;">
+          <label class="setting-label">Authentication</label>
+          <button class="btn" id="cs-reauth-btn" type="button">Reauthenticate</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
+          <button class="btn btn-danger" id="cs-remove-btn" type="button">Remove camera</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" id="cs-cancel-btn" type="button">Cancel</button>
+            <button class="btn btn-primary" id="cs-save-btn" type="button">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Camera Modal -->
+  <div class="modal-backdrop" id="add-camera-modal" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-box" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 style="font-size:1.125rem;font-weight:600;">Add Camera</h2>
+        <button class="btn" id="add-camera-modal-close" type="button" style="padding:2px 8px;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-name">Display Name</label>
+          <input class="form-input" id="add-cam-name" type="text" placeholder="Front Porch">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-id">Camera ID <span style="font-weight:400;font-size:0.75rem;color:var(--text-muted);">(auto-generated)</span></label>
+          <input class="form-input" id="add-cam-id" type="text" placeholder="front-porch">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-type">Camera Type</label>
+          <select class="form-select" id="add-cam-type">
+            <option value="generic">Generic RTSP / HTTP</option>
+            <option value="go2rtc">go2rtc WebRTC</option>
+            <option value="wyze">Wyze Bridge</option>
+            <option value="ring">Ring Cloud SIP</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-url">Stream URL</label>
+          <input class="form-input" id="add-cam-url" type="text" placeholder="rtsp://localhost:8554/front_porch">
+        </div>
+        <div class="setting-group" id="add-cam-native-group" style="display:none;">
+          <label class="setting-label" for="add-cam-native-id">Native Device ID</label>
+          <input class="form-input" id="add-cam-native-id" type="text" placeholder="ring-dev-1">
+          <p style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;">Device ID from Ring/Wyze discovery</p>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="add-cam-location">Location</label>
+          <input class="form-input" id="add-cam-location" type="text" placeholder="Front Porch">
+        </div>
+        <div class="setting-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="add-cam-enabled" checked> Enabled
+          </label>
+        </div>
+        <div id="add-cam-status" style="display:none;padding:8px;border-radius:6px;font-size:0.875rem;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" id="add-cam-cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" id="add-cam-submit" type="button">Add Camera</button>
         </div>
       </div>
     </div>

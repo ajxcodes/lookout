@@ -10,7 +10,7 @@ from lookout.adapters.web.routes.recordings import router as recordings_router
 from lookout.adapters.web.routes.settings import router as settings_router
 from lookout.adapters.web.routes.setup import router as setup_router
 from lookout.adapters.web.routes.storage import router as storage_router
-from lookout.adapters.web.routes.system import system_router
+from lookout.adapters.web.routes.system import reset_router, system_router
 
 __all__ = [
     "auth_router",
@@ -22,6 +22,7 @@ __all__ = [
     "native_router",
     "providers_router",
     "recordings_router",
+    "reset_router",
     "settings_router",
     "setup_router",
     "storage_router",

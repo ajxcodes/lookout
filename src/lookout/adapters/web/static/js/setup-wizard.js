@@ -118,6 +118,8 @@ export class SetupWizard {
     this.camIdInput = document.getElementById("cam-id");
     this.camNameInput = document.getElementById("cam-name");
     this.camUrlInput = document.getElementById("cam-url");
+    this.camLocationInput = document.getElementById("cam-location");
+    this.camEnabledInput = document.getElementById("cam-enabled");
     this.camTypeSelect = document.getElementById("cam-type");
     this.btnTestCam = document.getElementById("btn-test-cam");
     this.camStatusPill = document.getElementById("cam-status-pill");
@@ -240,17 +242,21 @@ export class SetupWizard {
       const name = this.camNameInput.value.trim() || id;
       const stream_url = this.camUrlInput.value.trim();
       const camera_type = this.camTypeSelect.value;
+      const location = this.camLocationInput ? this.camLocationInput.value.trim() || null : null;
+      const enabled = this.camEnabledInput ? this.camEnabledInput.checked : true;
 
       if (!id || !stream_url) return;
+      const isNative = camera_type === "ring" || camera_type === "wyze";
       this.configData.cameras.push({
         id,
         name,
         stream_url,
         camera_type,
         provider: camera_type === "ring" ? "ring" : camera_type === "wyze" ? "wyze" : (camera_type === "go2rtc" ? "go2rtc" : "generic"),
-        native_provider: camera_type === "ring" ? "ring" : camera_type === "wyze" ? "wyze" : null,
-        location: null,
-        enabled: true,
+        native_provider: isNative ? camera_type : null,
+        native_device_id: isNative ? id : null,
+        location,
+        enabled,
         sensitivity: 0.5,
         record_duration: 10.0,
       });
@@ -259,6 +265,7 @@ export class SetupWizard {
       this.camIdInput.value = "";
       this.camNameInput.value = "";
       this.camUrlInput.value = "";
+      if (this.camLocationInput) this.camLocationInput.value = "";
     });
 
     // Sidecar bridge & 2FA events
@@ -466,6 +473,7 @@ export class SetupWizard {
 
     if (this.currentStep === 5) {
       this.gatherStepData();
+      // No default/mock camera is auto-seeded; cameras must be added explicitly.
       if (this.configData.notification_targets.length === 0) {
         this.configData.notification_targets.push({
           name: "default-target",

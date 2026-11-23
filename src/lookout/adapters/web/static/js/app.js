@@ -29,6 +29,7 @@ class LookoutApp {
     this.activeCategory = "all";
     this.viewMode = "grid"; // Default primary main landing view
     this.sseEventSource = null;
+    this.currentSettingsCamera = null;
 
     this.initElements();
     this.initComponents();
@@ -44,6 +45,7 @@ class LookoutApp {
     this.viewGridBtn = document.getElementById("view-grid-btn");
     this.viewFocusBtn = document.getElementById("view-focus-btn");
     this.backToGridBtn = document.getElementById("back-to-grid-btn");
+    this.focusSettingsBtn = document.getElementById("focus-settings-btn");
     this.returnToLiveBtn = document.getElementById("return-to-live-btn");
     this.densitySelect = document.getElementById("grid-density-select");
 
@@ -60,7 +62,41 @@ class LookoutApp {
     this.scrubberEl = document.getElementById("scrubber-container");
     this.settingsModalEl = document.getElementById("settings-modal");
     this.openSettingsBtn = document.getElementById("open-settings-btn");
-    this.addCameraBtn = document.getElementById("add-camera-btn");
+    this.addCameraBtn = document.getElementById("add-camera-dropdown-btn") || document.getElementById("add-camera-btn");
+    this.addCameraDropdown = document.getElementById("add-camera-dropdown");
+    this.addCameraModal = document.getElementById("add-camera-modal");
+    this.addCamName = document.getElementById("add-cam-name");
+    this.addCamId = document.getElementById("add-cam-id");
+    this.addCamType = document.getElementById("add-cam-type");
+    this.addCamUrl = document.getElementById("add-cam-url");
+    this.addCamLocation = document.getElementById("add-cam-location");
+    this.addCamNativeId = document.getElementById("add-cam-native-id");
+    this.addCamNativeGroup = document.getElementById("add-cam-native-group");
+    this.addCamEnabled = document.getElementById("add-cam-enabled");
+    this.addCamStatus = document.getElementById("add-cam-status");
+    this.addCamSubmit = document.getElementById("add-cam-submit");
+    this.addCamCancel = document.getElementById("add-cam-cancel");
+    this.addCamClose = document.getElementById("add-camera-modal-close");
+
+    // Fullscreen / maximize
+    this.fullscreenBtn = document.getElementById("fullscreen-btn");
+    this.maximizeBtn = document.getElementById("maximize-btn");
+
+    // Camera settings modal
+    this.cameraSettingsModal = document.getElementById("camera-settings-modal");
+    this.csCamName = document.getElementById("cs-cam-name");
+    this.csCamLocation = document.getElementById("cs-cam-location");
+    this.csCamEnabled = document.getElementById("cs-cam-enabled");
+    this.csCamMinThreat = document.getElementById("cs-cam-min-threat");
+    this.csCamEventTypes = document.getElementById("cs-cam-event-types");
+    this.csCamNotifyPass1 = document.getElementById("cs-cam-notify-pass1");
+    this.csCamNotifyPass2 = document.getElementById("cs-cam-notify-pass2");
+    this.csAuthGroup = document.getElementById("cs-auth-group");
+    this.csReauthBtn = document.getElementById("cs-reauth-btn");
+    this.csRemoveBtn = document.getElementById("cs-remove-btn");
+    this.csSaveBtn = document.getElementById("cs-save-btn");
+    this.csCancelBtn = document.getElementById("cs-cancel-btn");
+    this.csCloseBtn = document.getElementById("camera-settings-modal-close");
 
     // Speed toggles
     this.speed1x = document.getElementById("speed-1x");
@@ -219,6 +255,51 @@ class LookoutApp {
     if (this.backToGridBtn) {
       this.backToGridBtn.addEventListener("click", () => this.switchToGrid());
     }
+    if (this.focusSettingsBtn) {
+      this.focusSettingsBtn.addEventListener("click", () => {
+        if (this.activeCamera) this.openCameraSettings(this.activeCamera);
+      });
+    }
+    const brandHome = document.getElementById("brand-home-link");
+    if (brandHome) {
+      brandHome.addEventListener("click", (e) => { e.preventDefault(); this.switchToGrid(); });
+    }
+
+    if (this.fullscreenBtn) {
+      this.fullscreenBtn.addEventListener("click", () => this.toggleFullscreen());
+    }
+    if (this.maximizeBtn) {
+      this.maximizeBtn.addEventListener("click", () => this.toggleMaximize());
+    }
+
+    // Camera settings modal handlers
+    if (this.csCloseBtn) {
+      this.csCloseBtn.addEventListener("click", () => this.closeCameraSettings());
+    }
+    if (this.csCancelBtn) {
+      this.csCancelBtn.addEventListener("click", () => this.closeCameraSettings());
+    }
+    if (this.csSaveBtn) {
+      this.csSaveBtn.addEventListener("click", () => this.saveCameraSettings());
+    }
+    if (this.csRemoveBtn) {
+      this.csRemoveBtn.addEventListener("click", () => {
+        if (this.currentSettingsCamera) {
+          this.removeCamera(this.currentSettingsCamera);
+          this.closeCameraSettings();
+        }
+      });
+    }
+    if (this.csReauthBtn) {
+      this.csReauthBtn.addEventListener("click", () => {
+        if (this.currentSettingsCamera) this.reauthenticateCamera(this.currentSettingsCamera);
+      });
+    }
+    if (this.cameraSettingsModal) {
+      this.cameraSettingsModal.addEventListener("click", (e) => {
+        if (e.target === this.cameraSettingsModal) this.closeCameraSettings();
+      });
+    }
 
     if (this.returnToLiveBtn) {
       this.returnToLiveBtn.addEventListener("click", () => this.returnToLive());
@@ -235,8 +316,76 @@ class LookoutApp {
         this.settingsModal.open();
       });
     }
+
+    // Collapsible events panel (timeline aside) with persisted state.
+    const eventsToggle = document.getElementById("events-panel-toggle");
+    const timelineAside = document.querySelector(".timeline-section");
+    if (eventsToggle && timelineAside) {
+      try {
+        if (localStorage.getItem("lookout_events_collapsed") === "1") {
+          timelineAside.classList.add("collapsed");
+        }
+      } catch (_) {}
+      eventsToggle.addEventListener("click", () => {
+        timelineAside.classList.toggle("collapsed");
+        try {
+          localStorage.setItem(
+            "lookout_events_collapsed",
+            timelineAside.classList.contains("collapsed") ? "1" : "0"
+          );
+        } catch (_) {}
+      });
+    }
     if (this.addCameraBtn) {
-      this.addCameraBtn.addEventListener("click", () => this.addCamera());
+      this.addCameraBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.addCameraDropdown) {
+          this.addCameraDropdown.style.display =
+            this.addCameraDropdown.style.display === "none" ? "block" : "none";
+        }
+      });
+    }
+
+    // Dropdown items
+    document.querySelectorAll(".add-camera-dropdown .dropdown-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        const action = item.dataset.action;
+        if (this.addCameraDropdown) this.addCameraDropdown.style.display = "none";
+        if (action === "camera") this.openAddCameraModal();
+        else if (action === "provider") {
+          // Route to settings modal integrations tab
+          if (this.settingsModal) this.settingsModal.open();
+        }
+      });
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener("click", (e) => {
+      if (this.addCameraDropdown && !e.target.closest(".add-camera-menu-wrapper")) {
+        this.addCameraDropdown.style.display = "none";
+      }
+    });
+
+    // Modal handlers
+    if (this.addCamClose) {
+      this.addCamClose.addEventListener("click", () => this.closeAddCameraModal());
+    }
+    if (this.addCamCancel) {
+      this.addCamCancel.addEventListener("click", () => this.closeAddCameraModal());
+    }
+    if (this.addCameraModal) {
+      this.addCameraModal.addEventListener("click", (e) => {
+        if (e.target === this.addCameraModal) this.closeAddCameraModal();
+      });
+    }
+    if (this.addCamSubmit) {
+      this.addCamSubmit.addEventListener("click", () => this.submitAddCamera());
+    }
+    if (this.addCamName) {
+      this.addCamName.addEventListener("input", () => this.autoGenerateCamId());
+    }
+    if (this.addCamType) {
+      this.addCamType.addEventListener("change", () => this.updateCamTypeFields());
     }
 
     // Playback control buttons
@@ -459,6 +608,229 @@ class LookoutApp {
     } catch (err) {
       console.warn("Camera removal failed:", err);
     }
+  }
+
+  toggleFullscreen() {
+    const target = this.focusStage || document.documentElement;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else if (target && target.requestFullscreen) {
+      target.requestFullscreen().catch(() => {});
+    }
+  }
+
+  toggleMaximize() {
+    const stage = this.focusStage;
+    if (!stage) return;
+    stage.classList.toggle("maximized");
+    if (stage.classList.contains("maximized")) {
+      if (this.maximizeBtn) this.maximizeBtn.textContent = "( ) Restore";
+    } else {
+      if (this.maximizeBtn) this.maximizeBtn.textContent = "( ) Maximize";
+    }
+  }
+
+  openCameraSettings(cam) {
+    this.currentSettingsCamera = cam || null;
+    if (!this.cameraSettingsModal) return;
+    if (cam) {
+      if (this.csCamName) this.csCamName.value = cam.name || "";
+      if (this.csCamLocation) this.csCamLocation.value = cam.location || "";
+      if (this.csCamEnabled) this.csCamEnabled.checked = cam.enabled !== false;
+      if (this.csCamMinThreat) this.csCamMinThreat.value = cam.notification_min_threat || "";
+      if (this.csCamEventTypes) {
+        const types = new Set(cam.notification_event_types || ["motion", "sound", "person", "ding"]);
+        this.csCamEventTypes.querySelectorAll(".cs-cam-event-type").forEach((cb) => {
+          cb.checked = types.has(cb.value);
+        });
+      }
+      if (this.csCamNotifyPass1) this.csCamNotifyPass1.checked = cam.notify_pass1 !== false;
+      if (this.csCamNotifyPass2) this.csCamNotifyPass2.checked = cam.notify_pass2 !== false;
+    }
+    if (this.csAuthGroup) {
+      this.csAuthGroup.style.display = cam && cam.auth_required ? "" : "none";
+    }
+    this.cameraSettingsModal.style.display = "flex";
+    this.cameraSettingsModal.classList.add("open");
+  }
+
+  closeCameraSettings() {
+    if (!this.cameraSettingsModal) return;
+    this.cameraSettingsModal.classList.remove("open");
+    this.cameraSettingsModal.style.display = "none";
+    this.currentSettingsCamera = null;
+  }
+
+  async saveCameraSettings() {
+    const cam = this.currentSettingsCamera;
+    if (!cam) return;
+    const payload = {};
+    if (this.csCamName) payload.name = this.csCamName.value.trim();
+    if (this.csCamLocation) payload.location = this.csCamLocation.value.trim();
+    if (this.csCamEnabled) payload.enabled = this.csCamEnabled.checked;
+    if (this.csCamMinThreat) payload.notification_min_threat = this.csCamMinThreat.value || null;
+    if (this.csCamEventTypes) {
+      payload.notification_event_types = Array.from(
+        this.csCamEventTypes.querySelectorAll(".cs-cam-event-type:checked")
+      ).map((cb) => cb.value);
+    }
+    if (this.csCamNotifyPass1) payload.notify_pass1 = this.csCamNotifyPass1.checked;
+    if (this.csCamNotifyPass2) payload.notify_pass2 = this.csCamNotifyPass2.checked;
+    try {
+      const res = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/settings`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) await this.fetchCameras();
+    } catch (err) {
+      console.warn("Camera settings save failed:", err);
+    }
+    this.closeCameraSettings();
+  }
+
+  autoGenerateCamId() {
+    if (!this.addCamName || !this.addCamId) return;
+    // Only auto-generate if the user hasn't manually edited the ID
+    if (this._camIdManuallyEdited) return;
+    const name = this.addCamName.value.trim();
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    this.addCamId.value = slug;
+  }
+
+  updateCamTypeFields() {
+    if (!this.addCamType || !this.addCamUrl) return;
+    const type = this.addCamType.value;
+    const urlGroup = this.addCamUrl.closest(".setting-group");
+    if (type === "ring" || type === "wyze") {
+      // Native providers: stream URL is resolved from discovery; hide manual URL
+      if (urlGroup) urlGroup.style.display = "none";
+      this.addCamUrl.value = "";
+      if (this.addCamNativeGroup) this.addCamNativeGroup.style.display = "";
+    } else {
+      if (urlGroup) urlGroup.style.display = "";
+      if (this.addCamNativeGroup) this.addCamNativeGroup.style.display = "none";
+      if (this.addCamNativeId) this.addCamNativeId.value = "";
+    }
+  }
+
+  openAddCameraModal() {
+    if (!this.addCameraModal) return;
+    // Reset form
+    if (this.addCamName) this.addCamName.value = "";
+    if (this.addCamId) this.addCamId.value = "";
+    if (this.addCamType) this.addCamType.value = "generic";
+    if (this.addCamUrl) this.addCamUrl.value = "";
+    if (this.addCamLocation) this.addCamLocation.value = "";
+    if (this.addCamEnabled) this.addCamEnabled.checked = true;
+    if (this.addCamNativeId) this.addCamNativeId.value = "";
+    if (this.addCamStatus) {
+      this.addCamStatus.style.display = "none";
+      this.addCamStatus.textContent = "";
+    }
+    this._camIdManuallyEdited = false;
+    this.updateCamTypeFields();
+    this.addCameraModal.style.display = "flex";
+    this.addCameraModal.classList.add("open");
+    if (this.addCamName) this.addCamName.focus();
+    // Track manual ID edits
+    if (this.addCamId) {
+      this.addCamId.addEventListener("input", () => {
+        this._camIdManuallyEdited = true;
+      }, { once: true });
+    }
+  }
+
+  closeAddCameraModal() {
+    if (!this.addCameraModal) return;
+    this.addCameraModal.classList.remove("open");
+    this.addCameraModal.style.display = "none";
+  }
+
+  async submitAddCamera() {
+    if (!this.addCamName || !this.addCamId) return;
+    const name = this.addCamName.value.trim();
+    const id = this.addCamId.value.trim();
+    const type = this.addCamType ? this.addCamType.value : "generic";
+    const stream_url = this.addCamUrl ? this.addCamUrl.value.trim() : "";
+    const location = this.addCamLocation ? this.addCamLocation.value.trim() : "";
+    const enabled = this.addCamEnabled ? this.addCamEnabled.checked : true;
+    const native_device_id = this.addCamNativeId ? this.addCamNativeId.value.trim() : "";
+
+    if (!name) {
+      this.showAddCamStatus("Display name is required", "error");
+      return;
+    }
+    if (!id) {
+      this.showAddCamStatus("Camera ID is required", "error");
+      return;
+    }
+    if (type === "generic" || type === "go2rtc") {
+      if (!stream_url) {
+        this.showAddCamStatus("Stream URL is required", "error");
+        return;
+      }
+    } else if (type === "ring" || type === "wyze") {
+      if (!native_device_id) {
+        this.showAddCamStatus("Native Device ID is required for " + type, "error");
+        return;
+      }
+    }
+
+    const payload = { id, name, enabled };
+    if (stream_url) payload.stream_url = stream_url;
+    if (location) payload.location = location;
+    if (type && type !== "generic") payload.camera_type = type;
+
+    // Map camera type to provider for native adoption
+    if (type === "ring" || type === "wyze") {
+      payload.native_provider = type;
+      if (native_device_id) payload.native_device_id = native_device_id;
+    }
+
+    try {
+      if (this.addCamSubmit) {
+        this.addCamSubmit.disabled = true;
+        this.addCamSubmit.textContent = "Adding...";
+      }
+      const res = await fetch(resolveUrl("/api/cameras"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        this.showAddCamStatus("Camera added successfully", "success");
+        await this.fetchCameras();
+        setTimeout(() => this.closeAddCameraModal(), 800);
+      } else {
+        let detail = "Failed to add camera";
+        try {
+          const data = await res.json();
+          detail = data.detail || detail;
+        } catch (_) {}
+        this.showAddCamStatus(detail, "error");
+      }
+    } catch (err) {
+      this.showAddCamStatus("Network error: " + err.message, "error");
+      console.warn("Camera addition failed:", err);
+    } finally {
+      if (this.addCamSubmit) {
+        this.addCamSubmit.disabled = false;
+        this.addCamSubmit.textContent = "Add Camera";
+      }
+    }
+  }
+
+  showAddCamStatus(message, type) {
+    if (!this.addCamStatus) return;
+    this.addCamStatus.style.display = "block";
+    this.addCamStatus.textContent = message;
+    this.addCamStatus.style.background = type === "error" ? "rgba(239,68,68,0.15)" : "rgba(16,185,129,0.15)";
+    this.addCamStatus.style.color = type === "error" ? "#ef4444" : "#10b981";
+    this.addCamStatus.style.border = `1px solid ${type === "error" ? "#ef4444" : "#10b981"}`;
   }
 
   async reauthenticateCamera(cam) {

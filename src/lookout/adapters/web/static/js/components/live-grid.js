@@ -23,6 +23,7 @@ function resolveWsUrl(path) {
   return `${wsProto}//${host}${clean}`;
 }
 
+// camera-gear-btn moved to focus view per AC20
 export class LiveGrid {
   constructor({
     container,
@@ -41,6 +42,15 @@ export class LiveGrid {
     this.onReauthenticateCamera = onReauthenticateCamera;
     this.cameraManagementLabels = cameraManagementLabels;
     this.cameras = [];
+    // Close PTZ <details> when clicking outside (critique suggestion).
+    if (!LiveGrid._ptzOutsideBound) {
+      LiveGrid._ptzOutsideBound = true;
+      document.addEventListener("click", (e) => {
+        document.querySelectorAll("details.ptz-controls[open]").forEach((d) => {
+          if (!d.contains(e.target)) d.open = false;
+        });
+      });
+    }
     try {
       this.density = localStorage?.getItem("lookout_grid_density") || "auto";
     } catch (_) {
@@ -153,12 +163,12 @@ export class LiveGrid {
       header.className = "tile-header";
       header.innerHTML = `
         <div class="tile-title">
-          <span class="cam-icon">${icon}</span>
+          <span class="cam-icon" title="Camera icon (decorative)">${icon}</span>
           <span class="cam-name">${cam.name || cam.id}</span>
         </div>
         <div class="tile-badges">
-          <span class="badge-provider ${provider}">${provider.charAt(0).toUpperCase() + provider.slice(1)}</span>
-          <span class="badge-stream ${streamMode}">${streamMode === "live_rtc" ? "● Live RTC" : "● On-Demand"}</span>
+          <span class="badge-provider ${provider}" title="Provider badge">${provider.charAt(0).toUpperCase() + provider.slice(1)}</span>
+          <span class="badge-stream ${streamMode}" title="Stream mode badge">${streamMode === "live_rtc" ? "● Live RTC" : "● On-Demand"}</span>
         </div>
       `;
       tile.appendChild(header);
@@ -213,7 +223,7 @@ export class LiveGrid {
       clockBadge.style.display = "none";
       const clockSpan = document.createElement("span");
       clockSpan.className = "duration-timer";
-      clockBadge.innerHTML = `<span class="live-indicator-dot">🔴</span> LIVE `;
+      clockBadge.innerHTML = `<span class="live-indicator-dot" title="Live indicator dot">🔴</span> LIVE `;
       clockBadge.appendChild(clockSpan);
       stage.appendChild(clockBadge);
 
@@ -227,10 +237,11 @@ export class LiveGrid {
       controls.style.padding = "4px";
       controls.style.flexWrap = "wrap";
 
-      const mkBtn = (label, onClick) => {
+      const mkBtn = (label, onClick, title) => {
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = label;
+        b.title = title || label;
         b.style.fontSize = "0.7rem";
         b.style.padding = "2px 6px";
         b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
@@ -244,17 +255,24 @@ export class LiveGrid {
       });
 
       // Manual snapshot/record for all cameras
-      controls.appendChild(mkBtn("📸", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot`), { method: "POST" })));
-      controls.appendChild(mkBtn("⏺", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/record`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ duration: cam.record_duration || 10 }) })));
+      controls.appendChild(mkBtn("📸", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/snapshot`), { method: "POST" }), "Manual snapshot"));
+      controls.appendChild(mkBtn("⏺", () => fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/record`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ duration: cam.record_duration || 10 }) }), "Record clip"));
 
       if (cam.ptz_enabled) {
-        controls.appendChild(mkBtn("◀", () => ptzPost({ action: "step", direction: "left" })));
-        controls.appendChild(mkBtn("▲", () => ptzPost({ action: "step", direction: "up" })));
-        controls.appendChild(mkBtn("▼", () => ptzPost({ action: "step", direction: "down" })));
-        controls.appendChild(mkBtn("▶", () => ptzPost({ action: "step", direction: "right" })));
-        controls.appendChild(mkBtn("➕", () => ptzPost({ action: "step", direction: "zoom_in" })));
-        controls.appendChild(mkBtn("➖", () => ptzPost({ action: "step", direction: "zoom_out" })));
-        controls.appendChild(mkBtn("⏹", () => ptzPost({ action: "stop" })));
+        const ptzDetails = document.createElement("details");
+        ptzDetails.className = "ptz-controls";
+        ptzDetails.open = true;
+        const ptzSummary = document.createElement("summary");
+        ptzSummary.textContent = "PTZ";
+        ptzDetails.appendChild(ptzSummary);
+        ptzDetails.appendChild(mkBtn("◀", () => ptzPost({ action: "step", direction: "left" }), "PTZ left"));
+        ptzDetails.appendChild(mkBtn("▲", () => ptzPost({ action: "step", direction: "up" }), "PTZ up"));
+        ptzDetails.appendChild(mkBtn("▼", () => ptzPost({ action: "step", direction: "down" }), "PTZ down"));
+        ptzDetails.appendChild(mkBtn("▶", () => ptzPost({ action: "step", direction: "right" }), "PTZ right"));
+        ptzDetails.appendChild(mkBtn("➕", () => ptzPost({ action: "step", direction: "zoom_in" }), "Zoom in"));
+        ptzDetails.appendChild(mkBtn("➖", () => ptzPost({ action: "step", direction: "zoom_out" }), "Zoom out"));
+        ptzDetails.appendChild(mkBtn("⏹", () => ptzPost({ action: "stop" }), "PTZ stop"));
+        controls.appendChild(ptzDetails);
       }
 
       tile.appendChild(controls);

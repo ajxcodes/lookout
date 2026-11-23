@@ -79,24 +79,23 @@ def test_every_camera_card_exposes_remove_button(tmp_path: Path) -> None:
     assert rendered["tileCount"] == 4
     tiles = {t["cameraId"]: t for t in rendered["tiles"]}
     assert set(tiles) == {"native-ring", "native-wyze", "rtsp", "go2"}
+    # AC20: grid tile no longer shows remove-camera or settings buttons.
     for tile in tiles.values():
         assert tile["hasBar"] is True, f"missing management bar on {tile['cameraId']}"
-        assert "Remove camera" in tile["buttons"], tile
+        assert "Remove camera" not in tile["buttons"], tile
+        assert "⚙" not in tile["buttons"], tile
 
-    # Unauthorized native camera: informational badge + Reauthenticate suggestion.
+    # Unauthorized native camera: informational badge still shown.
     ring = tiles["native-ring"]
     assert ring["hasBadge"] is True
     assert ring["badgeText"] == "Authentication required"
-    assert "Reauthenticate" in ring["buttons"]
 
     # Every other camera: Remove is still available, but no auth gating.
     for cam_id in ("native-wyze", "rtsp", "go2"):
         assert tiles[cam_id]["hasBadge"] is False
         assert "Reauthenticate" not in tiles[cam_id]["buttons"]
 
-    # The wired handlers actually fire (controls are interactive, not decorative).
-    assert "native-ring" in rendered["callsAfterClick"]["reauthenticate"]
-    assert "native-ring" in rendered["callsAfterClick"]["remove"]
+    # AC20: remove/reauthenticate controls moved off the grid tile (into the camera settings modal).
 
     config = LookoutConfig(
         ring=RingConfig(refresh_token=_TOKEN, logged_out=True),
