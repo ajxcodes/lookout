@@ -57,13 +57,13 @@
   <main class="viewer-main" id="viewer-main">
     <!-- Left Stage: Live Grid or Single Camera Focus Video & Acoustic Visualizer -->
     <section class="stage-section" id="stage-section">
+      <!-- 24-Hour Continuous Scrubber Timeline Bar (above camera stage) -->
+      <div id="scrubber-container" class="scrubber-container"></div>
+
       <!-- Multi-Camera Live Grid View (Default Landing in Stage) -->
       <section class="live-grid-section" id="live-grid-section">
         <div class="live-grid-container density-auto" id="live-grid-container"></div>
       </section>
-
-      <!-- 24-Hour Continuous Scrubber Timeline Bar (under camera stage) -->
-      <div id="scrubber-container" class="scrubber-container"></div>
 
       <!-- Single Camera Focus Stage -->
       <div class="focus-stage" id="focus-stage" style="display:none;">
@@ -182,8 +182,19 @@
       </div>
 
       <div class="modal-body">
+        <nav class="settings-nav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border-subtle);">
+          <a href="#section-ai" class="btn btn-sm" style="font-size:0.7rem;">AI</a>
+          <a href="#section-catalog" class="btn btn-sm" style="font-size:0.7rem;">Catalog</a>
+          <a href="#section-faces" class="btn btn-sm" style="font-size:0.7rem;">Faces</a>
+          <a href="#section-ha" class="btn btn-sm" style="font-size:0.7rem;">HA</a>
+          <a href="#section-cameras" class="btn btn-sm" style="font-size:0.7rem;">Cameras</a>
+          <a href="#section-integrations" class="btn btn-sm" style="font-size:0.7rem;">Integrations</a>
+          <a href="#section-storage" class="btn btn-sm" style="font-size:0.7rem;">Storage</a>
+          <a href="#section-hardware" class="btn btn-sm" style="font-size:0.7rem;">Hardware</a>
+          <a href="#section-reset" class="btn btn-sm" style="font-size:0.7rem;">Reset</a>
+        </nav>
         <!-- Runtime AI Mode Toggle -->
-        <section class="settings-section" data-section="ai-runtime">
+        <section class="settings-section" data-section="ai-runtime" id="section-ai">
           <h3 class="settings-section-title">AI Runtime</h3>
         </section>
         <div class="setting-group">
@@ -200,7 +211,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Unified Entity Reference Catalog Manager -->
-        <section class="settings-section" data-section="entity-catalog">
+        <section class="settings-section" data-section="entity-catalog" id="section-catalog">
           <h3 class="settings-section-title">Entity Catalog</h3>
         </section>
         <div class="setting-group">
@@ -212,7 +223,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Face Gallery Manager -->
-        <section class="settings-section" data-section="face-gallery">
+        <section class="settings-section" data-section="face-gallery" id="section-faces">
           <h3 class="settings-section-title">Face Gallery</h3>
         </section>
         <div class="setting-group">
@@ -231,7 +242,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Home Assistant Integration -->
-        <section class="settings-section" data-section="home-assistant">
+        <section class="settings-section" data-section="home-assistant" id="section-ha">
           <h3 class="settings-section-title">Home Assistant</h3>
         </section>
         <div class="setting-group" id="home-assistant-setting-group">
@@ -243,19 +254,19 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Per-Camera Notification Granularity -->
-        <section class="settings-section" data-section="camera-notifications">
+        <section class="settings-section" data-section="camera-notifications" id="section-cameras">
           <h3 class="settings-section-title">Camera Notifications</h3>
         </section>
         <div class="setting-group" id="camera-notifications-setting-group">
           <label class="setting-label">Camera Notification Granularity</label>
-          <p class="setting-desc">Per-camera notification settings are managed from each camera's focus view (⚙ Settings). This section is kept for quick access.</p>
+          <p class="setting-desc">Per-camera notification settings are managed from each camera's focus view (open a camera, then ⚙ Settings). Quick links:</p>
           <div id="camera-notifications-list" style="display:flex;flex-direction:column;gap:10px;margin-top:8px;"></div>
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Sidecar Integrations & Credentials Manager -->
-        <section class="settings-section" data-section="integrations">
+        <section class="settings-section" data-section="integrations" id="section-integrations">
           <h3 class="settings-section-title">Integrations</h3>
         </section>
         <div class="setting-group" id="integrations-setting-group">
@@ -267,7 +278,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Two-Tier Media Storage & Looping Retention -->
-        <section class="settings-section" data-section="storage">
+        <section class="settings-section" data-section="storage" id="section-storage">
           <h3 class="settings-section-title">Storage</h3>
         </section>
         <div class="setting-group" id="storage-retention-group">
@@ -364,7 +375,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Edge Hardware Sizing Profiles & Diagnostic Benchmark -->
-        <section class="settings-section" data-section="hardware">
+        <section class="settings-section" data-section="hardware" id="section-hardware">
           <h3 class="settings-section-title">Hardware</h3>
         </section>
         <div class="setting-group" id="hardware-benchmark-group">
@@ -388,7 +399,7 @@
         <hr style="border:none;border-top:1px solid var(--border-subtle);">
 
         <!-- Reset Section -->
-        <section class="settings-section" data-section="reset">
+        <section class="settings-section" data-section="reset" id="section-reset">
           <h3 class="settings-section-title">Reset</h3>
         </section>
         <div class="setting-group" id="reset-section">

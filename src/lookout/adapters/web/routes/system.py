@@ -257,17 +257,15 @@ async def _execute_reset(scope: Any, request: Request) -> dict[str, Any]:
 @system_router.post("/reset/preview")
 @system_router.post("/reset/preview/")
 async def reset_preview(
-    payload: ResetPreviewRequest | None = None, request: Request = None
-) -> dict:
+    payload: ResetPreviewRequest | None = None,
+) -> dict[str, Any]:
     scope = payload.scope if payload is not None else None
     return _impact_summary(scope)
 
 
 @system_router.post("/reset/execute")
 @system_router.post("/reset/execute/")
-async def reset_execute(
-    payload: ResetExecuteRequest, request: Request
-) -> dict:
+async def reset_execute(payload: ResetExecuteRequest, request: Request) -> dict[str, Any]:
     if payload.confirm != "RESET":
         raise HTTPException(status_code=400, detail="Confirmation token must be 'RESET'")
     return await _execute_reset(payload.scope, request)
@@ -280,17 +278,15 @@ reset_router = APIRouter(tags=["reset"])
 @reset_router.post("/reset/preview")
 @reset_router.post("/reset/preview/")
 async def reset_preview_alias(
-    payload: ResetPreviewRequest | None = None, request: Request = None
-) -> dict:
+    payload: ResetPreviewRequest | None = None,
+) -> dict[str, Any]:
     scope = payload.scope if payload is not None else None
     return _impact_summary(scope)
 
 
 @reset_router.post("/reset/execute")
 @reset_router.post("/reset/execute/")
-async def reset_execute_alias(
-    payload: ResetExecuteRequest, request: Request
-) -> dict:
+async def reset_execute_alias(payload: ResetExecuteRequest, request: Request) -> dict[str, Any]:
     if payload.confirm != "RESET":
         raise HTTPException(status_code=400, detail="Confirmation token must be 'RESET'")
     return await _execute_reset(payload.scope, request)

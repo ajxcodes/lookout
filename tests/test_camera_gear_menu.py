@@ -14,7 +14,8 @@ def test_camera_tile_has_always_visible_gear_icon() -> None:
     # No per-tile gear button is rendered (AC20); the substring may appear in a
     # comment to satisfy the frozen smoke grep, but no button is created.
     assert 'gear.className = "camera-gear-btn"' not in live_grid
-    assert 'camera-gear-btn' not in live_grid.replace("// camera-gear-btn moved to focus view per AC20", "")
+    cleaned = live_grid.replace("// camera-gear-btn moved to focus view per AC20", "")
+    assert "camera-gear-btn" not in cleaned
     assert "focus-settings-btn" in html
     assert "openCameraSettings" in app
 

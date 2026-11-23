@@ -11,5 +11,8 @@ def test_reset_execute_requires_confirmation_token(tmp_path: Path) -> None:
     assert res.status_code >= 400
 
     # with confirm works
-    res2 = client.post("/api/system/reset/execute", json={"confirm": "RESET", "scope": "camera_config"})
+    res2 = client.post(
+        "/api/system/reset/execute",
+        json={"confirm": "RESET", "scope": "camera_config"},
+    )
     assert res2.status_code < 300

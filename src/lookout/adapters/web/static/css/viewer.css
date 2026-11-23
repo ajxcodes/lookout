@@ -161,7 +161,7 @@ body {
   flex: 1;
   min-height: 0;
   max-height: calc(100vh - 60px);
-  overflow: hidden;
+  overflow: auto;
 }
 
 @media (max-width: 960px) {
@@ -1135,7 +1135,19 @@ body {
 }
 
 .live-grid-container.density-auto {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+@media (max-width: 640px) {
+  .live-grid-container.density-auto {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .live-grid-container.density-auto {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .live-grid-container.density-1-col {

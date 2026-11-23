@@ -261,6 +261,7 @@ export class LiveGrid {
       if (cam.ptz_enabled) {
         const ptzDetails = document.createElement("details");
         ptzDetails.className = "ptz-controls";
+        ptzDetails.open = true;
         const ptzSummary = document.createElement("summary");
         ptzSummary.textContent = "PTZ";
         ptzDetails.appendChild(ptzSummary);
