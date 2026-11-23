@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import shutil
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
+import lookout.adapters.native_stream_manager as nsm
 from lookout.adapters.continuous_recorder import ContinuousRecorderService
 from lookout.adapters.go2rtc import Go2RtcAdapter
 from lookout.adapters.memory import InMemoryEventRepository
@@ -98,6 +100,24 @@ def _manager(
 
 def _clips(stub: _Go2RtcStub) -> list[httpx.Request]:
     return [r for r in stub.requests if r.url.path == "/api/stream.mp4"]
+
+
+def _mock_ffmpeg_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the host-dependent ffmpeg probe in the go2rtc manager.
+
+    ``ensure_h264_stream`` calls ``shutil.which("ffmpeg")`` and raises when the
+    binary is absent. CI runners have no ffmpeg, so patch the probe to report an
+    available binary while delegating every other lookup to the real ``which``.
+    This touches only the test process and is reverted by ``monkeypatch``.
+    """
+    real_which = shutil.which
+
+    def fake_which(cmd: str, *args: Any, **kwargs: Any) -> str | None:
+        if cmd == "ffmpeg":
+            return "/usr/bin/ffmpeg"
+        return real_which(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(nsm.shutil, "which", fake_which)
 
 
 def test_resolve_record_audio_precedence() -> None:
@@ -220,8 +240,11 @@ async def test_go2rtc_record_clip_requests_all_audio_codecs(tmp_path: Any) -> No
     assert "mp4" not in off_route.calls[0].request.url.params
 
 
-async def test_ensure_h264_stream_includes_audio_transcode(tmp_path: Any) -> None:
+async def test_ensure_h264_stream_includes_audio_transcode(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TR-6: compatibility H.264 producer keeps an AAC audio track."""
+    _mock_ffmpeg_available(monkeypatch)
     stub = _Go2RtcStub()
     manager, client = _manager(tmp_path, LookoutConfig(), stub)
     try:
@@ -234,8 +257,11 @@ async def test_ensure_h264_stream_includes_audio_transcode(tmp_path: Any) -> Non
         await client.aclose()
 
 
-async def test_ensure_h264_transcode_includes_audio_transcode(tmp_path: Any) -> None:
+async def test_ensure_h264_transcode_includes_audio_transcode(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TR-7: cold-path H.264 transcode producer keeps an AAC audio track."""
+    _mock_ffmpeg_available(monkeypatch)
     stub = _Go2RtcStub(codecs=["H265"])
     manager, client = _manager(tmp_path, LookoutConfig(), stub)
     try:
