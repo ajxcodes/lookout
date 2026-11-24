@@ -388,6 +388,71 @@ async def test_poll_events_handles_epoch_ms_time() -> None:
     assert payloads[0]["timestamp"] == datetime.fromtimestamp(1700000000, tz=UTC).isoformat()
 
 
+def test_build_stream_source_honors_dtls_and_subtype_config() -> None:
+    """TR-5: stream_dtls/stream_subtype config changes the TUTK source tail."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(stream_dtls=False, stream_subtype="sd"))
+    source = adapter.build_stream_source(
+        {
+            "ip": "192.168.1.50",
+            "p2p_id": "UPE2UNBNWDFAKE01AB",
+            "enr": "mnfNV14qMEFPrcnS/abc",
+            "mac": "A1B2C3D4E5F6",
+            "model": "WYZECP1_JEF",
+        }
+    )
+    assert source.endswith("&subtype=sd&dtls=false")
+
+
+def test_verify_stream_source_reports_missing_fields_and_candidates() -> None:
+    """TR-6: missing identity fields and primary/fallback candidates are reported."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), cameras=[_camera()])
+    incomplete = {k: v for k, v in WYZE_DEVICE.items() if k != "enr"}
+    adapter.cache_devices([incomplete])
+    bad = adapter.verify_stream_source("office_cam")
+    assert bad["status"] == "source_error"
+    assert "enr" in bad["missing_fields"]
+    assert bad["source"] is None
+
+    adapter.cache_devices([WYZE_DEVICE])
+    good = adapter.verify_stream_source("office_cam")
+    assert good["status"] == "ok"
+    assert good["missing_fields"] == []
+    assert good["ip"] == "192.168.1.50"
+    assert good["source"].startswith("wyze://")
+    assert good["source"].endswith("&dtls=true")
+    assert good["fallback_source"].endswith("&dtls=false")
+    assert good["fallback_source"] != good["source"]
+
+
+async def test_record_clip_primes_consumer_before_clip(tmp_path: Any, monkeypatch: Any) -> None:
+    """TR-7: record_clip primes the consumer before requesting the MP4 clip."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    class PrimeTrackingManager(FakeStreamManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        async def frame(self, camera_id: str) -> bytes:
+            self.calls.append("frame")
+            return await super().frame(camera_id)
+
+        async def negotiate_consumer(self, camera_id: str) -> None:
+            await self.frame(camera_id)
+
+        async def clip(self, camera_id: str, duration_seconds: float) -> bytes:
+            self.calls.append("clip")
+            return await super().clip(camera_id, duration_seconds)
+
+    manager = PrimeTrackingManager()
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), stream_manager=manager, cameras=[_camera()])
+    path = await adapter.record_clip("office_cam", 5.0)
+
+    assert manager.calls == ["frame", "clip"]
+    assert Path(path).read_bytes() == MP4
+    assert b"mdat" in Path(path).read_bytes()
+
+
 async def test_wyze_sound_event_categorization_and_notification() -> None:
     """TR-8: Verify Wyze Sound alarm_type is categorized as ACOUSTIC_ANOMALY / HIGH."""
     from lookout.adapters.memory.notification import MockNotificationAdapter

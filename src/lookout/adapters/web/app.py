@@ -31,6 +31,7 @@ from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.native_event_poller import NativeEventPoller
 from lookout.adapters.native_stream_manager import (
     Go2RtcUnavailableError,
+    MediaCaptureError,
     NativeAwareRecorder,
     NativeStreamManager,
 )
@@ -132,6 +133,12 @@ def _base_camera_id(camera_id: str | None) -> str | None:
     return camera_id[:-5] if camera_id.endswith("_h264") else camera_id
 
 
+_STREAM_HEALTH_RECOMMENDATION = (
+    "Verify native discovery for this camera, check device power/network reachability, "
+    "set a per-camera stream_url override, or try wyze.stream_dtls=false."
+)
+
+
 def _resolve_go2rtc_target(app: FastAPI, camera_id: str | None) -> str:
     """Pick the go2rtc API base URL that holds the stream for ``camera_id``.
 
@@ -168,6 +175,13 @@ async def _ensure_native_stream(app: FastAPI, camera_id: str | None) -> bool:
         return False
     source = adapter._resolve_source(base_id)
     await manager.ensure_stream(base_id, source)
+    # Wyze TUTK streams carry SPS with no dimensions until a consumer attaches;
+    # prime a frame so WebRTC/MP4 clients see moving video instead of black.
+    if provider == "wyze" and hasattr(manager, "negotiate_consumer"):
+        try:
+            await manager.negotiate_consumer(base_id)
+        except MediaCaptureError as exc:
+            manager.record_stream_error(base_id, exc)
     if provider == "ring" and hasattr(manager, "ensure_h264_transcode"):
         await manager.ensure_h264_transcode(base_id)
     return True
@@ -507,6 +521,7 @@ def create_app(
                     record_clip=True,
                     clip_duration=10.0,
                     storage_base_path=media_dir,
+                    failure_backoff_seconds=60.0,
                 )
                 app.state.native_event_poller = native_poller
                 native_poller.start()
@@ -1039,6 +1054,10 @@ def create_app(
                 registered = bool(await manager._stream_exists(camera_id))
             with suppress(Exception):
                 codecs = list(await manager.stream_codecs(camera_id))
+        stream_health: dict[str, Any] = {}
+        if manager is not None and hasattr(manager, "stream_health"):
+            with suppress(Exception):
+                stream_health = manager.stream_health(_base_camera_id(camera_id) or camera_id)
         return {
             "stream_registered": registered,
             "source_scheme": _source_scheme(source),
@@ -1046,6 +1065,9 @@ def create_app(
             "codecs": codecs,
             "h264": any("H264" in c.upper() for c in codecs),
             "go2rtc_target": _resolve_go2rtc_target(app, camera_id),
+            "stream_health": stream_health,
+            "error": stream_health.get("error"),
+            "recommendation": _STREAM_HEALTH_RECOMMENDATION,
         }
 
     @app.post("/api/webrtc")

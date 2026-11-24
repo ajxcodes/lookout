@@ -6,10 +6,13 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
 import socket
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +27,44 @@ _JPEG_MAGIC = b"\xff\xd8"
 _MP4_FTYP = b"ftyp"
 _MP4_MDAT = b"mdat"
 
-
 _VIDEO_CODECS = ("H264", "H265", "VP8", "VP9", "AV1", "MJPEG")
+
+# Stream-health error classification patterns. All reported strings pass through
+# :func:`redact_error` before leaving this module, so no credential material is
+# ever written to logs or status.
+_ERROR_DISCOVERY_TIMEOUT = "discovery timeout"
+_ERROR_CONNECT_FAILED = "connect failed"
+_ERROR_AUTHZ = ("406", "ext_authz_denied", "not acceptable", "auth")
+_ERROR_SOURCE = ("enr", "uid", "p2p_id", "mac", "ip", "identity", "field")
+_ERROR_LOG_KEY = "stream="
+_DEFAULT_RECONNECT_BACKOFF = 30.0
+_MAX_RECONNECT_BACKOFF = 300.0
+_LOG_TAIL_LINES = 200
+
+_SENSITIVE_KV_RE = re.compile(
+    r"\b(refresh[-_]?token|access[-_]?token|api[-_]?key|p2p_id|password|passwd|secret|"
+    r"credential|token|auth|sig|uid|enr|mac|did)\b\s*[=:]\s*([^\s,&\"']+)",
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r"(Bearer\s+)(\S+)", re.IGNORECASE)
+_CLI_TOKEN_RE = re.compile(
+    r"(--(?:refresh[-_]?token|token|password|secret|key)(?:=|\s+))(\S+)", re.IGNORECASE
+)
+_MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def redact_error(text: Any) -> str:
+    """Redact credential-like values, MACs and IPs from an error string."""
+    if not text:
+        return ""
+    result = str(text)
+    result = _SENSITIVE_KV_RE.sub(lambda m: f"{m.group(1)}=[redacted]", result)
+    result = _BEARER_RE.sub(r"\1[redacted]", result)
+    result = _CLI_TOKEN_RE.sub(r"\1[redacted]", result)
+    result = _MAC_RE.sub("[redacted]", result)
+    result = _IPV4_RE.sub("[redacted]", result)
+    return result
 
 
 class Go2RtcUnavailableError(RuntimeError):
@@ -111,6 +150,10 @@ class NativeStreamManager(VideoRecorderPort):
         self.streams: dict[str, str] = {}
         # set of camera ids that should stay connected with no consumer (preload)
         self.recorded_cameras: set[str] = set()
+        # Per-camera health / reconnect state (all strings redacted).
+        self._stream_health: dict[str, dict[str, Any]] = {}
+        self._next_retry: dict[str, float] = {}
+        self._last_cooldown_log: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -419,7 +462,9 @@ class NativeStreamManager(VideoRecorderPort):
                     name = str(entry.get("codec_name") or "").upper()
                     if kind == "video" and name in _VIDEO_CODECS:
                         codecs.append(name)
-        return list(dict.fromkeys(codecs))
+        codecs = list(dict.fromkeys(codecs))
+        self._stream_health.setdefault(str(camera_id), {})["codecs"] = codecs
+        return codecs
 
     async def has_h264(self, camera_id: str) -> bool:
         """True only if go2rtc serves an H264 video codec; warns otherwise."""
@@ -464,16 +509,37 @@ class NativeStreamManager(VideoRecorderPort):
             )
         return True
 
-    async def ensure_stream(self, camera_id: str, source: str | None = None) -> None:
-        """Register or update a camera stream, starting go2rtc when needed."""
+    async def ensure_stream(
+        self, camera_id: str, source: str | None = None, force: bool = False
+    ) -> None:
+        """Register or update a camera stream, starting go2rtc when needed.
+
+        Repeat registrations inside a failure cooldown are skipped (unless
+        ``force``) so an unreachable producer such as ``office_cam`` cannot spam
+        go2rtc's log with a discovery-timeout retry on every live request.
+        """
+        cam_id = str(camera_id)
         if not source:
-            source = self.streams.get(str(camera_id))
+            source = self.streams.get(cam_id)
         if not source:
             raise MediaCaptureError(f"No stream source configured for camera '{camera_id}'")
+        next_retry = self._next_retry.get(cam_id)
+        if not force and next_retry is not None and time.monotonic() < next_retry:
+            last_log = self._last_cooldown_log.get(cam_id, 0.0)
+            if time.monotonic() - last_log >= max(1.0, self.retry_after(cam_id)):
+                logger.debug(
+                    "Stream '%s' is cooling down for %.1fs; skipping re-registration",
+                    cam_id,
+                    self.retry_after(cam_id),
+                )
+                self._last_cooldown_log[cam_id] = time.monotonic()
+            return
         async with self._lock:
             if not self.running:
                 await self._start_process()
-            await self._ensure_stream_locked(str(camera_id), str(source))
+            await self._ensure_stream_locked(cam_id, str(source))
+        # A successful (re)registration clears any previous failure cooldown.
+        self._clear_stream_failure(cam_id)
 
     async def ensure_h264_stream(self, camera_id: Any, source: Any = None) -> None:
         """Register (or update) a transcoded H.264 stream for a camera.
@@ -605,36 +671,194 @@ class NativeStreamManager(VideoRecorderPort):
 
     async def frame(self, camera_id: str) -> bytes:
         """Capture a JPEG frame from a go2rtc stream."""
-        content = await self._request_media(
-            "/api/frame.jpeg", {"src": str(camera_id)}, error_context="Snapshot"
-        )
-        if not content.startswith(_JPEG_MAGIC):
-            raise MediaCaptureError(
-                f"Snapshot for '{camera_id}' is not a JPEG ({len(content)} bytes)"
+        cam_id = str(camera_id)
+        try:
+            content = await self._request_media(
+                "/api/frame.jpeg", {"src": cam_id}, error_context="Snapshot"
             )
+            if not content.startswith(_JPEG_MAGIC):
+                raise MediaCaptureError(
+                    f"Snapshot for '{cam_id}' is not a JPEG ({len(content)} bytes)"
+                )
+        except MediaCaptureError as exc:
+            self.record_stream_error(cam_id, exc)
+            raise
+        self._clear_stream_failure(cam_id)
         return content
 
-    async def clip(self, camera_id: str, duration_seconds: float) -> bytes:
-        """Record an MP4 clip from a go2rtc stream."""
+    async def negotiate_consumer(self, camera_id: str) -> None:
+        """Prime an on-demand stream by forcing a frame/keyframe capture.
+
+        Calls :meth:`frame` (``/api/frame.jpeg``) which makes go2rtc negotiate
+        the producer and cache SPS/picture dimensions. Best-effort callers may
+        suppress :class:`MediaCaptureError`; the prime never fabricates media.
+        """
+        await self.frame(str(camera_id))
+
+    async def clip(self, camera_id: str, duration_seconds: float, retries: int = 3) -> bytes:
+        """Record an MP4 clip, retrying with consumer priming on header-only output."""
+        cam_id = str(camera_id)
         params: dict[str, Any] = {
-            "src": str(camera_id),
+            "src": cam_id,
             "duration": max(1, int(round(duration_seconds))),
         }
-        if resolve_record_audio(str(camera_id), self.config):
+        if resolve_record_audio(cam_id, self.config):
             params["mp4"] = "all"
-        content = await self._request_media(
-            "/api/stream.mp4",
-            params,
-            error_context="Clip",
+        attempts = max(1, int(retries))
+        last_error: MediaCaptureError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                content = await self._request_media("/api/stream.mp4", params, error_context="Clip")
+                if _MP4_FTYP not in content[:64]:
+                    raise MediaCaptureError(
+                        f"Clip for '{cam_id}' is not an MP4 ({len(content)} bytes)"
+                    )
+                if _MP4_MDAT not in content:
+                    raise MediaCaptureError(
+                        f"Clip for '{cam_id}' contains no media samples ({len(content)} bytes); "
+                        "the source produced no frames"
+                    )
+                self._clear_stream_failure(cam_id)
+                return content
+            except MediaCaptureError as exc:
+                last_error = exc
+                self.record_stream_error(cam_id, exc)
+                if attempt < attempts:
+                    with contextlib.suppress(MediaCaptureError):
+                        await self.negotiate_consumer(cam_id)
+                    await asyncio.sleep(0.1 * attempt)
+        raise (
+            last_error
+            if last_error is not None
+            else MediaCaptureError(f"Clip for '{cam_id}' failed")
         )
-        if _MP4_FTYP not in content[:64]:
-            raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
-        if _MP4_MDAT not in content:
-            raise MediaCaptureError(
-                f"Clip for '{camera_id}' contains no media samples ({len(content)} bytes); "
-                "the source produced no frames"
+
+    # ------------------------------------------------------------------
+    # Stream health / reconnect backoff
+    # ------------------------------------------------------------------
+    def _backoff_base(self, camera_id: str) -> float:
+        """Return the configured reconnect backoff base for a camera's provider."""
+        provider: str | None = None
+        for camera in getattr(self.config, "cameras", None) or []:
+            if str(getattr(camera, "id", "")) == str(camera_id):
+                provider = getattr(camera, "native_provider", None)
+                break
+        provider_cfg = getattr(self.config, str(provider), None) if provider else None
+        value = getattr(provider_cfg, "stream_reconnect_backoff_seconds", None)
+        if isinstance(value, (int, float)):
+            return max(0.0, float(value))
+        return _DEFAULT_RECONNECT_BACKOFF
+
+    def _clear_stream_failure(self, camera_id: str) -> None:
+        cam_id = str(camera_id)
+        self._next_retry.pop(cam_id, None)
+        self._last_cooldown_log.pop(cam_id, None)
+        health = self._stream_health.setdefault(cam_id, {})
+        health["consecutive_failures"] = 0
+        health["last_error"] = None
+        health["retry_after_seconds"] = 0.0
+
+    def record_stream_error(self, camera_id: str, error: Any) -> None:
+        """Record a redacted stream error and schedule exponential reconnect backoff."""
+        cam_id = str(camera_id)
+        health = self._stream_health.setdefault(cam_id, {})
+        failures = int(health.get("consecutive_failures") or 0) + 1
+        health["consecutive_failures"] = failures
+        health["last_error"] = redact_error(error)
+        health["last_error_at"] = datetime.now(UTC).isoformat()
+        base = self._backoff_base(cam_id)
+        delay = min(_MAX_RECONNECT_BACKOFF, base * (2 ** (failures - 1))) if base > 0 else 0.0
+        health["retry_after_seconds"] = float(delay)
+        self._next_retry[cam_id] = time.monotonic() + delay
+
+    def retry_after(self, camera_id: str) -> float:
+        """Seconds remaining before a camera may be re-registered (0 when clear)."""
+        next_retry = self._next_retry.get(str(camera_id))
+        if next_retry is None:
+            return 0.0
+        return float(max(0.0, next_retry - time.monotonic()))
+
+    def _tail_log_lines(self) -> list[str]:
+        """Return at most the last 200 lines of the embedded go2rtc log."""
+        path = self.runtime_dir / "go2rtc.log"
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                return handle.readlines()[-_LOG_TAIL_LINES:]
+        except (OSError, ValueError):
+            return []
+
+    def _log_error_for(self, camera_id: str) -> str | None:
+        cam_id = str(camera_id)
+        for line in reversed(self._tail_log_lines()):
+            if _ERROR_LOG_KEY not in line and cam_id not in line:
+                continue
+            match = re.search(r'error="([^"]*)"', line)
+            detail = match.group(1) if match else line.strip()
+            if (
+                detail
+                and cam_id in line
+                and (
+                    _ERROR_DISCOVERY_TIMEOUT in detail.lower()
+                    or _ERROR_CONNECT_FAILED in detail.lower()
+                    or _ERROR_LOG_KEY in line
+                )
+            ):
+                return detail
+        return None
+
+    def _classify_error(self, camera_id: str, error: str | None = None) -> str:
+        cam_id = str(camera_id)
+        text = (error or "").lower()
+        log_error = self._log_error_for(cam_id)
+        if log_error:
+            text = f"{text} {log_error}".lower()
+        # Missing identity fields reported by source verification.
+        if "missing" in text and any(field in text for field in _ERROR_SOURCE):
+            return "source_error"
+        if _ERROR_DISCOVERY_TIMEOUT in text or _ERROR_CONNECT_FAILED in text:
+            return "unreachable"
+        if any(marker in text for marker in _ERROR_AUTHZ):
+            return "auth"
+        health = self._stream_health.get(cam_id, {})
+        if text and not health.get("codecs"):
+            return "no_media"
+        return "unknown"
+
+    def stream_health(self, camera_id: str) -> dict[str, Any]:
+        """Return a redacted, actionable health snapshot for one camera."""
+        cam_id = str(camera_id)
+        health = self._stream_health.get(cam_id, {})
+        log_error = self._log_error_for(cam_id)
+        raw_error = health.get("last_error") or log_error
+        error = redact_error(raw_error) if raw_error else None
+        classification = self._classify_error(cam_id, raw_error) if raw_error else "unknown"
+        failures = int(health.get("consecutive_failures") or 0)
+        if classification == "unreachable" or (classification == "no_media" and failures):
+            status = "unavailable"
+        elif failures:
+            status = "degraded"
+        else:
+            status = "ok"
+        recommendation = None
+        if status != "ok":
+            recommendation = (
+                "Verify native discovery for this camera, check device power/network "
+                "reachability, set a per-camera stream_url override, or try "
+                "wyze.stream_dtls=false."
             )
-        return content
+        return {
+            "camera_id": cam_id,
+            "source": redact_error(self.streams.get(cam_id)),
+            "codecs": list(health.get("codecs") or []),
+            "status": status,
+            "classification": classification,
+            "error": error,
+            "consecutive_failures": failures,
+            "retry_after_seconds": float(
+                health.get("retry_after_seconds") or self.retry_after(cam_id)
+            ),
+            "recommendation": recommendation,
+        }
 
     async def capture_snapshot(self, camera_id: str) -> str:
         """Write a validated JPEG snapshot to a temporary file and return its path."""

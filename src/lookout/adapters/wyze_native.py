@@ -309,38 +309,70 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         """Public helper for tests and callers to prime the discovery cache."""
         self._cache_devices(devices)
 
-    def build_stream_source(self, device: dict[str, Any]) -> str:
-        """Build the exact go2rtc ``wyze://`` TUTK source URL for a device."""
+    @staticmethod
+    def _source_fields(device: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         params = device.get("device_params")
         if not isinstance(params, dict):
             params = {}
-        ip = device.get("ip") or params.get("ip")
-        uid = device.get("p2p_id") or params.get("p2p_id")
-        enr = device.get("enr")
-        mac = device.get("mac")
-        model = device.get("model") or device.get("product_model")
-        missing = [
-            name
-            for name, value in (
-                ("ip", ip),
-                ("p2p_id", uid),
-                ("enr", enr),
-                ("mac", mac),
-            )
-            if not value
-        ]
+        fields = {
+            "ip": device.get("ip") or params.get("ip"),
+            "p2p_id": device.get("p2p_id") or params.get("p2p_id"),
+            "enr": device.get("enr"),
+            "mac": device.get("mac"),
+            "model": device.get("model") or device.get("product_model"),
+        }
+        missing = [name for name in ("ip", "p2p_id", "enr", "mac") if not fields.get(name)]
+        return fields, missing
+
+    def _build_source(self, device: dict[str, Any], *, dtls: bool | None = None) -> str:
+        fields, missing = self._source_fields(device)
         if missing:
             raise WyzeStreamSourceError(
                 f"Cannot build wyze:// source: missing {', '.join(missing)}"
             )
+        subtype = getattr(self.config, "stream_subtype", None) or "hd"
+        effective_dtls = getattr(self.config, "stream_dtls", True) if dtls is None else dtls
+        dtls_text = "true" if effective_dtls else "false"
         return (
-            f"wyze://{ip}"
-            f"?uid={quote(str(uid), safe='')}"
-            f"&enr={quote(str(enr), safe='')}"
-            f"&mac={quote(str(mac), safe='')}"
-            f"&model={quote(str(model or ''), safe='')}"
-            "&subtype=hd&dtls=true"
+            f"wyze://{fields['ip']}"
+            f"?uid={quote(str(fields['p2p_id']), safe='')}"
+            f"&enr={quote(str(fields['enr']), safe='')}"
+            f"&mac={quote(str(fields['mac']), safe='')}"
+            f"&model={quote(str(fields['model'] or ''), safe='')}"
+            f"&subtype={quote(str(subtype), safe='')}&dtls={dtls_text}"
         )
+
+    def build_stream_source(self, device: dict[str, Any]) -> str:
+        """Build the go2rtc ``wyze://`` TUTK source URL for a device."""
+        return self._build_source(device)
+
+    def verify_stream_source(self, camera_id: str) -> dict[str, Any]:
+        """Report required source fields, configured IP and candidate sources.
+
+        Never includes credential material: the returned values are identity
+        metadata (IP/MAC) and go2rtc source URLs that callers redact before
+        exposing them through status APIs.
+        """
+        cam_id = str(camera_id)
+        camera = self._camera_config(cam_id)
+        device = self._find_cached(camera.native_device_id) if camera is not None else None
+        if device is None:
+            device = self._find_cached(cam_id)
+        device = device or {}
+        fields, missing = self._source_fields(device)
+        source: str | None = None
+        fallback_source: str | None = None
+        if not missing:
+            source = self._build_source(device)
+            fallback_source = self._build_source(device, dtls=False)
+        return {
+            "camera_id": cam_id,
+            "ip": fields.get("ip"),
+            "missing_fields": missing,
+            "source": source,
+            "fallback_source": fallback_source,
+            "status": "ok" if not missing else "source_error",
+        }
 
     # ------------------------------------------------------------------
     # Camera resolution
@@ -442,6 +474,11 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         source = self._resolve_source(camera_id)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
+        # Prime the TUTK consumer best-effort so the first MP4 request carries
+        # real media samples instead of a header-only ftyp box.
+        if hasattr(manager, "negotiate_consumer"):
+            with contextlib.suppress(MediaCaptureError):
+                await manager.negotiate_consumer(camera_id)
         content = await manager.clip(camera_id, duration_seconds)
         if _MP4_FTYP not in content[:64]:
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")

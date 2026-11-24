@@ -173,6 +173,58 @@ async def test_poller_consecutive_failures_resets_after_success() -> None:
     assert poller.health["consecutive_failures"] == 0
 
 
+async def test_poller_backs_off_and_stops_spamming_after_repeated_failures(
+    caplog: Any,
+) -> None:
+    """TR-11: backoff limits rapid ticks to one call and one WARNING."""
+    ring = FakeAdapter()
+    ring.error = RuntimeError("ring history 500")
+    wyze = FakeAdapter()
+
+    async def ingest(camera_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"id": "x"}
+
+    poller = NativeEventPoller(
+        config=_config(),
+        wyze=wyze,
+        ring=ring,
+        ingest=ingest,
+        failure_backoff_seconds=1,
+    )
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            await poller._tick()
+
+    assert len(ring.since_calls) == 1
+    health = poller.status()["cameras"]["door"]
+    assert health["next_retry_at"] > datetime.now(UTC)
+    assert health["retry_after_seconds"] > 0
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING" and "Native event poll failed" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
+async def test_poller_error_is_redacted_and_actionable() -> None:
+    """TR-12: credential material in adapter errors never reaches status."""
+    ring = FakeAdapter()
+    ring.error = RuntimeError("refresh_token=SECRET Bearer SECRET")
+    wyze = FakeAdapter()
+
+    async def ingest(camera_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"id": "x"}
+
+    poller = NativeEventPoller(config=_config(), wyze=wyze, ring=ring, ingest=ingest)
+    await poller._tick()
+
+    status = poller.status()
+    for camera_id in ("door", "office"):
+        last_error = status["cameras"][camera_id]["last_error"] or ""
+        assert "SECRET" not in last_error
+
+
 async def test_poller_start_uses_bounded_first_lookback_and_stops() -> None:
     adapter = FakeAdapter()
     other = FakeAdapter()

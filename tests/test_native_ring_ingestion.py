@@ -311,6 +311,166 @@ def test_parse_datetime_handles_epoch_millis() -> None:
     assert result == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
 
 
+async def test_ring_auth_uses_compatible_user_agent(tmp_path: Any, monkeypatch: Any) -> None:
+    """TR-8: Auth receives a device-compatible UA, never lookout/<version>."""
+    import ring_doorbell
+
+    captured: dict[str, Any] = {}
+
+    class CapturingAuth:
+        def __init__(self, user_agent: str, **kwargs: Any) -> None:
+            captured["user_agent"] = user_agent
+            self.token = {"refresh_token": "refreshed"}
+            self.hardware_id = None
+
+        async def async_refresh_tokens(self) -> None:
+            return None
+
+        async def async_close(self) -> None:
+            return None
+
+    class CapturingRing:
+        def __init__(self, auth: Any) -> None:
+            return None
+
+        async def async_update_devices(self) -> None:
+            return None
+
+        def devices(self) -> Any:
+            return SimpleNamespace(video_devices=[])
+
+    monkeypatch.setattr(ring_doorbell, "Auth", CapturingAuth)
+    monkeypatch.setattr(ring_doorbell, "Ring", CapturingRing)
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN), runtime_dir=str(tmp_path)
+    )
+    await adapter._ring()
+
+    assert captured["user_agent"].startswith("android:com.ringapp")
+    assert "lookout/" not in captured["user_agent"]
+
+
+async def test_ring_client_skips_legacy_session_bootstrap(tmp_path: Any, monkeypatch: Any) -> None:
+    """_ring() seeds a session sentinel so the 406 session POST is never issued."""
+    import ring_doorbell
+
+    captured: dict[str, Any] = {}
+
+    class CapturingAuth:
+        def __init__(self, user_agent: str, **kwargs: Any) -> None:
+            captured["user_agent"] = user_agent
+            self.token = {"refresh_token": "refreshed"}
+            self.hardware_id = None
+
+        async def async_refresh_tokens(self) -> None:
+            return None
+
+        async def async_close(self) -> None:
+            return None
+
+    class CapturingRing:
+        def __init__(self, auth: Any) -> None:
+            self.session: dict[str, Any] | None = None
+            self.session_calls = 0
+            captured["ring"] = self
+
+        async def async_create_session(self) -> None:
+            self.session_calls += 1
+            raise AssertionError("legacy clients_api/session bootstrap must be skipped")
+
+        async def async_update_devices(self) -> None:
+            assert self.session is not None
+
+        def devices(self) -> Any:
+            return SimpleNamespace(video_devices=[])
+
+    monkeypatch.setattr(ring_doorbell, "Auth", CapturingAuth)
+    monkeypatch.setattr(ring_doorbell, "Ring", CapturingRing)
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN), runtime_dir=str(tmp_path)
+    )
+    await adapter._ring()
+
+    ring = captured["ring"]
+    assert ring.session_calls == 0
+    assert ring.session == {"clients_api_session": "skipped"}
+    assert captured["user_agent"].startswith("android:com.ringapp")
+
+
+async def test_authz_denied_rotates_client_profile_and_succeeds(tmp_path: Any) -> None:
+    """TR-9: a 406 ext_authz_denied rotates profiles and the retry ingests events."""
+    created = datetime.now(UTC) - timedelta(minutes=1)
+
+    class FlakyDevice(FakeRingDevice):
+        def __init__(self) -> None:
+            super().__init__()
+            self.history_calls = 0
+
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            self.history_calls += 1
+            if self.history_calls == 1:
+                raise RuntimeError(
+                    "HTTP error with status code 406 during query of url "
+                    "https://api.ring.com/clients_api/session: ext_authz_denied "
+                    "refresh_token=SECRET"
+                )
+            return [
+                {
+                    "id": 555001,
+                    "created_at": created,
+                    "kind": "motion",
+                    "cv_properties": {"detection_type": "human"},
+                }
+            ]
+
+    device = FlakyDevice()
+    client = FakeRingClient([device])
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=client,
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    initial_profile = adapter._profile_state.current().name
+
+    payloads = await adapter.poll_events("front_door")
+
+    assert len(payloads) == 1
+    assert device.history_calls == 2
+    assert adapter._profile_state.current().name != initial_profile
+    assert adapter.last_success_at is not None
+    assert adapter.consecutive_failures == 0
+    assert "SECRET" not in (adapter._last_error or "")
+
+
+async def test_authz_denied_exhaustion_raises_actionable_error(tmp_path: Any) -> None:
+    """TR-10: exhausting every profile raises an actionable, redacted auth error."""
+    from lookout.adapters.ring_api_compat import DEFAULT_PROFILES
+
+    class AlwaysDeniedDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError(
+                "HTTP error with status code 406 during query of url "
+                "https://api.ring.com/clients_api/session: ext_authz_denied "
+                "refresh_token=SECRET"
+            )
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysDeniedDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+
+    with pytest.raises(RingAuthError, match="ring_authz_denied") as excinfo:
+        await adapter.poll_events("front_door")
+
+    assert "SECRET" not in str(excinfo.value)
+    assert "SECRET" not in (adapter._last_error or "")
+    assert adapter.consecutive_failures == len(DEFAULT_PROFILES)
+
+
 async def test_ring_ding_doorbell_event_capture() -> None:
     """TR-9: Verify Ring doorbell ding event is captured and notified."""
     from lookout.adapters.memory.notification import MockNotificationAdapter

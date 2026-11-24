@@ -248,6 +248,25 @@ async def native_status(request: Request) -> dict[str, Any]:
     if manager is not None:
         from lookout.adapters.web.app import _redact_source
 
+        stream_health: dict[str, Any] = {}
+        if hasattr(manager, "stream_health"):
+            for cam_id in getattr(manager, "streams", {}) or {}:
+                try:
+                    health = manager.stream_health(cam_id)
+                except Exception:  # noqa: BLE001 - status must never fail
+                    continue
+                stream_health[str(cam_id)] = {
+                    key: health.get(key)
+                    for key in (
+                        "status",
+                        "classification",
+                        "error",
+                        "codecs",
+                        "consecutive_failures",
+                        "retry_after_seconds",
+                        "recommendation",
+                    )
+                }
         stream_manager = {
             "running": bool(getattr(manager, "running", False)),
             "api_url": getattr(manager, "api_url", None),
@@ -256,6 +275,7 @@ async def native_status(request: Request) -> dict[str, Any]:
                 for name, source in (getattr(manager, "streams", {}) or {}).items()
             },
             "binary": getattr(manager, "binary_path", None),
+            "stream_health": stream_health,
         }
     poller = getattr(request.app.state, "native_event_poller", None)
     # #64: auth state + per-camera auth-required list.
