@@ -34,7 +34,10 @@ _VIDEO_CODECS = ("H264", "H265", "VP8", "VP9", "AV1", "MJPEG")
 # ever written to logs or status.
 _ERROR_DISCOVERY_TIMEOUT = "discovery timeout"
 _ERROR_CONNECT_FAILED = "connect failed"
-_ERROR_AUTHZ = ("406", "ext_authz_denied", "not acceptable", "auth")
+# "406" is matched separately via _HTTP_406_RE so ports (10406) and latencies
+# (406ms) cannot be misclassified as auth failures.
+_ERROR_AUTHZ = ("ext_authz_denied", "not acceptable", "auth")
+_HTTP_406_RE = re.compile(r"\b406\b")
 _ERROR_SOURCE = ("enr", "uid", "p2p_id", "mac", "ip", "identity", "field")
 # Match source-field tokens only as whole words: short tokens such as "ip" and
 # "mac" otherwise fire on substrings of unrelated words ("description", "machine").
@@ -822,7 +825,7 @@ class NativeStreamManager(VideoRecorderPort):
             return "source_error"
         if _ERROR_DISCOVERY_TIMEOUT in text or _ERROR_CONNECT_FAILED in text:
             return "unreachable"
-        if any(marker in text for marker in _ERROR_AUTHZ):
+        if _HTTP_406_RE.search(text) or any(marker in text for marker in _ERROR_AUTHZ):
             return "auth"
         health = self._stream_health.get(cam_id, {})
         if text and not health.get("codecs"):

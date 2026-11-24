@@ -724,6 +724,26 @@ async def test_classify_error_requires_whole_word_source_fields(tmp_path: Any) -
         await client.aclose()
 
 
+async def test_classify_error_does_not_treat_port_or_latency_as_auth(tmp_path: Any) -> None:
+    """A "406" embedded in a port or latency must not be classified as auth.
+
+    Regression for the PR #97 note: "port 10406" and "latency 406ms" must not
+    be misclassified as an authz/406 failure, while a genuine standalone 406
+    or a real authz marker still must be.
+    """
+    manager, client = _manager(tmp_path, FakeGo2Rtc())
+    try:
+        # False positives: "406" as a substring of a larger number/token.
+        assert manager._classify_error("office_cam", "port 10406") == "no_media"
+        assert manager._classify_error("office_cam", "latency 406ms") == "no_media"
+
+        # True positives: standalone 406 or a real authz marker.
+        assert manager._classify_error("office_cam", "HTTP error with status code 406") == "auth"
+        assert manager._classify_error("office_cam", "ext_authz_denied") == "auth"
+    finally:
+        await client.aclose()
+
+
 async def test_ensure_stream_backs_off_within_cooldown(tmp_path: Any) -> None:
     """TR-4: repeat registration is skipped inside cooldown, force=True retries."""
     api = FakeGo2Rtc()

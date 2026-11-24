@@ -601,8 +601,10 @@ class RingNativeAdapter(VideoRecorderPort):
                     denials += 1
                     if denials >= len(self._profile_state.profiles):
                         raise RingAuthError(
-                            "ring_authz_denied: Ring rejected all client profiles "
-                            f"after {denials} attempts; check the refresh token and retry later."
+                            "ring_authz_denied: Ring rejected all available client profiles "
+                            f"({denials} of {len(self._profile_state.profiles)} profile(s)) "
+                            f"after {attempt + 1} attempt(s); check the refresh token "
+                            "and retry later."
                         ) from exc
                     self._profile_state.rotate()
                     await self._invalidate_ring_client()

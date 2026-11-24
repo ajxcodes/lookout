@@ -486,9 +486,51 @@ async def test_authz_denied_exhaustion_raises_actionable_error(tmp_path: Any) ->
     with pytest.raises(RingAuthError, match="ring_authz_denied") as excinfo:
         await adapter.poll_events("front_door")
 
-    assert "SECRET" not in str(excinfo.value)
+    message = str(excinfo.value)
+    # TR-10: the message must state both the profile and attempt counts so a
+    # single extra (non-authz) attempt cannot be misreported as profile count.
+    assert f"{len(DEFAULT_PROFILES)} of {len(DEFAULT_PROFILES)} profile(s)" in message
+    assert f"after {len(DEFAULT_PROFILES)} attempt(s)" in message
+    assert "SECRET" not in message
     assert "SECRET" not in (adapter._last_error or "")
     assert adapter.consecutive_failures == len(DEFAULT_PROFILES)
+
+
+async def test_authz_exhaustion_message_accurate_with_single_profile(tmp_path: Any) -> None:
+    """The exhaustion message must stay accurate with a single client profile.
+
+    Regression for the PR #97 note: with one profile the old wording said
+    "all client profiles after 1 attempts", hiding the profile count and
+    misstating the attempt count. The message now pins both counts.
+    """
+    from lookout.adapters.ring_api_compat import RingClientProfile, RingProfileState
+
+    class AlwaysDeniedDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError(
+                "HTTP error with status code 406 during query of url "
+                "https://api.ring.com/clients_api/session: ext_authz_denied "
+                "refresh_token=SECRET"
+            )
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysDeniedDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    # Force exactly one available profile; rotation is a no-op with one profile.
+    adapter._profile_state = RingProfileState(
+        (RingClientProfile("single", "android:com.ringapp:6.62.0"),)
+    )
+
+    with pytest.raises(RingAuthError, match="ring_authz_denied") as excinfo:
+        await adapter.poll_events("front_door")
+
+    message = str(excinfo.value)
+    assert "1 of 1 profile(s)" in message
+    assert "after 1 attempt(s)" in message
+    assert "SECRET" not in message
 
 
 async def test_poll_events_reraises_non_authz_error_without_success_state(
