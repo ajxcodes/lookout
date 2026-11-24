@@ -87,7 +87,7 @@ def build_camera_card_data(
     elif isinstance(min_threat, str):
         threat_name = min_threat
 
-    return {
+    card: dict[str, Any] = {
         "id": cam.id,
         "name": cam.name,
         "stream_url": cam.stream_url,
@@ -126,3 +126,8 @@ def build_camera_card_data(
             getattr(cam, "ha_event_types", ["motion", "person", "sound", "ding"])
         ),
     }
+    # Wyze grid tiles use the base id (the backend resolves it to the reliable
+    # ``sd`` stream); the focus view uses this variant to retry ``hd``.
+    if provider_badge == "wyze" and cam.id:
+        card["focus_stream_id"] = f"{cam.id}_hd"
+    return card

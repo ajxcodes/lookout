@@ -179,6 +179,45 @@ def test_build_stream_source_reads_nested_device_params() -> None:
     assert "enr=mnfNV14qMEFPrcnS%2Fabc" in source
 
 
+def test_source_resolution_subtype_override_rewrites_configured_url() -> None:
+    """A requested subtype replaces ``subtype`` without disturbing other params."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), cameras=[_camera()])
+
+    default = adapter.resolve_source("office_cam")
+    assert "subtype=hd" in default
+    assert "enr=mnfNV14qMEFPrcnS%2Fabc" in default
+
+    sd = adapter.resolve_source("office_cam", "sd")
+    assert "subtype=sd" in sd
+    assert "subtype=hd" not in sd
+    assert "uid=UPE2UNBNWDFAKE01AB" in sd
+    assert "enr=mnfNV14qMEFPrcnS%2Fabc" in sd
+    assert "mac=A1B2C3D4E5F6" in sd
+    assert "dtls=true" in sd
+
+    assert adapter.resolve_source("office_cam", subtype="hd") == default
+
+
+def test_build_stream_source_subtype_override() -> None:
+    adapter = WyzeNativeAdapter(config=WyzeConfig(stream_subtype="hd"))
+    assert "subtype=hd" in adapter.build_stream_source(WYZE_DEVICE)
+    sd = adapter.build_stream_source(WYZE_DEVICE, subtype="sd")
+    assert "subtype=sd" in sd
+    assert "subtype=hd" not in sd
+
+
+async def test_capture_snapshot_uses_configured_hd_source(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    manager = FakeStreamManager()
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), stream_manager=manager, cameras=[_camera()])
+
+    await adapter.capture_snapshot("office_cam")
+
+    assert manager.ensured[0][0] == "office_cam"
+    assert manager.ensured[0][1] is not None
+    assert "subtype=hd" in manager.ensured[0][1]
+
+
 async def test_capture_snapshot_writes_real_jpeg(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     manager = FakeStreamManager()

@@ -116,15 +116,20 @@ async def test_live_signaling_primes_wyze_consumer_before_upstream() -> None:
             calls.append(("negotiate", camera_id))
 
     class FakeWyze:
-        def _resolve_source(self, camera_id: str) -> str:
+        def __init__(self) -> None:
+            self.subtypes: list[str | None] = []
+
+        def _resolve_source(self, camera_id: str, subtype: str | None = None) -> str:
+            self.subtypes.append(subtype)
             return "wyze://192.168.1.50?uid=u&enr=e&mac=m&model=x"
 
     class FakeRing:
         def _resolve_source(self, camera_id: str, snapshot: bool = False) -> str:
             return "ring:?camera_id=1&device_id=abc"
 
+    fake_wyze = FakeWyze()
     app.state.native_stream_manager = FakeManager()
-    app.state.wyze_native = FakeWyze()
+    app.state.wyze_native = fake_wyze
     app.state.ring_native = FakeRing()
 
     class FakeWS:
@@ -138,6 +143,7 @@ async def test_live_signaling_primes_wyze_consumer_before_upstream() -> None:
     with patch("lookout.adapters.web.app._get_go2rtc_ws_url", side_effect=fake_upstream):
         url = await _prepare_live_upstream(app, FakeWS(), "mochi", "src=mochi")
     assert url == "ws://upstream/api/ws"
+    assert fake_wyze.subtypes == ["sd"]
     assert calls.index(("negotiate", "mochi")) < calls.index(("upstream",))
 
     calls.clear()

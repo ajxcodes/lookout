@@ -705,6 +705,25 @@ async def test_stream_health_reports_discovery_timeout_actionably(tmp_path: Any)
         await client.aclose()
 
 
+async def test_classify_error_requires_whole_word_source_fields(tmp_path: Any) -> None:
+    """Short source-field tokens must not match substrings of unrelated words."""
+    manager, client = _manager(tmp_path, FakeGo2Rtc())
+    try:
+        # True positives: the source field appears as a whole word.
+        assert (
+            manager._classify_error("office_cam", "source verification: missing ip")
+            == "source_error"
+        )
+        assert manager._classify_error("office_cam", "missing uid") == "source_error"
+
+        # False positives under a bare substring check: "ip" in "description",
+        # "mac" in "machine". Neither is a real source field.
+        assert manager._classify_error("office_cam", "missing value in description") == "no_media"
+        assert manager._classify_error("office_cam", "missing value on machine") == "no_media"
+    finally:
+        await client.aclose()
+
+
 async def test_ensure_stream_backs_off_within_cooldown(tmp_path: Any) -> None:
     """TR-4: repeat registration is skipped inside cooldown, force=True retries."""
     api = FakeGo2Rtc()

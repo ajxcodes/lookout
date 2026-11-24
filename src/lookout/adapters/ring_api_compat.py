@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,10 @@ DEFAULT_PROFILES: tuple[RingClientProfile, ...] = (
 
 _PROFILE_FILE = "ring_client_profile.json"
 
+# Only a standalone "406" indicates the ext_authz rejection. A bare substring
+# check would misfire on ports (10406), latencies (406ms) and event ids.
+_HTTP_406_RE = re.compile(r"\b406\b")
+
 
 def is_authz_denied(exc: Any) -> bool:
     """True when an exception represents Ring's ext_authz/406 session rejection."""
@@ -49,7 +54,11 @@ def is_authz_denied(exc: Any) -> bool:
     status_code = getattr(response, "status_code", None) or getattr(exc, "status_code", None)
     text = str(exc).lower()
     markers = ("ext_authz_denied", "clients_api/session", "not acceptable", "ring_authz_denied")
-    return status_code == 406 or "406" in text or any(marker in text for marker in markers)
+    return (
+        status_code == 406
+        or _HTTP_406_RE.search(text) is not None
+        or any(marker in text for marker in markers)
+    )
 
 
 def apply(profile: RingClientProfile) -> None:

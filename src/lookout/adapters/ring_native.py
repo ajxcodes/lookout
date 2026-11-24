@@ -458,13 +458,34 @@ class RingNativeAdapter(VideoRecorderPort):
         return temp_name
 
     async def capture_snapshot(self, camera_id: str) -> str:
-        """Capture a real JPEG frame for a native Ring camera."""
+        """Capture a real JPEG frame from the camera's live H.264 bridge stream.
+
+        The old ``ring:...&snapshot`` producer re-ran Ring's 406-prone
+        ``clients_api/session`` bootstrap inside go2rtc. Snapshots now come from
+        the working ``exec:`` bridge stream registered under the base camera id.
+        """
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id, snapshot=True)
         manager = self._require_stream_manager()
-        snap_stream_id = f"{camera_id}_snapshot"
-        await manager.ensure_stream(snap_stream_id, source)
-        content = await manager.frame(snap_stream_id)
+        # Best-effort cleanup of a stale snapshot stream left by an older build,
+        # so it stops reconnecting and logging 406 from go2rtc.
+        stale_stream_id = f"{camera_id}_snapshot"
+        streams = getattr(manager, "streams", None)
+        if isinstance(streams, dict) and stale_stream_id in streams:
+            remove_stream = getattr(manager, "remove_stream", None)
+            if callable(remove_stream):
+                try:
+                    await remove_stream(stale_stream_id)
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    logger.debug(
+                        "Could not remove stale Ring snapshot stream '%s': %s",
+                        stale_stream_id,
+                        exc,
+                    )
+            else:
+                streams.pop(stale_stream_id, None)
+        source = self._resolve_source(camera_id, snapshot=False)
+        await manager.ensure_stream(camera_id, source)
+        content = await manager.frame(camera_id)
         if not content.startswith(_JPEG_MAGIC):
             raise MediaCaptureError(
                 f"Snapshot for '{camera_id}' is not a JPEG ({len(content)} bytes)"

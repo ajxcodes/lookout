@@ -36,6 +36,11 @@ _ERROR_DISCOVERY_TIMEOUT = "discovery timeout"
 _ERROR_CONNECT_FAILED = "connect failed"
 _ERROR_AUTHZ = ("406", "ext_authz_denied", "not acceptable", "auth")
 _ERROR_SOURCE = ("enr", "uid", "p2p_id", "mac", "ip", "identity", "field")
+# Match source-field tokens only as whole words: short tokens such as "ip" and
+# "mac" otherwise fire on substrings of unrelated words ("description", "machine").
+_ERROR_SOURCE_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(field) for field in _ERROR_SOURCE) + r")\b"
+)
 _ERROR_LOG_KEY = "stream="
 _DEFAULT_RECONNECT_BACKOFF = 30.0
 _MAX_RECONNECT_BACKOFF = 300.0
@@ -813,7 +818,7 @@ class NativeStreamManager(VideoRecorderPort):
         if log_error:
             text = f"{text} {log_error}".lower()
         # Missing identity fields reported by source verification.
-        if "missing" in text and any(field in text for field in _ERROR_SOURCE):
+        if "missing" in text and _ERROR_SOURCE_RE.search(text):
             return "source_error"
         if _ERROR_DISCOVERY_TIMEOUT in text or _ERROR_CONNECT_FAILED in text:
             return "unreachable"

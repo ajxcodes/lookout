@@ -222,6 +222,35 @@ fi
 # ------------------------------------------------------------------------------
 # 4. End-to-End Container Health, Native Stack & Functional Lifecycle
 # ------------------------------------------------------------------------------
+
+# Select a collision-safe host port. The container always listens on 8000;
+# only the host-side mapping is configurable so a busy host port 8000
+# (e.g. an unrelated long-running container) cannot break the smoke test.
+if [[ -n "${SMOKE_HOST_PORT:-}" ]]; then
+    : # Explicit caller override.
+elif [[ -n "${SMOKE_PORT:-}" ]]; then
+    SMOKE_HOST_PORT="${SMOKE_PORT}"
+else
+    SMOKE_HOST_PORT=""
+    if command -v python3 >/dev/null 2>&1; then
+        SMOKE_HOST_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || true)
+    fi
+    # Fallback: scan a predictable range if Python is unavailable or fails.
+    if [[ ! "${SMOKE_HOST_PORT}" =~ ^[0-9]+$ ]]; then
+        for candidate in $(seq 18000 18100); do
+            if ! (echo >"/dev/tcp/127.0.0.1/${candidate}") >/dev/null 2>&1; then
+                SMOKE_HOST_PORT="${candidate}"
+                break
+            fi
+        done
+    fi
+    if [[ ! "${SMOKE_HOST_PORT}" =~ ^[0-9]+$ ]]; then
+        log_error "Unable to detect a free host port for the smoke container."
+        exit 1
+    fi
+fi
+log_info "Smoke host port: ${SMOKE_HOST_PORT} -> container 8000"
+
 log_info "Step 4: Testing container runtime, native libraries, and functional API lifecycle..."
 NETWORK_NAME="lookout-smoke-net-$RANDOM"
 CONTAINER_NAME="lookout-smoke-test-$RANDOM"
@@ -235,7 +264,7 @@ cleanup() {
 trap cleanup EXIT
 
 ${CONTAINER_BIN} network create "${NETWORK_NAME}"
-${CONTAINER_BIN} run -d --name "${CONTAINER_NAME}" --network "${NETWORK_NAME}" -p 8000:8000 \
+${CONTAINER_BIN} run -d --name "${CONTAINER_NAME}" --network "${NETWORK_NAME}" -p "${SMOKE_HOST_PORT}:8000" \
     -e LOOKOUT_CONFIG=/data/config.yaml lookout:smoke-test
 
 log_info "Waiting for service startup..."
@@ -278,7 +307,7 @@ fi
 log_info "Step 4b: Validating HTTP endpoints, web viewer UI, and Event Lifecycle..."
 if command -v curl >/dev/null 2>&1; then
     # Health endpoint
-    HEALTH_RESP=$(curl -s -f http://localhost:8000/health || true)
+    HEALTH_RESP=$(curl -s -f http://localhost:${SMOKE_HOST_PORT}/health || true)
     if [[ "${HEALTH_RESP}" == *"\"status\":\"ok\""* || "${HEALTH_RESP}" == *"\"status\": \"ok\""* ]]; then
         log_success "Health endpoint verified: ${HEALTH_RESP}"
     else
@@ -287,7 +316,7 @@ if command -v curl >/dev/null 2>&1; then
     fi
 
     # Web viewer / setup root endpoint
-    ROOT_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ || true)
+    ROOT_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${SMOKE_HOST_PORT}/ || true)
     if [[ "${ROOT_HTTP_CODE}" == "200" || "${ROOT_HTTP_CODE}" == "307" ]]; then
         log_success "Web viewer UI / setup wizard route verified (HTTP ${ROOT_HTTP_CODE})."
     else
@@ -298,7 +327,7 @@ if command -v curl >/dev/null 2>&1; then
     # Ingest event trigger
     TRIGGER_RESP=$(curl -s -f -X POST -H "Content-Type: application/json" \
         -d '{"camera_id": "smoke_camera", "summary": "Functional smoke test courier motion", "confidence": 0.95}' \
-        http://localhost:8000/api/v1/events/trigger || true)
+        http://localhost:${SMOKE_HOST_PORT}/api/v1/events/trigger || true)
     if [[ "${TRIGGER_RESP}" == *"\"status\":\"ok\""* || "${TRIGGER_RESP}" == *"\"status\": \"ok\""* ]]; then
         log_success "Event trigger endpoint verified: ${TRIGGER_RESP}"
     else
@@ -313,7 +342,7 @@ if command -v curl >/dev/null 2>&1; then
     fi
 
     # Verify event query and persistence in database
-    EVENTS_LIST=$(curl -s -f http://localhost:8000/api/events || true)
+    EVENTS_LIST=$(curl -s -f http://localhost:${SMOKE_HOST_PORT}/api/events || true)
     if [[ "${EVENTS_LIST}" == *"smoke_camera"* ]]; then
         log_success "Event persistence verified: queried event list contains 'smoke_camera'."
     else
@@ -323,7 +352,7 @@ if command -v curl >/dev/null 2>&1; then
 
     # Verify single event retrieval by ID if resolved
     if [[ -n "${EVENT_ID}" ]]; then
-        SINGLE_EVENT=$(curl -s -f "http://localhost:8000/api/events/${EVENT_ID}" || true)
+        SINGLE_EVENT=$(curl -s -f "http://localhost:${SMOKE_HOST_PORT}/api/events/${EVENT_ID}" || true)
         if [[ "${SINGLE_EVENT}" == *"smoke_camera"* ]]; then
             log_success "Single event retrieval by ID verified (/api/events/${EVENT_ID})."
         else
@@ -332,7 +361,7 @@ if command -v curl >/dev/null 2>&1; then
         fi
 
         # Verify event deletion
-        DELETE_RESP=$(curl -s -f -X DELETE "http://localhost:8000/api/events/${EVENT_ID}" || true)
+        DELETE_RESP=$(curl -s -f -X DELETE "http://localhost:${SMOKE_HOST_PORT}/api/events/${EVENT_ID}" || true)
         if [[ "${DELETE_RESP}" == *"\"deleted\":true"* || "${DELETE_RESP}" == *"\"deleted\": true"* ]]; then
             log_success "Event deletion verified (/api/events/${EVENT_ID}): ${DELETE_RESP}"
         else

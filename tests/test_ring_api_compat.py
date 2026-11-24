@@ -86,6 +86,19 @@ def test_is_authz_denied_detects_session_rejection() -> None:
     assert not is_authz_denied(RuntimeError("network timeout"))
 
 
+def test_is_authz_denied_ignores_406_substrings() -> None:
+    """Only a standalone 406 (or an explicit status/marker) is an authz denial."""
+    assert not is_authz_denied(RuntimeError("connect failed to port 10406"))
+    assert not is_authz_denied(RuntimeError("request latency 406ms"))
+    assert not is_authz_denied(RuntimeError("event id 2140617 processed"))
+
+    # Genuine whole-word 406, explicit status code and explicit markers still classify.
+    assert is_authz_denied(RuntimeError("HTTP 406 Not Acceptable"))
+    assert is_authz_denied(SimpleNamespace(response=SimpleNamespace(status_code=406)))
+    assert is_authz_denied(RuntimeError("ext_authz_denied"))
+    assert is_authz_denied(RuntimeError("clients_api/session rejected"))
+
+
 def test_default_profiles_remain_device_compatible() -> None:
     assert all(not p.user_agent.startswith("lookout/") for p in DEFAULT_PROFILES)
     assert all(

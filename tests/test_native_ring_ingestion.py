@@ -46,11 +46,21 @@ class FakeStreamManager:
         self.frame_error = frame_error
         self.clip_error = clip_error
         self.ensured: list[tuple[str, str | None]] = []
+        self.frame_calls: list[str] = []
+        self.removed: list[str] = []
+        self.streams: dict[str, str] = {}
 
     async def ensure_stream(self, camera_id: str, source: str | None = None) -> None:
         self.ensured.append((camera_id, source))
+        if source is not None:
+            self.streams[camera_id] = source
+
+    async def remove_stream(self, camera_id: str) -> None:
+        self.removed.append(camera_id)
+        self.streams.pop(camera_id, None)
 
     async def frame(self, camera_id: str) -> bytes:
+        self.frame_calls.append(camera_id)
         if self.frame_error is not None:
             raise self.frame_error
         return self.frame_bytes
@@ -141,11 +151,14 @@ def test_build_stream_source_requires_device_fields() -> None:
         adapter.build_stream_source({"device_api_id": 1})
 
 
-async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
+async def test_capture_snapshot_uses_live_bridge_stream_and_writes_jpeg(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
+    """Snapshots must come from the H.264 bridge, never a second ring: session."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     manager = FakeStreamManager()
+    # A stale stream from an older build must be removed so it stops retrying 406.
+    manager.streams["front_door_snapshot"] = "ring:?camera_id=410964110&snapshot"
     adapter = RingNativeAdapter(
         config=RingConfig(refresh_token=RAW_TOKEN),
         stream_manager=manager,
@@ -156,8 +169,15 @@ async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
 
     assert path.endswith(".jpg")
     assert Path(path).read_bytes() == JPEG
-    assert manager.ensured[0][0] == "front_door_snapshot"
-    assert manager.ensured[0][1].endswith("&snapshot")
+    assert manager.removed == ["front_door_snapshot"]
+    assert "front_door_snapshot" not in manager.streams
+    assert manager.ensured[0][0] == "front_door"
+    source = manager.ensured[0][1] or ""
+    assert source.startswith("exec:node ")
+    assert "ring_bridge/index.mjs" in source
+    assert "--camera-id 410964110" in source
+    assert "&snapshot" not in source
+    assert manager.frame_calls == ["front_door"]
 
 
 async def test_capture_snapshot_failure_writes_nothing(tmp_path: Any, monkeypatch: Any) -> None:
@@ -469,6 +489,44 @@ async def test_authz_denied_exhaustion_raises_actionable_error(tmp_path: Any) ->
     assert "SECRET" not in str(excinfo.value)
     assert "SECRET" not in (adapter._last_error or "")
     assert adapter.consecutive_failures == len(DEFAULT_PROFILES)
+
+
+async def test_poll_events_reraises_non_authz_error_without_success_state(
+    tmp_path: Any,
+) -> None:
+    """A persistent non-authz error must surface, not fall through to success.
+
+    Regression for the missing ``raise`` after the retry branch: when every
+    attempt fails with a non-authz exception, ``poll_events`` must propagate it
+    and leave the success counters / last payloads untouched.
+    """
+
+    class AlwaysFailingDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError("upstream database connection lost")
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysFailingDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    # Seed a prior successful poll to prove the failing poll does not overwrite it.
+    prior_success = datetime.now(UTC) - timedelta(days=1)
+    adapter._last_success = prior_success
+    adapter._last_event_count = 999
+    adapter._last_error = None
+    adapter.consecutive_failures = 0
+
+    with pytest.raises(RuntimeError, match="upstream database connection lost"):
+        await adapter.poll_events("front_door")
+
+    # Two attempts: the first retries, the second re-raises. No success state
+    # or stale payloads are produced on either path.
+    assert adapter.consecutive_failures == 2
+    assert adapter.last_success_at == prior_success
+    assert adapter._last_event_count == 999
+    assert "upstream database connection lost" in (adapter._last_error or "")
 
 
 async def test_ring_ding_doorbell_event_capture() -> None:

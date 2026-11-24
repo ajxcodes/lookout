@@ -130,7 +130,16 @@ def _native_provider(app: FastAPI, camera_id: str) -> str | None:
 def _base_camera_id(camera_id: str | None) -> str | None:
     if not camera_id:
         return camera_id
-    return camera_id[:-5] if camera_id.endswith("_h264") else camera_id
+    if camera_id.endswith("_h264"):
+        return camera_id[:-5]
+    if camera_id.endswith("_hd"):
+        return camera_id[:-3]
+    return camera_id
+
+
+def _stream_subtype(camera_id: str | None) -> str | None:
+    """Return the requested Wyze stream variant, if the id carries one."""
+    return "hd" if camera_id and camera_id.endswith("_hd") else None
 
 
 _STREAM_HEALTH_RECOMMENDATION = (
@@ -173,15 +182,23 @@ async def _ensure_native_stream(app: FastAPI, camera_id: str | None) -> bool:
     adapter = getattr(app.state, f"{provider}_native", None)
     if adapter is None:
         return False
-    source = adapter._resolve_source(base_id)
-    await manager.ensure_stream(base_id, source)
+    # Wyze variants (e.g. ``cam_hd``) are registered under the requested name so
+    # the grid's reliable ``sd`` stream and the focus view's ``hd`` attempt can
+    # coexist in go2rtc. Ring keeps its existing base-id registration/transcode.
+    stream_id = (camera_id or base_id) if provider == "wyze" else base_id
+    if provider == "wyze":
+        subtype = _stream_subtype(camera_id) or "sd"
+        source = adapter._resolve_source(base_id, subtype=subtype)
+    else:
+        source = adapter._resolve_source(base_id)
+    await manager.ensure_stream(stream_id, source)
     # Wyze TUTK streams carry SPS with no dimensions until a consumer attaches;
     # prime a frame so WebRTC/MP4 clients see moving video instead of black.
     if provider == "wyze" and hasattr(manager, "negotiate_consumer"):
         try:
-            await manager.negotiate_consumer(base_id)
+            await manager.negotiate_consumer(stream_id)
         except MediaCaptureError as exc:
-            manager.record_stream_error(base_id, exc)
+            manager.record_stream_error(stream_id, exc)
     if provider == "ring" and hasattr(manager, "ensure_h264_transcode"):
         await manager.ensure_h264_transcode(base_id)
     return True
@@ -972,6 +989,17 @@ def create_app(
                 except Exception:
                     continue
 
+        # Purged/missing event snapshots are expected after retention eviction.
+        # Serve the bundled placeholder for image requests instead of a hard 404.
+        if clean_path.suffix.lower() in (".jpg", ".jpeg"):
+            placeholder = static_dir / "placeholder.jpg"
+            if placeholder.is_file():
+                return FileResponse(
+                    placeholder,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache"},
+                )
+
         return JSONResponse(
             status_code=404,
             content={
@@ -1058,6 +1086,15 @@ def create_app(
         if manager is not None and hasattr(manager, "stream_health"):
             with suppress(Exception):
                 stream_health = manager.stream_health(_base_camera_id(camera_id) or camera_id)
+        # NativeStreamManager.stream_health already carries a recommendation
+        # (None when healthy). Fall back to the static text only for managers
+        # that omit the key, and only when the stream is actually unhealthy.
+        if "recommendation" in stream_health:
+            recommendation = stream_health.get("recommendation")
+        elif stream_health.get("status") not in (None, "ok"):
+            recommendation = _STREAM_HEALTH_RECOMMENDATION
+        else:
+            recommendation = None
         return {
             "stream_registered": registered,
             "source_scheme": _source_scheme(source),
@@ -1067,7 +1104,7 @@ def create_app(
             "go2rtc_target": _resolve_go2rtc_target(app, camera_id),
             "stream_health": stream_health,
             "error": stream_health.get("error"),
-            "recommendation": _STREAM_HEALTH_RECOMMENDATION,
+            "recommendation": recommendation,
         }
 
     @app.post("/api/webrtc")

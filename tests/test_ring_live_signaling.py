@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -37,6 +38,18 @@ class FakeManager:
     async def stream_codecs(self, camera_id: str) -> list[str]:
         return self.codecs
 
+    async def negotiate_consumer(self, camera_id: str) -> None:
+        self.events.append(f"prime:{camera_id}")
+
+
+class FakeWyzeAdapter:
+    def __init__(self) -> None:
+        self.resolved: list[tuple[str, str | None]] = []
+
+    def _resolve_source(self, camera_id: str, subtype: str | None = None) -> str:
+        self.resolved.append((camera_id, subtype))
+        return f"wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x&subtype={subtype}"
+
 
 class FakeRing:
     def __init__(self, error: Exception | None = None) -> None:
@@ -66,6 +79,54 @@ def _build(error: Exception | None = None) -> tuple[Any, FakeManager]:
     app.state.native_stream_manager = manager
     app.state.ring_native = FakeRing(error)
     return app, manager
+
+
+def _build_wyze() -> tuple[Any, FakeManager, FakeWyzeAdapter]:
+    config = LookoutConfig(
+        cameras=[
+            CameraConfig(
+                id="mochi_pan_cam",
+                name="Mochi Pan Cam",
+                stream_url="wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x&subtype=hd&dtls=true",
+                native_provider="wyze",
+                native_device_id="m",
+            )
+        ]
+    )
+    app = app_module.create_app(config=config, repository=InMemoryEventRepository())
+    manager = FakeManager()
+    adapter = FakeWyzeAdapter()
+    app.state.native_stream_manager = manager
+    app.state.wyze_native = adapter
+    return app, manager, adapter
+
+
+def test_wyze_grid_id_registers_sd_source_and_primes_consumer() -> None:
+    app, manager, adapter = _build_wyze()
+    assert app_module._base_camera_id("mochi_pan_cam_hd") == "mochi_pan_cam"
+    assert app_module._stream_subtype("mochi_pan_cam") is None
+    assert app_module._stream_subtype("mochi_pan_cam_hd") == "hd"
+
+    assert asyncio.run(app_module._ensure_native_stream(app, "mochi_pan_cam")) is True
+
+    assert adapter.resolved == [("mochi_pan_cam", "sd")]
+    assert manager.calls == [
+        ("mochi_pan_cam", "wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x&subtype=sd")
+    ]
+    assert manager.events == ["ensure", "prime:mochi_pan_cam"]
+
+
+def test_wyze_focus_hd_variant_registers_hd_under_variant_name() -> None:
+    app, manager, adapter = _build_wyze()
+
+    assert asyncio.run(app_module._ensure_native_stream(app, "mochi_pan_cam_hd")) is True
+
+    assert adapter.resolved == [("mochi_pan_cam", "hd")]
+    assert manager.calls == [
+        ("mochi_pan_cam_hd", "wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x&subtype=hd")
+    ]
+    assert manager.events == ["ensure", "prime:mochi_pan_cam_hd"]
+    assert app_module._resolve_go2rtc_target(app, "mochi_pan_cam_hd") == EMBEDDED
 
 
 def test_native_camera_ws_targets_embedded_go2rtc() -> None:
@@ -146,6 +207,42 @@ def test_live_diagnostics_redacts_userinfo_and_query_secrets() -> None:
     for secret in ("user", "pass", "abc"):
         assert secret not in resp.text
     assert "192.168.1.50" in body["source"]
+
+
+def test_live_diagnostics_recommendation_only_for_unhealthy_streams() -> None:
+    """Healthy streams must not receive the troubleshooting recommendation."""
+    app, manager = _build()
+    manager.streams["ring_cam"] = RING_SOURCE
+
+    manager.stream_health = lambda camera_id: {  # type: ignore[attr-defined]
+        "status": "ok",
+        "classification": "unknown",
+        "error": None,
+        "consecutive_failures": 0,
+        "retry_after_seconds": 0.0,
+        "recommendation": None,
+    }
+    with TestClient(app) as client:
+        healthy = client.get("/api/cameras/ring_cam/live/diagnostics").json()
+    assert healthy["stream_health"]["status"] == "ok"
+    assert healthy["recommendation"] is None
+
+    manager.stream_health = lambda camera_id: {  # type: ignore[attr-defined]
+        "status": "unavailable",
+        "classification": "unreachable",
+        "error": "connect failed: discovery timeout",
+        "consecutive_failures": 3,
+        "retry_after_seconds": 30.0,
+        "recommendation": (
+            "Verify native discovery for this camera, check device power/network "
+            "reachability, set a per-camera stream_url override, or try "
+            "wyze.stream_dtls=false."
+        ),
+    }
+    with TestClient(app) as client:
+        unhealthy = client.get("/api/cameras/ring_cam/live/diagnostics").json()
+    assert unhealthy["stream_health"]["status"] == "unavailable"
+    assert "native discovery" in (unhealthy["recommendation"] or "")
 
 
 def test_redact_source_redacts_wyze_params() -> None:
