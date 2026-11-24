@@ -14,6 +14,9 @@ from lookout.ports.egress import VideoRecorderPort
 
 logger = logging.getLogger(__name__)
 
+_MP4_FTYP = b"ftyp"
+_MP4_MDAT = b"mdat"
+
 
 class Go2RtcAdapter(VideoRecorderPort):
     """go2rtc REST/RTSP stream adapter implementing VideoRecorderPort."""
@@ -57,6 +60,14 @@ class Go2RtcAdapter(VideoRecorderPort):
                 with open(temp_file, "wb") as f:
                     async for chunk in response.aiter_bytes():
                         f.write(chunk)
+                content = Path(temp_file).read_bytes()
+                if _MP4_FTYP not in content[:64] or _MP4_MDAT not in content:
+                    logger.warning(
+                        "go2rtc returned a header-only MP4 for camera '%s'; "
+                        "falling back to snapshot",
+                        camera_id,
+                    )
+                    return await self.capture_snapshot(camera_id)
                 return str(temp_file)
         except (httpx.HTTPError, OSError) as err:
             logger.warning(

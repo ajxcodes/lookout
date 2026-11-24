@@ -16,7 +16,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
+from lookout.adapters.native_stream_manager import (
+    MediaCaptureError,
+    NativeStreamManager,
+    redact_error,
+)
+from lookout.adapters.ring_api_compat import (
+    RingProfileState,
+    is_authz_denied,
+    skip_legacy_session,
+)
+from lookout.adapters.ring_api_compat import apply as apply_profile
 from lookout.config.schema import RingConfig
 from lookout.domain.models import CameraEvent, DetectionMetrics, EventCategory, ThreatLevel
 from lookout.ports.egress import VideoRecorderPort
@@ -152,6 +162,13 @@ class RingNativeAdapter(VideoRecorderPort):
         self._last_event_count: int = 0
         self._ring_client_created_at: Any | None = None
         self._last_ring_raw_empty: bool = False
+        self.consecutive_failures: int = 0
+        runtime_dir = (
+            kwargs.get("runtime_dir")
+            or os.environ.get("LOOKOUT_GO2RTC_DIR")
+            or Path(tempfile.gettempdir()) / "lookout-go2rtc"
+        )
+        self._profile_state = RingProfileState.from_config(config, runtime_dir)
 
     # ------------------------------------------------------------------
     # Auth / client
@@ -197,22 +214,34 @@ class RingNativeAdapter(VideoRecorderPort):
                     "to use native Ring ingestion"
                 ) from exc
 
-            from lookout import __version__
-
+            profile = self._profile_state.current()
+            apply_profile(profile)
             inner = decode_ring_token(self._token())
+            # Ring's ext_authz gateway rejects the product's own lookout/<version>
+            # signature; always present a device-compatible user agent.
             auth = Auth(
-                f"lookout/{__version__}",
+                profile.user_agent,
                 token={"refresh_token": inner["rt"]},
                 hardware_id=inner.get("hid"),
             )
             await auth.async_refresh_tokens()
             ring = Ring(auth)
+            # Ring's ext_authz gateway rejects the legacy clients_api/session
+            # bootstrap with 406. The data endpoints work with the bearer token
+            # alone, so mark the client session-ready without that POST.
+            skip_legacy_session(ring)
             await ring.async_update_devices()
             self._auth = auth
             self._ring_client = ring
             self._ring_client_created_at = datetime.now(UTC)
             self._persist_refreshed_token(auth)
+            self._profile_state.mark_success()
             return ring
+
+    @property
+    def last_success_at(self) -> Any | None:
+        """Timestamp of the last successful event poll (no credential material)."""
+        return self._last_success
 
     async def refresh_client(self) -> Any:
         return await self._ring(force=True)
@@ -429,13 +458,34 @@ class RingNativeAdapter(VideoRecorderPort):
         return temp_name
 
     async def capture_snapshot(self, camera_id: str) -> str:
-        """Capture a real JPEG frame for a native Ring camera."""
+        """Capture a real JPEG frame from the camera's live H.264 bridge stream.
+
+        The old ``ring:...&snapshot`` producer re-ran Ring's 406-prone
+        ``clients_api/session`` bootstrap inside go2rtc. Snapshots now come from
+        the working ``exec:`` bridge stream registered under the base camera id.
+        """
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id, snapshot=True)
         manager = self._require_stream_manager()
-        snap_stream_id = f"{camera_id}_snapshot"
-        await manager.ensure_stream(snap_stream_id, source)
-        content = await manager.frame(snap_stream_id)
+        # Best-effort cleanup of a stale snapshot stream left by an older build,
+        # so it stops reconnecting and logging 406 from go2rtc.
+        stale_stream_id = f"{camera_id}_snapshot"
+        streams = getattr(manager, "streams", None)
+        if isinstance(streams, dict) and stale_stream_id in streams:
+            remove_stream = getattr(manager, "remove_stream", None)
+            if callable(remove_stream):
+                try:
+                    await remove_stream(stale_stream_id)
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    logger.debug(
+                        "Could not remove stale Ring snapshot stream '%s': %s",
+                        stale_stream_id,
+                        exc,
+                    )
+            else:
+                streams.pop(stale_stream_id, None)
+        source = self._resolve_source(camera_id, snapshot=False)
+        await manager.ensure_stream(camera_id, source)
+        content = await manager.frame(camera_id)
         if not content.startswith(_JPEG_MAGIC):
             raise MediaCaptureError(
                 f"Snapshot for '{camera_id}' is not a JPEG ({len(content)} bytes)"
@@ -539,11 +589,26 @@ class RingNativeAdapter(VideoRecorderPort):
             self._last_ring_raw_empty = raw_empty
             return payloads
 
-        for attempt in range(2):
+        max_attempts = max(2, len(self._profile_state.profiles) + 1)
+        denials = 0
+        for attempt in range(max_attempts):
             try:
                 payloads = await _attempt()
             except Exception as exc:  # noqa: BLE001 - caller handles
-                self._last_error = f"{type(exc).__name__}: {exc}"
+                self.consecutive_failures += 1
+                self._last_error = redact_error(f"{type(exc).__name__}: {exc}")
+                if is_authz_denied(exc):
+                    denials += 1
+                    if denials >= len(self._profile_state.profiles):
+                        raise RingAuthError(
+                            "ring_authz_denied: Ring rejected all available client profiles "
+                            f"({denials} of {len(self._profile_state.profiles)} profile(s)) "
+                            f"after {attempt + 1} attempt(s); check the refresh token "
+                            "and retry later."
+                        ) from exc
+                    self._profile_state.rotate()
+                    await self._invalidate_ring_client()
+                    continue
                 if attempt == 0:
                     await self._invalidate_ring_client()
                     continue
@@ -563,6 +628,7 @@ class RingNativeAdapter(VideoRecorderPort):
             self._last_success = datetime.now(UTC)
             self._last_event_count = len(payloads)
             self._last_error = None
+            self.consecutive_failures = 0
             return payloads
 
         # Should not reach here, but keep a safe fallback.

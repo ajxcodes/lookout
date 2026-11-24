@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from lookout.adapters.native_stream_manager import redact_error
+
 logger = logging.getLogger(__name__)
 
 _FIRST_TICK_LOOKBACK = timedelta(seconds=60)
@@ -53,6 +55,8 @@ class NativeEventPoller:
         record_clip: bool = True,
         clip_duration: float = 10.0,
         storage_base_path: str | Path | None = None,
+        failure_backoff_seconds: float = 0.0,
+        max_backoff_seconds: float = 900.0,
     ) -> None:
         self.config = config
         self.wyze = wyze
@@ -61,6 +65,8 @@ class NativeEventPoller:
         self.on_event = on_event
         self.on_clip_ready = on_clip_ready
         self.interval = float(interval)
+        self.failure_backoff_seconds = max(0.0, float(failure_backoff_seconds))
+        self.max_backoff_seconds = max(0.0, float(max_backoff_seconds))
         self.stream_manager = stream_manager
         self.record_clip = bool(record_clip)
         self.clip_duration = float(clip_duration)
@@ -131,9 +137,16 @@ class NativeEventPoller:
                 "last_event_count": 0,
                 "last_error": None,
                 "consecutive_failures": 0,
+                "next_retry_at": None,
+                "retry_after_seconds": 0.0,
             }
             self._health[camera_id] = health
         return health
+
+    @staticmethod
+    def _redact_error(text: Any) -> str:
+        """Redact credential-like values from an adapter error."""
+        return redact_error(text)
 
     def _serialize_health(self) -> dict[str, Any]:
         return {key: dict(value) for key, value in self._health.items()}
@@ -251,6 +264,7 @@ class NativeEventPoller:
 
     async def _tick(self) -> None:
         had_failure = False
+        now = datetime.now(UTC)
         for camera in self._native_cameras():
             camera_id = str(camera.id)
             provider = str(getattr(camera, "native_provider", "") or "").lower()
@@ -260,7 +274,11 @@ class NativeEventPoller:
             if adapter is None:
                 continue
             health = self._ensure_health(camera_id)
-            health["last_poll_at"] = datetime.now(UTC)
+            next_retry_at = health.get("next_retry_at")
+            if next_retry_at is not None and now < next_retry_at:
+                # Inside the per-camera cooldown: skip without another log line.
+                continue
+            health["last_poll_at"] = now
             since = self._last_poll.get(camera_id)
             if since is not None:
                 since = since - timedelta(seconds=2)
@@ -269,14 +287,33 @@ class NativeEventPoller:
             except Exception as exc:  # noqa: BLE001 - per-camera isolation
                 had_failure = True
                 self.consecutive_failures += 1
-                logger.warning(
-                    "Native event poll failed for camera '%s' (%s): %s",
-                    camera_id,
-                    provider,
-                    exc,
-                )
-                health["last_error"] = str(exc)
-                health["consecutive_failures"] = int(health.get("consecutive_failures") or 0) + 1
+                failures = int(health.get("consecutive_failures") or 0) + 1
+                health["consecutive_failures"] = failures
+                redacted = self._redact_error(str(exc))
+                health["last_error"] = redacted
+                if self.failure_backoff_seconds > 0:
+                    delay = min(
+                        self.max_backoff_seconds,
+                        self.failure_backoff_seconds * (2 ** (failures - 1)),
+                    )
+                    health["next_retry_at"] = datetime.now(UTC) + timedelta(seconds=delay)
+                    health["retry_after_seconds"] = float(delay)
+                    if not health.get("_backoff_logged"):
+                        logger.warning(
+                            "Native event poll failed for camera '%s' (%s): %s; backing off %.1fs",
+                            camera_id,
+                            provider,
+                            redacted,
+                            delay,
+                        )
+                        health["_backoff_logged"] = True
+                else:
+                    logger.warning(
+                        "Native event poll failed for camera '%s' (%s): %s",
+                        camera_id,
+                        provider,
+                        redacted,
+                    )
                 continue
             returned = events if isinstance(events, list) else list(events or [])
             count = len(returned)
@@ -290,6 +327,9 @@ class NativeEventPoller:
             health["last_event_count"] = count
             health["last_error"] = None
             health["consecutive_failures"] = 0
+            health["next_retry_at"] = None
+            health["retry_after_seconds"] = 0.0
+            health["_backoff_logged"] = False
             self._last_poll[camera_id] = datetime.now(UTC)
             for event in returned:
                 if not isinstance(event, dict):

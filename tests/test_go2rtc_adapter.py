@@ -24,8 +24,10 @@ async def test_go2rtc_record_clip_success(tmp_path: pytest.TempPathFactory) -> N
     manager = TempMediaManager(preferred_temp_dir=str(tmp_path))
     adapter = Go2RtcAdapter(config=config, temp_manager=manager)
 
+    valid_mp4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2\x00\x00\x00\x08mdat"
     respx.get("http://localhost:1984/api/stream.mp4").respond(
-        status_code=200, content=b"mock-mp4-video-stream-bytes"
+        status_code=200,
+        content=valid_mp4 + b"\x00" * 64,
     )
 
     clip_path = await adapter.record_clip("cam_front", 5.0)

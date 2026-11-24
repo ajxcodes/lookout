@@ -193,3 +193,25 @@ def test_serve_media_multi_directory_fallback_resolution(tmp_path: Path) -> None
     # Request for non-existent file
     missing_res = client.get("/media/non_existent.mp4")
     assert missing_res.status_code == 404
+
+
+def test_serve_media_missing_jpg_returns_placeholder_and_missing_mp4_404(
+    app_and_client,
+) -> None:
+    """Purged event snapshots degrade to a placeholder; other media stays 404."""
+    client, _, _, _ = app_and_client
+    placeholder = (
+        Path(__file__).resolve().parents[1] / "src/lookout/adapters/web/static/placeholder.jpg"
+    )
+
+    jpg_res = client.get("/media/events/purged-event-96.jpg")
+    assert jpg_res.status_code == 200
+    assert jpg_res.headers["content-type"].startswith("image/jpeg")
+    assert jpg_res.headers["cache-control"] == "no-cache"
+    assert jpg_res.content == placeholder.read_bytes()
+
+    # Extension matching is case-insensitive.
+    assert client.get("/media/events/purged-event-96.JPEG").status_code == 200
+
+    mp4_res = client.get("/media/events/purged-event-96.mp4")
+    assert mp4_res.status_code == 404

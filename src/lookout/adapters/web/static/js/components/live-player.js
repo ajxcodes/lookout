@@ -197,8 +197,9 @@ export class LivePlayer {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Determine WebSocket endpoint
-      const streamId = this.activeCamera.id;
+      // Focus view uses the HD variant for Wyze cameras when provided; snapshots
+      // below keep using the base camera id so stills stay on the configured source.
+      const streamId = this.activeCamera.focus_stream_id || this.activeCamera.id;
       const wsUrl = resolveWsUrl(`/api/ws?src=${encodeURIComponent(streamId)}`);
 
       await new Promise((resolve, reject) => {

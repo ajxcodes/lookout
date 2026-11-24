@@ -614,3 +614,184 @@ def test_write_config_omits_preload_when_empty(tmp_path: Any) -> None:
     manager._write_config()
     text = (tmp_path / "rt" / "go2rtc.yaml").read_text()
     assert "preload:" not in text
+
+
+async def test_clip_retries_with_consumer_negotiation_on_header_only_mp4(tmp_path: Any) -> None:
+    """TR-1: a header-only MP4 is retried after priming a consumer frame."""
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    calls: list[str] = []
+    clip_calls = {"n": 0}
+    header_only = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + b"\x00" * 64
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/frame.jpeg":
+            calls.append("frame")
+            return httpx.Response(200, content=api.frame_bytes)
+        if path == "/api/stream.mp4":
+            calls.append("clip")
+            clip_calls["n"] += 1
+            content = header_only if clip_calls["n"] == 1 else MP4
+            return httpx.Response(200, content=content)
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        await manager.ensure_stream("cam1", "rtsp://example/cam1")
+        result = await manager.clip("cam1", 5)
+        assert b"mdat" in result
+        assert calls == ["clip", "frame", "clip"]
+    finally:
+        await client.aclose()
+
+
+async def test_negotiate_consumer_primes_frame_before_media(tmp_path: Any) -> None:
+    """TR-2: negotiate_consumer calls frame once and propagates media errors."""
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    frames = {"n": 0}
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/frame.jpeg":
+            frames["n"] += 1
+            return httpx.Response(200, content=api.frame_bytes)
+        return original(request)
+
+    client._transport = httpx.MockTransport(handler)
+    try:
+        await manager.start()
+        await manager.ensure_stream("cam1", "rtsp://example/cam1")
+        await manager.negotiate_consumer("cam1")
+        assert frames["n"] == 1
+        api.frame_bytes = b"not-a-jpeg"
+        with pytest.raises(MediaCaptureError):
+            await manager.negotiate_consumer("cam1")
+        assert frames["n"] == 2
+    finally:
+        await client.aclose()
+
+
+async def test_stream_health_reports_discovery_timeout_actionably(tmp_path: Any) -> None:
+    """TR-3: a discovery timeout is classified, redacted and actionable."""
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    manager.streams["office_cam"] = (
+        "wyze://192.168.1.222?uid=SECRETUID&enr=SECRETENR&mac=2CAA8E1EB2C9"
+        "&model=WYZECP1_JEF&subtype=hd&dtls=true"
+    )
+    (tmp_path / "go2rtc.log").write_text(
+        'WARN [rtsp] error="streams: wyze: connect failed: discovery timeout" stream=office_cam\n',
+        encoding="utf-8",
+    )
+    try:
+        manager.record_stream_error(
+            "office_cam",
+            "streams: wyze: connect failed: discovery timeout "
+            "ip=192.168.1.222 uid=SECRETUID mac=2CAA8E1EB2C9",
+        )
+        health = manager.stream_health("office_cam")
+        assert health["status"] == "unavailable"
+        assert health["classification"] == "unreachable"
+        assert "discovery timeout" in (health["error"] or "").lower()
+        assert "SECRETUID" not in (health["error"] or "")
+        assert "2CAA8E1EB2C9" not in (health["error"] or "")
+        assert "192.168.1.222" not in (health["error"] or "")
+        assert "native discovery" in (health["recommendation"] or "")
+    finally:
+        await client.aclose()
+
+
+async def test_classify_error_requires_whole_word_source_fields(tmp_path: Any) -> None:
+    """Short source-field tokens must not match substrings of unrelated words."""
+    manager, client = _manager(tmp_path, FakeGo2Rtc())
+    try:
+        # True positives: the source field appears as a whole word.
+        assert (
+            manager._classify_error("office_cam", "source verification: missing ip")
+            == "source_error"
+        )
+        assert manager._classify_error("office_cam", "missing uid") == "source_error"
+
+        # False positives under a bare substring check: "ip" in "description",
+        # "mac" in "machine". Neither is a real source field.
+        assert manager._classify_error("office_cam", "missing value in description") == "no_media"
+        assert manager._classify_error("office_cam", "missing value on machine") == "no_media"
+    finally:
+        await client.aclose()
+
+
+async def test_classify_error_does_not_treat_port_or_latency_as_auth(tmp_path: Any) -> None:
+    """A "406" embedded in a port or latency must not be classified as auth.
+
+    Regression for the PR #97 note: "port 10406" and "latency 406ms" must not
+    be misclassified as an authz/406 failure, while a genuine standalone 406
+    or a real authz marker still must be.
+    """
+    manager, client = _manager(tmp_path, FakeGo2Rtc())
+    try:
+        # False positives: "406" as a substring of a larger number/token.
+        assert manager._classify_error("office_cam", "port 10406") == "no_media"
+        assert manager._classify_error("office_cam", "latency 406ms") == "no_media"
+
+        # True positives: standalone 406 or a real authz marker.
+        assert manager._classify_error("office_cam", "HTTP error with status code 406") == "auth"
+        assert manager._classify_error("office_cam", "ext_authz_denied") == "auth"
+    finally:
+        await client.aclose()
+
+
+async def test_ensure_stream_backs_off_within_cooldown(tmp_path: Any) -> None:
+    """TR-4: repeat registration is skipped inside cooldown, force=True retries."""
+    api = FakeGo2Rtc()
+    manager, client = _manager(tmp_path, api)
+    source = "wyze://192.168.1.222?uid=u&enr=e&mac=m&model=x"
+    try:
+        await manager.start()
+        await manager.ensure_stream("office_cam", source)
+        assert len(api.puts) == 1
+
+        manager.record_stream_error("office_cam", "discovery timeout")
+        api.streams.clear()  # go2rtc dropped the unreachable producer
+        await manager.ensure_stream("office_cam", source)
+        assert len(api.puts) == 1  # no new PUT while cooling down
+
+        await manager.ensure_stream("office_cam", source, force=True)
+        assert len(api.puts) == 2
+    finally:
+        await client.aclose()
+
+
+async def test_go2rtc_fallback_rejects_header_only_mp4(
+    tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TR-15: the fallback recorder rejects a header-only MP4 and uses a snapshot."""
+    from lookout.adapters.go2rtc import Go2RtcAdapter
+    from lookout.adapters.tempfile import TempMediaManager
+    from lookout.config.schema import Go2RtcConfig
+
+    header_only = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + b"\x00" * 64
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/stream.mp4":
+            return httpx.Response(200, content=header_only)
+        if request.url.path == "/api/frame.jpeg":
+            return httpx.Response(200, content=JPEG)
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = Go2RtcAdapter(
+        config=Go2RtcConfig(api_url="http://go2rtc.test"),
+        temp_manager=TempMediaManager(preferred_temp_dir=str(tmp_path)),
+        client=client,
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            path = await adapter.record_clip("cam1", 5)
+        assert path.endswith(".jpg")
+        assert "header-only" in caplog.text
+    finally:
+        await client.aclose()

@@ -46,11 +46,21 @@ class FakeStreamManager:
         self.frame_error = frame_error
         self.clip_error = clip_error
         self.ensured: list[tuple[str, str | None]] = []
+        self.frame_calls: list[str] = []
+        self.removed: list[str] = []
+        self.streams: dict[str, str] = {}
 
     async def ensure_stream(self, camera_id: str, source: str | None = None) -> None:
         self.ensured.append((camera_id, source))
+        if source is not None:
+            self.streams[camera_id] = source
+
+    async def remove_stream(self, camera_id: str) -> None:
+        self.removed.append(camera_id)
+        self.streams.pop(camera_id, None)
 
     async def frame(self, camera_id: str) -> bytes:
+        self.frame_calls.append(camera_id)
         if self.frame_error is not None:
             raise self.frame_error
         return self.frame_bytes
@@ -141,11 +151,14 @@ def test_build_stream_source_requires_device_fields() -> None:
         adapter.build_stream_source({"device_api_id": 1})
 
 
-async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
+async def test_capture_snapshot_uses_live_bridge_stream_and_writes_jpeg(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
+    """Snapshots must come from the H.264 bridge, never a second ring: session."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     manager = FakeStreamManager()
+    # A stale stream from an older build must be removed so it stops retrying 406.
+    manager.streams["front_door_snapshot"] = "ring:?camera_id=410964110&snapshot"
     adapter = RingNativeAdapter(
         config=RingConfig(refresh_token=RAW_TOKEN),
         stream_manager=manager,
@@ -156,8 +169,15 @@ async def test_capture_snapshot_uses_snapshot_source_and_writes_jpeg(
 
     assert path.endswith(".jpg")
     assert Path(path).read_bytes() == JPEG
-    assert manager.ensured[0][0] == "front_door_snapshot"
-    assert manager.ensured[0][1].endswith("&snapshot")
+    assert manager.removed == ["front_door_snapshot"]
+    assert "front_door_snapshot" not in manager.streams
+    assert manager.ensured[0][0] == "front_door"
+    source = manager.ensured[0][1] or ""
+    assert source.startswith("exec:node ")
+    assert "ring_bridge/index.mjs" in source
+    assert "--camera-id 410964110" in source
+    assert "&snapshot" not in source
+    assert manager.frame_calls == ["front_door"]
 
 
 async def test_capture_snapshot_failure_writes_nothing(tmp_path: Any, monkeypatch: Any) -> None:
@@ -309,6 +329,246 @@ async def test_ingest_event_builds_camera_event_from_payload() -> None:
 def test_parse_datetime_handles_epoch_millis() -> None:
     result = _ring_parse_datetime(1700000000000)
     assert result == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
+
+
+async def test_ring_auth_uses_compatible_user_agent(tmp_path: Any, monkeypatch: Any) -> None:
+    """TR-8: Auth receives a device-compatible UA, never lookout/<version>."""
+    import ring_doorbell
+
+    captured: dict[str, Any] = {}
+
+    class CapturingAuth:
+        def __init__(self, user_agent: str, **kwargs: Any) -> None:
+            captured["user_agent"] = user_agent
+            self.token = {"refresh_token": "refreshed"}
+            self.hardware_id = None
+
+        async def async_refresh_tokens(self) -> None:
+            return None
+
+        async def async_close(self) -> None:
+            return None
+
+    class CapturingRing:
+        def __init__(self, auth: Any) -> None:
+            return None
+
+        async def async_update_devices(self) -> None:
+            return None
+
+        def devices(self) -> Any:
+            return SimpleNamespace(video_devices=[])
+
+    monkeypatch.setattr(ring_doorbell, "Auth", CapturingAuth)
+    monkeypatch.setattr(ring_doorbell, "Ring", CapturingRing)
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN), runtime_dir=str(tmp_path)
+    )
+    await adapter._ring()
+
+    assert captured["user_agent"].startswith("android:com.ringapp")
+    assert "lookout/" not in captured["user_agent"]
+
+
+async def test_ring_client_skips_legacy_session_bootstrap(tmp_path: Any, monkeypatch: Any) -> None:
+    """_ring() seeds a session sentinel so the 406 session POST is never issued."""
+    import ring_doorbell
+
+    captured: dict[str, Any] = {}
+
+    class CapturingAuth:
+        def __init__(self, user_agent: str, **kwargs: Any) -> None:
+            captured["user_agent"] = user_agent
+            self.token = {"refresh_token": "refreshed"}
+            self.hardware_id = None
+
+        async def async_refresh_tokens(self) -> None:
+            return None
+
+        async def async_close(self) -> None:
+            return None
+
+    class CapturingRing:
+        def __init__(self, auth: Any) -> None:
+            self.session: dict[str, Any] | None = None
+            self.session_calls = 0
+            captured["ring"] = self
+
+        async def async_create_session(self) -> None:
+            self.session_calls += 1
+            raise AssertionError("legacy clients_api/session bootstrap must be skipped")
+
+        async def async_update_devices(self) -> None:
+            assert self.session is not None
+
+        def devices(self) -> Any:
+            return SimpleNamespace(video_devices=[])
+
+    monkeypatch.setattr(ring_doorbell, "Auth", CapturingAuth)
+    monkeypatch.setattr(ring_doorbell, "Ring", CapturingRing)
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN), runtime_dir=str(tmp_path)
+    )
+    await adapter._ring()
+
+    ring = captured["ring"]
+    assert ring.session_calls == 0
+    assert ring.session == {"clients_api_session": "skipped"}
+    assert captured["user_agent"].startswith("android:com.ringapp")
+
+
+async def test_authz_denied_rotates_client_profile_and_succeeds(tmp_path: Any) -> None:
+    """TR-9: a 406 ext_authz_denied rotates profiles and the retry ingests events."""
+    created = datetime.now(UTC) - timedelta(minutes=1)
+
+    class FlakyDevice(FakeRingDevice):
+        def __init__(self) -> None:
+            super().__init__()
+            self.history_calls = 0
+
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            self.history_calls += 1
+            if self.history_calls == 1:
+                raise RuntimeError(
+                    "HTTP error with status code 406 during query of url "
+                    "https://api.ring.com/clients_api/session: ext_authz_denied "
+                    "refresh_token=SECRET"
+                )
+            return [
+                {
+                    "id": 555001,
+                    "created_at": created,
+                    "kind": "motion",
+                    "cv_properties": {"detection_type": "human"},
+                }
+            ]
+
+    device = FlakyDevice()
+    client = FakeRingClient([device])
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=client,
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    initial_profile = adapter._profile_state.current().name
+
+    payloads = await adapter.poll_events("front_door")
+
+    assert len(payloads) == 1
+    assert device.history_calls == 2
+    assert adapter._profile_state.current().name != initial_profile
+    assert adapter.last_success_at is not None
+    assert adapter.consecutive_failures == 0
+    assert "SECRET" not in (adapter._last_error or "")
+
+
+async def test_authz_denied_exhaustion_raises_actionable_error(tmp_path: Any) -> None:
+    """TR-10: exhausting every profile raises an actionable, redacted auth error."""
+    from lookout.adapters.ring_api_compat import DEFAULT_PROFILES
+
+    class AlwaysDeniedDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError(
+                "HTTP error with status code 406 during query of url "
+                "https://api.ring.com/clients_api/session: ext_authz_denied "
+                "refresh_token=SECRET"
+            )
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysDeniedDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+
+    with pytest.raises(RingAuthError, match="ring_authz_denied") as excinfo:
+        await adapter.poll_events("front_door")
+
+    message = str(excinfo.value)
+    # TR-10: the message must state both the profile and attempt counts so a
+    # single extra (non-authz) attempt cannot be misreported as profile count.
+    assert f"{len(DEFAULT_PROFILES)} of {len(DEFAULT_PROFILES)} profile(s)" in message
+    assert f"after {len(DEFAULT_PROFILES)} attempt(s)" in message
+    assert "SECRET" not in message
+    assert "SECRET" not in (adapter._last_error or "")
+    assert adapter.consecutive_failures == len(DEFAULT_PROFILES)
+
+
+async def test_authz_exhaustion_message_accurate_with_single_profile(tmp_path: Any) -> None:
+    """The exhaustion message must stay accurate with a single client profile.
+
+    Regression for the PR #97 note: with one profile the old wording said
+    "all client profiles after 1 attempts", hiding the profile count and
+    misstating the attempt count. The message now pins both counts.
+    """
+    from lookout.adapters.ring_api_compat import RingClientProfile, RingProfileState
+
+    class AlwaysDeniedDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError(
+                "HTTP error with status code 406 during query of url "
+                "https://api.ring.com/clients_api/session: ext_authz_denied "
+                "refresh_token=SECRET"
+            )
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysDeniedDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    # Force exactly one available profile; rotation is a no-op with one profile.
+    adapter._profile_state = RingProfileState(
+        (RingClientProfile("single", "android:com.ringapp:6.62.0"),)
+    )
+
+    with pytest.raises(RingAuthError, match="ring_authz_denied") as excinfo:
+        await adapter.poll_events("front_door")
+
+    message = str(excinfo.value)
+    assert "1 of 1 profile(s)" in message
+    assert "after 1 attempt(s)" in message
+    assert "SECRET" not in message
+
+
+async def test_poll_events_reraises_non_authz_error_without_success_state(
+    tmp_path: Any,
+) -> None:
+    """A persistent non-authz error must surface, not fall through to success.
+
+    Regression for the missing ``raise`` after the retry branch: when every
+    attempt fails with a non-authz exception, ``poll_events`` must propagate it
+    and leave the success counters / last payloads untouched.
+    """
+
+    class AlwaysFailingDevice(FakeRingDevice):
+        async def async_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+            raise RuntimeError("upstream database connection lost")
+
+    adapter = RingNativeAdapter(
+        config=RingConfig(refresh_token=RAW_TOKEN),
+        client=FakeRingClient([AlwaysFailingDevice()]),
+        cameras=[_camera()],
+        runtime_dir=str(tmp_path),
+    )
+    # Seed a prior successful poll to prove the failing poll does not overwrite it.
+    prior_success = datetime.now(UTC) - timedelta(days=1)
+    adapter._last_success = prior_success
+    adapter._last_event_count = 999
+    adapter._last_error = None
+    adapter.consecutive_failures = 0
+
+    with pytest.raises(RuntimeError, match="upstream database connection lost"):
+        await adapter.poll_events("front_door")
+
+    # Two attempts: the first retries, the second re-raises. No success state
+    # or stale payloads are produced on either path.
+    assert adapter.consecutive_failures == 2
+    assert adapter.last_success_at == prior_success
+    assert adapter._last_event_count == 999
+    assert "upstream database connection lost" in (adapter._last_error or "")
 
 
 async def test_ring_ding_doorbell_event_capture() -> None:

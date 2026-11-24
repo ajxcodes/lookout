@@ -316,6 +316,17 @@ class WyzeConfig(BaseModel):
     external_bridge_url: str | None = Field(
         default=None, description="Optional base URL for external Wyze bridge API"
     )
+    stream_dtls: bool = Field(
+        default=True, description="Whether the go2rtc wyze:// TUTK source uses DTLS"
+    )
+    stream_subtype: str = Field(
+        default="hd", description="Stream subtype requested from the Wyze TUTK producer"
+    )
+    stream_reconnect_backoff_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Base seconds for exponential reconnect backoff on stream failures",
+    )
 
 
 class RingConfig(BaseModel):
@@ -356,6 +367,12 @@ class RingConfig(BaseModel):
     logged_out: bool = Field(
         default=False,
         description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
+    )
+    api_user_agent: str | None = Field(
+        default=None, description="Override the client user agent sent to Ring (device-compatible)"
+    )
+    api_version: int | None = Field(
+        default=None, description="Override the Ring clients_api version header"
     )
 
 
