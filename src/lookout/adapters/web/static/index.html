@@ -18,11 +18,13 @@
     </div>
 
     <div class="header-actions">
-      <div class="view-mode-toggles" style="display:flex;gap:4px;margin-right:8px;">
-        <button class="btn btn-sm active" id="view-grid-btn" type="button" style="font-size:0.75rem;padding:2px 8px;">▦ Grid</button>
-        <button class="btn btn-sm" id="view-focus-btn" type="button" style="font-size:0.75rem;padding:2px 8px;">🔍 Focus</button>
+      <button class="btn btn-sm" id="jump-to-events-btn" type="button" data-icon="🕘" aria-label="Jump to events" title="Jump to events">🕘 Events</button>
+      <div class="view-mode-toggles">
+        <button class="btn btn-sm active" id="view-grid-btn" type="button" data-icon="▦" aria-label="All cameras grid" title="All cameras grid" style="font-size:0.75rem;padding:2px 8px;">▦ Grid</button>
+        <button class="btn btn-sm" id="view-focus-btn" type="button" data-icon="🔍" aria-label="Focus view" title="Focus view" style="font-size:0.75rem;padding:2px 8px;">🔍 Focus</button>
       </div>
-      <div class="grid-density-controls" id="grid-density-controls" style="display:flex;align-items:center;margin-right:8px;">
+      <button class="btn btn-sm" id="global-pause-btn" type="button" data-icon="⏸" aria-label="Pause all live streams" aria-pressed="false" title="Pause all live streams">⏸ Pause Live</button>
+      <div class="grid-density-controls" id="grid-density-controls">
         <label for="grid-density-select" style="font-size:0.75rem;margin-right:4px;">Grid:</label>
         <select id="grid-density-select" class="select-density" style="padding:2px 6px;font-size:0.75rem;border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
           <option value="auto">Auto-Fit</option>
@@ -32,9 +34,9 @@
           <option value="4-col">4-Col</option>
         </select>
       </div>
-      <button class="btn" id="open-settings-btn" type="button">⚙ Settings</button>
+      <button class="btn" id="open-settings-btn" type="button" data-icon="⚙" aria-label="Settings" title="Settings">⚙ Settings</button>
       <div class="add-camera-menu-wrapper" style="position:relative;display:inline-block;">
-    <button class="btn" id="add-camera-dropdown-btn" type="button">+</button>
+    <button class="btn" id="add-camera-dropdown-btn" type="button" data-icon="+" aria-label="Add camera menu" title="Add camera menu">+</button>
     <div class="add-camera-dropdown" id="add-camera-dropdown" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);min-width:180px;z-index:200;">
       <button class="dropdown-item" data-action="camera" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">📷 Add Camera</button>
       <button class="dropdown-item" data-action="provider" type="button" style="display:block;width:100%;text-align:left;padding:8px 12px;background:none;border:none;color:inherit;cursor:pointer;font-size:0.875rem;">🔌 Connect Provider</button>
@@ -67,60 +69,146 @@
 
       <!-- Single Camera Focus Stage -->
       <div class="focus-stage" id="focus-stage" style="display:none;">
-        <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
-          <button class="btn btn-sm" id="back-to-grid-btn" type="button" style="font-size:0.75rem;padding:3px 10px;">← All Cameras Grid</button>
-          <button class="btn btn-sm" id="focus-settings-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Camera settings">⚙ Settings</button>
-          <button class="btn btn-sm" id="fullscreen-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Fullscreen">⛶ Fullscreen</button>
-          <button class="btn btn-sm" id="maximize-btn" type="button" style="font-size:0.75rem;padding:3px 10px;" title="Maximize in app">( ) Maximize</button>
-          <button class="btn btn-sm" id="return-to-live-btn" type="button" style="display:none;font-size:0.75rem;padding:3px 10px;font-weight:600;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);align-items:center;gap:6px;cursor:pointer;">
-            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>
-            Return to Live
-          </button>
-        </div>
-        <div class="video-container">
-          <!-- Live WebRTC Video -->
-          <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
+        <div class="video-container acoustic-below" id="video-container">
+          <div class="video-surface" id="video-surface" tabindex="0" aria-label="Video surface (press Space to pause or resume)">
+            <!-- Live WebRTC Video -->
+            <video class="video-player" id="live-video" autoplay playsinline muted style="display:none;"></video>
 
-          <!-- Recorded Event Video -->
-          <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
+            <!-- Recorded Event Video -->
+            <video class="video-player" id="event-video" playsinline controls style="display:none;"></video>
 
-          <!-- Dedicated Snapshot Card Container -->
-          <div class="event-snapshot-card" id="event-snapshot-card" style="display:none;">
-            <span class="snapshot-badge">📸 Snapshot</span>
-            <img class="snapshot-card-img" id="snapshot-card-img" alt="Captured snapshot" />
-            <div class="snapshot-card-meta" id="snapshot-card-meta"></div>
+            <!-- Dedicated Snapshot Card Container -->
+            <div class="event-snapshot-card" id="event-snapshot-card" style="display:none;">
+              <span class="snapshot-badge">📸 Snapshot</span>
+              <img class="snapshot-card-img" id="snapshot-card-img" alt="Captured snapshot" />
+              <div class="snapshot-card-meta" id="snapshot-card-meta"></div>
+            </div>
+
+            <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
+            <div class="snapshot-overlay" id="snapshot-overlay">
+              <button class="start-live-btn" id="start-live-btn" type="button">
+                ▶ Start Live Stream
+              </button>
+              <div class="live-unavailable-status" id="live-unavailable-status" role="status" style="display:none;"></div>
+            </div>
           </div>
 
-          <!-- Live Session Duration Overlay HUD (e.g. 🔴 LIVE 00:01:24) -->
-          <div class="live-duration-badge" id="live-duration-badge" style="display:none;">
-            <span class="live-indicator-dot">🔴</span> LIVE <span class="duration-timer" id="live-duration-timer">00:00:00</span>
+          <!-- One translucent control bar at the TOP of the player. Both the
+               focus-stage actions and all playback controls live here; every
+               ID/label is preserved for the existing UI and audit hooks. The
+               bar is context aware via data-mode ("live" or "event") and its
+               groups share one horizontally scrollable row on narrow screens. -->
+          <div class="focus-control-overlay" id="focus-control-overlay" data-mode="live">
+            <div class="control-bar-scroll" id="control-bar-scroll">
+              <div class="focus-stage-actions" id="focus-stage-actions">
+                <button class="btn btn-sm" id="back-to-grid-btn" type="button" data-icon="←" aria-label="Back to all cameras grid" title="All Cameras Grid">← All Cameras Grid</button>
+                <button class="btn btn-sm" id="focus-settings-btn" type="button" data-icon="⚙" aria-label="Camera settings" title="Camera settings">⚙ Settings</button>
+                <button class="btn btn-sm" id="fullscreen-btn" type="button" data-icon="⛶" aria-label="Enter fullscreen" title="Fullscreen">⛶ Fullscreen</button>
+                <button class="btn btn-sm" id="maximize-btn" type="button" data-icon="⤢" aria-label="Maximize in app" title="Maximize in app">( ) Maximize</button>
+                <button class="btn btn-sm" id="return-to-live-btn" type="button" data-icon="🔴" aria-label="Return to live" title="Return to live" style="display:none;">
+                  <span class="return-live-dot" aria-hidden="true"></span>
+                  Return to Live
+                </button>
+              </div>
+
+              <div class="playback-essentials" id="playback-essentials">
+                <button class="btn btn-sm" id="player-pause-btn" type="button" data-icon="⏸" aria-label="Pause video" aria-pressed="false" title="Pause video">⏸ Pause</button>
+                <button class="btn btn-sm" id="player-mute-btn" type="button" data-icon="🔇" aria-label="Mute video" aria-pressed="true" title="Mute video">🔇 Mute</button>
+              </div>
+
+              <div class="player-controls-bar" id="player-controls">
+                <div class="playback-toggles" id="video-playback-controls">
+                  <span class="speed-label" style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
+                  <button class="btn-pill active" id="speed-1x" type="button" data-icon="1×" aria-label="Playback speed 1x" title="Playback speed 1x">1.0x</button>
+                  <button class="btn-pill" id="speed-15x" type="button" data-icon="1.5×" aria-label="Playback speed 1.5x" title="Playback speed 1.5x">1.5x</button>
+                  <button class="btn-pill" id="speed-2x" type="button" data-icon="2×" aria-label="Playback speed 2x" title="Playback speed 2x">2.0x</button>
+                  <button class="btn-pill" id="loop-toggle" type="button" data-icon="🔁" aria-label="Toggle loop" aria-pressed="false" title="Toggle loop">🔁 Loop</button>
+                </div>
+
+                <div class="snapshot-action-controls" id="snapshot-playback-controls" style="display:none;gap:6px;">
+                  <button class="btn btn-primary" id="download-snapshot-btn" type="button" data-icon="⬇" aria-label="Download snapshot" title="Download Snapshot">⬇ Download Snapshot</button>
+                  <button class="btn" id="inspect-frame-btn" type="button" data-icon="🔍" aria-label="Inspect frame" title="Inspect Frame">🔍 Inspect Frame</button>
+                </div>
+
+                <div id="video-download-wrap">
+                  <button class="btn" id="download-btn" type="button" data-icon="⬇" aria-label="Download MP4" title="Download MP4">⬇ Download MP4</button>
+                </div>
+              </div>
+
+              <!-- Single entry point for every view-state control. The popover
+                   itself is a sibling of the scroll row so it is never clipped
+                   on narrow screens. -->
+              <button class="btn btn-sm display-menu-btn" id="display-menu-btn" type="button" data-icon="🖥" aria-label="Display options" aria-controls="display-menu" aria-expanded="false" title="Display options">🖥 Display</button>
+            </div>
+
+            <!-- Unified Display popover: every view-state control lives here,
+                 with the existing IDs/data attributes preserved. -->
+            <div class="display-menu" id="display-menu" role="dialog" aria-label="Display options" hidden>
+              <div class="display-menu-title">Display</div>
+
+              <!-- One explicit 3-state control replaces the ambiguous
+                   Pin / Hide pair. Each state is a real button with an
+                   aria-pressed state and a stable data-mode for tests. -->
+              <div class="display-menu-row">
+                <span class="display-menu-label" id="display-acoustic-label">Acoustic mode</span>
+                <div class="acoustic-mode-controls" id="acoustic-mode-controls">
+                  <div class="acoustic-mode-segment" id="acoustic-mode-control" role="group" aria-label="Acoustic panel display mode" data-mode="below">
+                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-overlay" type="button" data-mode="overlay" data-icon="📌" aria-pressed="false" aria-label="Acoustic panel: Overlay" title="Overlay the acoustic panel on the video">Overlay</button>
+                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-below" type="button" data-mode="below" data-icon="▤" aria-pressed="true" aria-label="Acoustic panel: Below" title="Show the acoustic panel below the player">Below</button>
+                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-hidden" type="button" data-mode="hidden" data-icon="▾" aria-pressed="false" aria-label="Acoustic panel: Hidden" title="Hide the acoustic panel">Hidden</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="display-menu-row">
+                <span class="display-menu-label">Events panel</span>
+                <button id="events-panel-toggle" class="events-panel-toggle timeline-collapse display-toggle" type="button" data-icon="▾" aria-pressed="false" title="Collapse events panel">▾ Collapse / Expand</button>
+              </div>
+
+              <div class="display-menu-row">
+                <span class="display-menu-label">AI details</span>
+                <button id="display-ai-details-toggle" class="display-toggle" type="button" data-icon="✨" aria-pressed="true" title="Show AI details for events">✨ Show</button>
+              </div>
+
+              <div class="display-menu-row">
+                <span class="display-menu-label">Pin clock</span>
+                <button id="display-clock-pin-toggle" class="display-toggle" type="button" data-icon="📌" aria-pressed="false" title="Keep the time readout visible when controls hide">📌 Unpinned</button>
+              </div>
+            </div>
+
+            <!-- Live Session Duration Overlay HUD (e.g. 🔴 LIVE 00:01:24).
+                 Rightmost item in the bar, so it never overlaps a control. -->
+            <div class="live-duration-badge" id="live-duration-badge" style="display:none;">
+              <span class="live-indicator-dot">🔴</span> LIVE <span class="duration-timer" id="live-duration-timer">00:00:00</span>
+            </div>
+
+            <!-- Pinnable time readout. Always rendered; it hides with the bar
+                 unless the Display popover pins it (see .time-readout-pinned). -->
+            <div class="focus-time-readout" id="focus-time-readout" aria-label="Focus view time">
+              <span class="focus-clock-local" id="focus-clock-local"><span class="readout-label">Local</span> <span class="readout-value">--:--:--</span></span>
+              <span class="focus-clock-home" id="focus-clock-home" hidden><span class="readout-label">Home</span> <span class="readout-value"></span></span>
+              <span class="focus-event-time" id="focus-event-time" hidden><span class="readout-label">Event</span> <span class="readout-value"></span></span>
+              <span class="focus-event-age" id="focus-event-age" hidden></span>
+            </div>
           </div>
 
-          <!-- Snapshot Overlay with Interactive Live Stream Launcher -->
-          <div class="snapshot-overlay" id="snapshot-overlay">
-            <button class="start-live-btn" id="start-live-btn" type="button">
-              ▶ Start Live Stream
-            </button>
-          </div>
-        </div>
-
-        <!-- Playback Controls Bar -->
-        <div class="player-controls-bar" id="player-controls">
-          <div class="playback-toggles" id="video-playback-controls">
-            <span style="font-weight:600;font-size:0.75rem;margin-right:4px;">Speed:</span>
-            <button class="btn-pill active" id="speed-1x" type="button">1.0x</button>
-            <button class="btn-pill" id="speed-15x" type="button">1.5x</button>
-            <button class="btn-pill" id="speed-2x" type="button">2.0x</button>
-            <button class="btn-pill" id="loop-toggle" type="button" style="margin-left:8px;">🔁 Loop</button>
-          </div>
-
-          <div class="snapshot-action-controls" id="snapshot-playback-controls" style="display:none;gap:6px;">
-            <button class="btn btn-primary" id="download-snapshot-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download Snapshot</button>
-            <button class="btn" id="inspect-frame-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">🔍 Inspect Frame</button>
-          </div>
-
-          <div id="video-download-wrap">
-            <button class="btn" id="download-btn" type="button" style="padding:0.2rem 0.6rem;font-size:0.75rem;">⬇ Download MP4</button>
+          <!-- Interactive Acoustic Visualizer: normal flow under the player by
+               default; toggled to a pinned overlay or hidden by the mode
+               controls on .video-container. Markup/IDs stay unchanged. -->
+          <div class="acoustic-panel">
+            <div class="acoustic-header">
+              <span>Acoustic Frequency Waveform</span>
+              <span>Acoustic Decibel Level</span>
+            </div>
+            <div class="acoustic-canvas-wrap">
+              <canvas id="acoustic-canvas"></canvas>
+            </div>
+            <div class="vu-meter-wrap">
+              <div class="vu-meter">
+                <div class="vu-bar" id="vu-bar"></div>
+              </div>
+              <span class="vu-db-text" id="vu-db-text">-- dB</span>
+            </div>
           </div>
         </div>
 
@@ -140,31 +228,16 @@
           <div class="ai-details-chips" id="ai-details-chips"></div>
           <div class="ai-summary-text" id="ai-summary-text">Select an event from the timeline to view intelligence details.</div>
         </div>
-
-        <!-- Interactive Acoustic Visualizer -->
-        <div class="acoustic-panel">
-          <div class="acoustic-header">
-            <span>Acoustic Frequency Waveform</span>
-            <span>Acoustic Decibel Level</span>
-          </div>
-          <div class="acoustic-canvas-wrap">
-            <canvas id="acoustic-canvas"></canvas>
-          </div>
-          <div class="vu-meter-wrap">
-            <div class="vu-meter">
-              <div class="vu-bar" id="vu-bar"></div>
-            </div>
-            <span class="vu-db-text" id="vu-db-text">-36 dB</span>
-          </div>
-        </div>
       </div>
     </section>
+
+    <!-- Draggable separator between the stage and the events drawer -->
+    <div class="events-resize-handle" id="events-resize-handle" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize events panel"></div>
 
     <!-- Right Drawer: Taxonomy Filters & Chronological Timeline -->
     <aside class="timeline-section">
       <div class="timeline-section-header" style="display:flex;align-items:center;justify-content:space-between;padding:8px;">
         <span style="font-weight:600;font-size:0.85rem;">Events</span>
-        <button id="events-panel-toggle" class="events-panel-toggle timeline-collapse" type="button" title="Collapse events panel" style="padding:2px 8px;">▾</button>
       </div>
       <div class="filter-bar" id="filter-bar"></div>
       <div class="timeline-list" id="timeline-list"></div>
@@ -184,6 +257,7 @@
       <div class="modal-body">
         <nav class="settings-nav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border-subtle);">
           <a href="#section-ai" class="btn btn-sm" style="font-size:0.7rem;">AI</a>
+          <a href="#section-focus" class="btn btn-sm" style="font-size:0.7rem;">Focus view</a>
           <a href="#section-catalog" class="btn btn-sm" style="font-size:0.7rem;">Catalog</a>
           <a href="#section-faces" class="btn btn-sm" style="font-size:0.7rem;">Faces</a>
           <a href="#section-ha" class="btn btn-sm" style="font-size:0.7rem;">HA</a>
@@ -206,6 +280,35 @@
             <option value="gemini_only">Google Gemini Only (Direct Cloud Vision)</option>
             <option value="off">Off (Zero-compute Fallback)</option>
           </select>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);">
+
+        <!-- Focus view layout preferences (persisted in localStorage) -->
+        <section class="settings-section" data-section="focus-view" id="section-focus">
+          <h3 class="settings-section-title">Focus view</h3>
+        </section>
+        <div class="setting-group" id="focus-view-setting-group">
+          <label class="setting-label">Focus Player Layout</label>
+          <p class="setting-desc">Choose where the focus-stage controls sit and how the acoustic visualizer is shown. Changes apply immediately and are remembered.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.8125rem;cursor:pointer;">
+              <input type="checkbox" id="setting-focus-controls-overlay" checked>
+              <span>Overlay the focus controls at the top of the player</span>
+            </label>
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="setting-acoustic-mode">Acoustic panel</label>
+              <select class="select-control" id="setting-acoustic-mode">
+                <option value="below">Below the player (normal flow)</option>
+                <option value="overlay">Pinned translucent overlay</option>
+                <option value="hidden">Hidden (more video height)</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.8125rem;cursor:pointer;">
+              <input type="checkbox" id="setting-events-collapsed">
+              <span>Collapse the events pane (give the stage full width)</span>
+            </label>
+          </div>
         </div>
 
         <hr style="border:none;border-top:1px solid var(--border-subtle);">

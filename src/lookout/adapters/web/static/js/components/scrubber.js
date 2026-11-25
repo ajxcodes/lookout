@@ -8,12 +8,15 @@ export class TimelineScrubber {
     this.container = container;
     this.onTimeSelect = onTimeSelect;
     this.events = [];
+    this.total = 0; // server total when known; falls back to the loaded count
     this.bucketCount = 48; // 30-minute buckets across 24h
     this.playheadPosition = 0; // 0 to 1
   }
 
-  setEvents(events) {
+  // One-argument callers (e.g. the SSE path) keep working via opts = {}.
+  setEvents(events, opts = {}) {
     this.events = events || [];
+    this.total = Number.isFinite(opts.total) ? opts.total : this.events.length;
     this.render();
   }
 
@@ -24,11 +27,17 @@ export class TimelineScrubber {
     const scrubberWrap = document.createElement("div");
     scrubberWrap.className = "timeline-scrubber";
 
+    const loaded = this.events.length;
+    const total = Number.isFinite(this.total) ? this.total : loaded;
+    const countLabel = total > loaded
+      ? `${loaded} of ${total.toLocaleString()} events`
+      : `${loaded} events`;
+
     const header = document.createElement("div");
     header.className = "scrubber-header";
     header.innerHTML = `
       <span>24-Hour Continuous Scrubber</span>
-      <span>${this.events.length} Events</span>
+      <span>${countLabel}</span>
     `;
     scrubberWrap.appendChild(header);
 

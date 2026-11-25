@@ -2,6 +2,15 @@
  * Resilient, cross-browser WebRTC, MSE, and Snapshot Live Player component.
  */
 import { resolveUrl } from "../utils/url.js";
+import {
+  isLiveHttpFailure,
+  LIVE_MAX_ATTEMPTS,
+  LIVE_MEDIA_READY_TIMEOUT_MS,
+  liveUnavailableMessage,
+  retryDelayForAttempt,
+  SNAPSHOT_FALLBACK_POLL_MS,
+} from "../utils/live-health.js";
+import { formatClock, formatLocalClockTitle } from "../utils/timezone.js";
 
 function resolveWsUrl(path) {
   if (!path) return path;
@@ -38,11 +47,26 @@ export class LivePlayer {
     this.durationTimer = document.getElementById("live-duration-timer");
     this.sessionStartTime = null;
     this.durationInterval = null;
+    // Pause/mute act on the existing video element only. WebRTC is never torn
+    // down, so resuming is instant and the connection keeps its state.
+    this.paused = false;
+    this.muted = true; // live tiles/players start muted
+
+    // Bounded live-start retry / graceful degradation state. At most
+    // LIVE_MAX_ATTEMPTS automatic attempts run; after that the Start Live
+    // button becomes an explicit "Retry live" control.
+    this.liveAttempts = 0;
+    this.liveRetryTimer = null;
+    this.mediaReadyTimer = null;
+    this.liveFailureHandled = false;
+    this.liveUnavailable = false;
+    this.unavailableStatusEl = document.getElementById("live-unavailable-status");
   }
 
   setCamera(camera) {
     this.stopLive();
     this.activeCamera = camera;
+    this.liveAttempts = 0;
     this.showSnapshotFallback();
   }
 
@@ -50,7 +74,64 @@ export class LivePlayer {
     if (this.startBtn) {
       this.startBtn.disabled = false;
       this.startBtn.textContent = "▶ Start Live Stream";
+      this.startBtn.setAttribute("aria-label", "Start live stream");
+      this.startBtn.title = "Start live stream";
     }
+  }
+
+  _clearRetryTimer() {
+    if (this.liveRetryTimer) {
+      clearTimeout(this.liveRetryTimer);
+      this.liveRetryTimer = null;
+    }
+  }
+
+  _clearMediaReadyTimer() {
+    if (this.mediaReadyTimer) {
+      clearTimeout(this.mediaReadyTimer);
+      this.mediaReadyTimer = null;
+    }
+  }
+
+  _mediaReady() {
+    return Boolean(
+      this.video &&
+        (this.video.videoWidth > 0 ||
+          (this.video.readyState >= 2 && this.video.currentTime > 0))
+    );
+  }
+
+  /** True only when a live video with real dimensions is attached. Pause and
+   *  mute buttons use this to avoid pretending to act on a snapshot. */
+  hasPlayableMedia() {
+    return Boolean(this.isLive && this._mediaReady());
+  }
+
+  _ensureUnavailableStatus() {
+    if (!this.overlay) return null;
+    let el = this.unavailableStatusEl;
+    if (!el || !el.isConnected || !this.overlay.contains(el)) {
+      el = document.createElement("div");
+      el.className = "live-unavailable-status";
+      el.id = "live-unavailable-status";
+      el.setAttribute("role", "status");
+      this.overlay.appendChild(el);
+      this.unavailableStatusEl = el;
+    }
+    return el;
+  }
+
+  _showUnavailableStatus(reason) {
+    const el = this._ensureUnavailableStatus();
+    if (!el) return;
+    el.textContent = liveUnavailableMessage(this.activeCamera, reason);
+    el.style.display = "block";
+    if (this.overlay) this.overlay.dataset.liveUnavailable = "true";
+  }
+
+  _hideUnavailableStatus() {
+    if (this.unavailableStatusEl) this.unavailableStatusEl.style.display = "none";
+    if (this.overlay) this.overlay.dataset.liveUnavailable = "false";
   }
 
   _shouldShowTimestampOverlay() {
@@ -63,13 +144,47 @@ export class LivePlayer {
     );
   }
 
-  showSnapshotFallback() {
+  /**
+   * Enter the graceful snapshot fallback. When called with a failure reason it
+   * exposes the "Live unavailable — showing snapshot" status, flips the start
+   * button into a Retry live control, and schedules at most LIVE_MAX_ATTEMPTS
+   * bounded automatic retries (increasing delay) for stream 5xx / no-media.
+   */
+  showSnapshotFallback(reason = "", { scheduleRetry = true } = {}) {
+    if (reason && this.liveFailureHandled && this.liveUnavailable && this._lastFailureReason === reason) {
+      return;
+    }
+    if (reason) {
+      this.liveFailureHandled = true;
+      this._lastFailureReason = reason;
+    }
+
     this.isLive = false;
+    this.liveUnavailable = Boolean(reason);
     this.stopDurationTimer();
+    this._clearMediaReadyTimer();
     this._resetStartButton();
+    if (reason) {
+      const delay = retryDelayForAttempt(this.liveAttempts);
+      this.startBtn.disabled = false;
+      this.startBtn.textContent = "↻ Retry live";
+      this.startBtn.setAttribute("aria-label", "Retry live stream");
+      this.startBtn.title = "Live unavailable — retry the live stream";
+      if (scheduleRetry && delay !== null) {
+        this._clearRetryTimer();
+        this.liveRetryTimer = setTimeout(() => {
+          this.liveRetryTimer = null;
+          this.startLive({ automatic: true });
+        }, delay);
+      }
+      this._showUnavailableStatus(reason);
+    } else {
+      this._hideUnavailableStatus();
+    }
     if (this.video) {
       this.video.style.display = "none";
       this.video.srcObject = null;
+      this.video.pause();
     }
     if (this.overlay && this.activeCamera) {
       this.overlay.style.display = "flex";
@@ -79,7 +194,7 @@ export class LivePlayer {
       this.overlay.style.backgroundImage = `url("${snapUrl}")`;
     }
     if (this.onLiveStateChange) {
-      this.onLiveStateChange(false);
+      this.onLiveStateChange(false, { unavailable: this.liveUnavailable, reason });
     }
   }
 
@@ -114,8 +229,19 @@ export class LivePlayer {
     }
   }
 
-  async startLive() {
+  async startLive({ automatic = false } = {}) {
     if (!this.activeCamera) return;
+    if (automatic && this.liveAttempts >= LIVE_MAX_ATTEMPTS) return;
+
+    if (!automatic) {
+      this.liveAttempts = 0; // an explicit Start/Retry click gets a fresh budget
+    }
+    this.liveAttempts += 1;
+    this.liveFailureHandled = false;
+    this.liveUnavailable = false;
+    this._clearRetryTimer();
+    this._clearMediaReadyTimer();
+    this._hideUnavailableStatus();
 
     this.stopSnapshotPolling();
     this.stopDurationTimer();
@@ -124,6 +250,14 @@ export class LivePlayer {
       this.startBtn.disabled = true;
       this.startBtn.textContent = "⏳ Connecting Live Stream...";
     }
+
+    // A successful live path is unchanged; this timer only catches attempts
+    // that never deliver a frame (videoWidth stays 0 on Ring/Wyze failures).
+    this.mediaReadyTimer = setTimeout(() => {
+      if (!this._mediaReady()) {
+        this.showSnapshotFallback("no playable video within 8s");
+      }
+    }, LIVE_MEDIA_READY_TIMEOUT_MS);
 
     // Keep snapshot overlay visible while WebRTC is negotiating to prevent black screen
     if (this.overlay) {
@@ -138,6 +272,11 @@ export class LivePlayer {
         if (this.overlay) {
           this.overlay.style.display = "none";
         }
+        this._clearRetryTimer();
+        this._clearMediaReadyTimer();
+        this.liveAttempts = 0;
+        this.liveUnavailable = false;
+        this._hideUnavailableStatus();
         this._resetStartButton();
         if (this._shouldShowTimestampOverlay() && !this.durationInterval) {
           this.startDurationTimer();
@@ -152,7 +291,7 @@ export class LivePlayer {
       };
       this.video.onerror = () => {
         if (this.overlay) this.overlay.style.display = "flex";
-        this.showSnapshotFallback();
+        this.showSnapshotFallback("video error");
       };
     }
 
@@ -172,7 +311,7 @@ export class LivePlayer {
           }
         } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
           if (this.overlay) this.overlay.style.display = "flex";
-          this.showSnapshotFallback();
+          this.showSnapshotFallback(`WebRTC ${pc.connectionState}`);
         }
       };
 
@@ -187,8 +326,10 @@ export class LivePlayer {
           }
           this.video.srcObject.addTrack(event.track);
         }
-        this.video.muted = true;
-        this.video.play().catch(() => {});
+        this.video.muted = this.muted;
+        if (!this.paused) {
+          this.video.play().catch(() => {});
+        }
       };
 
       pc.addTransceiver("video", { direction: "recvonly" });
@@ -209,7 +350,7 @@ export class LivePlayer {
         const timeoutId = setTimeout(() => {
           try { ws.close(); } catch {}
           if (this.overlay) this.overlay.style.display = "flex";
-          this.showSnapshotFallback();
+          this.showSnapshotFallback("WebRTC signaling timeout");
           reject(new Error("WebRTC WebSocket signaling timeout"));
         }, 15000);
 
@@ -264,7 +405,7 @@ export class LivePlayer {
         ws.onerror = (err) => {
           clearTimeout(timeoutId);
           if (this.overlay) this.overlay.style.display = "flex";
-          this.showSnapshotFallback();
+          this.showSnapshotFallback("WebRTC signaling error");
           reject(err);
         };
 
@@ -287,7 +428,9 @@ export class LivePlayer {
     } catch (err) {
       console.warn("WebRTC primary live connection failed, attempting fallback:", err);
       if (this.overlay) this.overlay.style.display = "flex";
-      this.showSnapshotFallback();
+      // Do not schedule the retry yet: the MP4 fallback below is still allowed
+      // to succeed. Its failure (or a dead media element) schedules the retry.
+      this.showSnapshotFallback("WebRTC connection failed", { scheduleRetry: false });
       await this._attemptFallbackStream();
     }
   }
@@ -297,9 +440,24 @@ export class LivePlayer {
     try {
       if (this.video && this.activeCamera) {
         const mp4Url = resolveUrl(`/api/stream.mp4?src=${encodeURIComponent(this.activeCamera.id)}`);
+        // Detect a 502/5xx stream response explicitly instead of letting the
+        // media element retry the same bad URL repeatedly.
+        try {
+          const probe = await fetch(mp4Url, { method: "HEAD" });
+          if (isLiveHttpFailure(probe.status)) {
+            this.showSnapshotFallback(`stream HTTP ${probe.status}`);
+            this.startSnapshotPolling(SNAPSHOT_FALLBACK_POLL_MS);
+            return;
+          }
+        } catch {
+          // CORS / network probe failure: the media element's error event is
+          // the authoritative fallback signal in that case.
+        }
         this.video.src = mp4Url;
-        this.video.muted = true;
-        await this.video.play();
+        this.video.muted = this.muted;
+        if (!this.paused) {
+          await this.video.play();
+        }
         this.isLive = true;
         if (this.onLiveStateChange) {
           this.onLiveStateChange(true);
@@ -310,14 +468,19 @@ export class LivePlayer {
       console.warn("MSE/MP4 live fallback failed:", e);
     }
 
-    // 3. Quaternary fallback: Rapid snapshot polling
-    this.showSnapshotFallback();
-    this.startSnapshotPolling(2000);
+    // 3. Quaternary fallback: bounded-snapshot polling (no more than once/2s)
+    this.showSnapshotFallback("stream unavailable");
+    this.startSnapshotPolling(SNAPSHOT_FALLBACK_POLL_MS);
   }
 
   stopLive() {
     this.stopSnapshotPolling();
     this._resetStartButton();
+    this._clearRetryTimer();
+    this._clearMediaReadyTimer();
+    this.liveFailureHandled = false;
+    this.liveUnavailable = false;
+    this._hideUnavailableStatus();
     if (this.websocket) {
       try {
         this.websocket.close();
@@ -338,15 +501,27 @@ export class LivePlayer {
     this.isLive = false;
   }
 
+  /** Freeze/resume the currently attached video without closing the peer
+   *  connection. Safe to call before a stream is live. */
+  setPaused(paused) {
+    this.paused = Boolean(paused);
+    if (!this.video) return;
+    if (this.paused) {
+      this.video.pause();
+    } else if (this.isLive || this.video.srcObject || this.video.src) {
+      this.video.play().catch(() => {});
+    }
+  }
+
+  /** Mute state lives on the media element and is remembered per active
+   *  camera by the app; no stream renegotiation is involved. */
+  setMuted(muted) {
+    this.muted = Boolean(muted);
+    if (this.video) this.video.muted = this.muted;
+  }
+
   _formatCurrentClock() {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const dd = String(now.getDate()).padStart(2, "0");
-    const hh = String(now.getHours()).padStart(2, "0");
-    const min = String(now.getMinutes()).padStart(2, "0");
-    const ss = String(now.getSeconds()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+    return formatClock(new Date());
   }
 
   startDurationTimer() {
@@ -354,6 +529,7 @@ export class LivePlayer {
     if (!this.durationBadge || !this.durationTimer) return;
     this.sessionStartTime = Date.now();
     this.durationTimer.textContent = this._formatCurrentClock();
+    this.durationBadge.title = formatLocalClockTitle(new Date());
     this.durationBadge.style.display = "inline-flex";
 
     this.durationInterval = setInterval(() => {

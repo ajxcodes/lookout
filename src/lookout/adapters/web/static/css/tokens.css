@@ -35,10 +35,29 @@
 
   --text-main: #0f172a;
   --text-muted: #64748b;
+  /* WCAG AA-safe muted text for small text on --bg-subtle (#f1f5f9) */
+  --text-muted-aa: #475569;
   --text-inverse: #ffffff;
 
   --accent-primary: #2563eb;
   --accent-primary-hover: #1d4ed8;
+
+  /* Badge Contrast Tokens (WCAG AA >= 4.5:1, opaque backgrounds) */
+  --badge-ring-fg: #0369a1;
+  --badge-ring-bg: #e0f2fe;
+  --badge-ring-border: #bae6fd;
+  --badge-wyze-fg: #047857;
+  --badge-wyze-bg: #d1fae5;
+  --badge-wyze-border: #a7f3d0;
+  --badge-generic-fg: #475569;
+  --badge-generic-bg: #e2e8f0;
+  --badge-generic-border: #cbd5e1;
+  --badge-live-fg: #047857;
+  --badge-live-bg: #d1fae5;
+  --badge-live-border: #a7f3d0;
+  --badge-ondemand-fg: #92400e;
+  --badge-ondemand-bg: #fef3c7;
+  --badge-ondemand-border: #fde68a;
 
   /* Category Taxonomy Colors */
   --color-resident: #4f46e5;
@@ -79,10 +98,29 @@
 
     --text-main: #f8fafc;
     --text-muted: #94a3b8;
+    /* WCAG AA-safe muted text for small text on --bg-subtle (#1e293b) */
+    --text-muted-aa: #cbd5e1;
     --text-inverse: #0f172a;
 
     --accent-primary: #3b82f6;
     --accent-primary-hover: #60a5fa;
+
+    /* Badge Contrast Tokens (Dark Mode, WCAG AA >= 4.5:1) */
+    --badge-ring-fg: #7dd3fc;
+    --badge-ring-bg: #0c4a6e;
+    --badge-ring-border: #0369a1;
+    --badge-wyze-fg: #6ee7b7;
+    --badge-wyze-bg: #064e3b;
+    --badge-wyze-border: #047857;
+    --badge-generic-fg: #cbd5e1;
+    --badge-generic-bg: #334155;
+    --badge-generic-border: #475569;
+    --badge-live-fg: #6ee7b7;
+    --badge-live-bg: #064e3b;
+    --badge-live-border: #047857;
+    --badge-ondemand-fg: #fcd34d;
+    --badge-ondemand-bg: #78350f;
+    --badge-ondemand-border: #92400e;
 
     /* Category Taxonomy Colors (Dark Mode) */
     --color-resident: #818cf8;

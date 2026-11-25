@@ -1,6 +1,11 @@
 # Lookout Reference Configuration
 system_name: "Lookout Home"
 
+# Optional IANA timezone for viewer timestamps (e.g. "America/New_York").
+# Empty keeps the browser-local time. When set, event/group times use this zone
+# and the browser-local value is shown as a secondary label / tooltip.
+display_timezone: ""
+
 residents:
   - id: "resident-alice"
     name: "Alice"
