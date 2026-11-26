@@ -497,10 +497,28 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             handle.write(content)
         return temp_name
 
+    def _active_stream_source(self, camera_id: str) -> str | None:
+        """Return the source already registered for ``camera_id``, if any."""
+        manager = self._require_stream_manager()
+        streams = getattr(manager, "streams", None) or {}
+        return streams.get(str(camera_id))
+
+    def _stream_source_for(self, camera_id: str) -> str:
+        """Pick the source for a media call without clobbering the grid stream.
+
+        Reuse whatever variant is already registered, so a snapshot/recording
+        never flips the grid's ``sd`` stream back to the configured one. Only
+        resolve a fresh source when nothing is registered yet.
+        """
+        registered = self._active_stream_source(camera_id)
+        if registered:
+            return registered
+        return self._resolve_source(camera_id)
+
     async def capture_snapshot(self, camera_id: str) -> str:
         """Capture a real JPEG frame for a native Wyze camera."""
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id)
+        source = self._stream_source_for(camera_id)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
         content = await manager.frame(camera_id)
@@ -513,7 +531,7 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
     async def record_clip(self, camera_id: str, duration_seconds: float = 10.0) -> str:
         """Record a real MP4 clip for a native Wyze camera."""
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id)
+        source = self._stream_source_for(camera_id)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
         # Prime the TUTK consumer best-effort so the first MP4 request carries
