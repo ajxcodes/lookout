@@ -1359,6 +1359,9 @@ class LookoutApp {
     this.suspendEventAudio();
     this.setPlayerMode("live");
     this.fetchEvents();
+    // The Display popover is now header-anchored and available in Grid too, so
+    // mirror the persisted view-state into it on every Grid entry.
+    this.applyFocusPreferences();
   }
 
   switchToFocus(cam = null, { autoStartLive = true, fetchTimeline = true } = {}) {

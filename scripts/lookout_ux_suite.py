@@ -380,8 +380,11 @@ def reveal_focus_controls(page: Page) -> None:
 
 
 def open_display_menu(page: Page) -> None:
-    """Open the unified Display popover before clicking a control inside it."""
-    reveal_focus_controls(page)
+    """Open the header-anchored Display popover before clicking a control in it.
+
+    The trigger lives in .header-actions, not in the auto-hiding focus bar, so
+    it is reachable in both Grid and Focus views without a reveal gesture.
+    """
     trigger = page.locator("#display-menu-btn")
     if trigger.get_attribute("aria-expanded") != "true":
         trigger.click()
@@ -1038,7 +1041,7 @@ def phase_display(checks: Checks, page: Page) -> dict[str, Any]:
         hidden_pinned["bar_hidden"] is True
         and hidden_pinned["bar_opacity"] == "1"
         and hidden_pinned["readout_visible"] is True
-        and hidden_pinned["trigger_visible"] is False,
+        and hidden_pinned["trigger_visible"] is True,
         hidden_pinned,
     )
 
@@ -1058,6 +1061,103 @@ def phase_display(checks: Checks, page: Page) -> dict[str, Any]:
         and hidden_unpinned["bar_opacity"] == "0",
         hidden_unpinned,
     )
+    return detail
+
+
+def phase_grid_display(checks: Checks, page: Page) -> dict[str, Any]:
+    """The header-anchored Display popover and density picker work in Grid view."""
+    detail: dict[str, Any] = {}
+    for name, width, height in (("320", 320, 720), ("412", 412, 839)):
+        page.set_viewport_size({"width": width, "height": height})
+        open_viewer(page, BASE_URL)
+        page.evaluate("() => window.lookoutApp.switchToGrid()")
+        page.wait_for_timeout(200)
+
+        probe: dict[str, Any] = page.evaluate(
+            """() => {
+                const menu = document.querySelector('#display-menu');
+                const trigger = document.querySelector('#display-menu-btn');
+                const density = document.querySelector('#grid-density-controls');
+                const buttons = [...document.querySelectorAll('.header-actions .btn')];
+                const shown = el => !!el && getComputedStyle(el).display !== 'none';
+                return {
+                    mode: window.lookoutApp.viewMode,
+                    trigger_visible: shown(trigger) && trigger.getBoundingClientRect().width > 0,
+                    menu_hidden: menu ? menu.hidden : null,
+                    density_visible: shown(density),
+                    clipped: buttons.filter(b => b.scrollWidth > b.clientWidth + 1).map(b => b.id),
+                    names: buttons.every(b => b.getAttribute('aria-label') && b.getAttribute('title')),
+                    overflow_x: document.documentElement.scrollWidth -
+                        document.documentElement.clientWidth,
+                };
+            }"""
+        )
+        detail[name] = probe
+        checks.add(
+            f"grid_display_trigger_visible_narrow_{name}",
+            probe["mode"] == "grid" and probe["trigger_visible"] is True,
+            probe,
+        )
+        checks.add(
+            f"grid_density_selectable_narrow_{name}",
+            probe["density_visible"] is True and probe["menu_hidden"] is True,
+            probe,
+        )
+        checks.add(
+            f"grid_header_labels_not_clipped_{name}",
+            probe["clipped"] == [] and probe["names"] is True and probe["overflow_x"] == 0,
+            probe,
+        )
+
+        # The header trigger stays clickable in Grid view; the panel stays in-viewport.
+        open_display_menu(page)
+        opened: dict[str, Any] = page.evaluate(
+            """() => {
+                const menu = document.querySelector('#display-menu');
+                const r = menu ? menu.getBoundingClientRect() : null;
+                return {
+                    hidden: menu ? menu.hidden : null,
+                    expanded: document.querySelector('#display-menu-btn').getAttribute('aria-expanded'),
+                    in_viewport: !!r && r.left >= 0 && r.right <= innerWidth + 1,
+                };
+            }"""
+        )
+        detail[f"{name}_opened"] = opened
+        checks.add(
+            f"grid_display_opens_in_grid_{name}",
+            opened["hidden"] is False
+            and opened["expanded"] == "true"
+            and opened["in_viewport"] is True,
+            opened,
+        )
+
+        page.select_option("#grid-density-select", "2-col")
+        after: dict[str, Any] = page.evaluate(
+            """() => {
+                const strip = document.querySelector('#switcher-container');
+                strip.scrollLeft = strip.scrollWidth;
+                const last = strip.querySelector('.cam-tab:last-child');
+                return {
+                    density_class: document.querySelector('#live-grid-container').className,
+                    stored: localStorage.getItem('lookout_grid_density'),
+                    last_chip_reachable: !!last &&
+                        last.getBoundingClientRect().right <= strip.getBoundingClientRect().right + 1,
+                };
+            }"""
+        )
+        detail[f"{name}_after"] = after
+        checks.add(
+            f"grid_density_class_applied_{name}",
+            "density-2-col" in after["density_class"] and after["stored"] == "2-col",
+            after,
+        )
+        checks.add(
+            f"grid_switcher_last_chip_reachable_{name}",
+            after["last_chip_reachable"] is True,
+            after,
+        )
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
     return detail
 
 
@@ -1164,7 +1264,9 @@ def main(argv: list[str] | None = None) -> int:
         report["phases"]["graceful_degradation"] = phase_graceful_degradation(checks, page)
         print("=== UX PHASE 8: DISPLAY POPOVER / TIME READOUT ===")
         report["phases"]["display"] = phase_display(checks, page)
-        print("=== UX PHASE 9: INGRESS ===")
+        print("=== UX PHASE 9: GRID DISPLAY CONTROLS (320 / 412) ===")
+        report["phases"]["grid_display"] = phase_grid_display(checks, page)
+        print("=== UX PHASE 10: INGRESS ===")
         report["phases"]["ingress"] = phase_ingress(checks, context, INGRESS_TOKEN)
 
         try:

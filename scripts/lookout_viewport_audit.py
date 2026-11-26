@@ -863,10 +863,8 @@ def run_interaction_suite(page: Page, label: str, expectations: dict[str, Any]) 
         return f"opened={opened} closed={closed}"
 
     def events_panel_toggle() -> str:
-        # The toggle now lives in the unified Display popover (same ID). The
-        # bar auto-hides during the long interaction sweep and becomes inert,
-        # so reveal it before clicking the trigger inside it.
-        reveal_focus_controls(page)
+        # The toggle lives in the header-anchored Display popover (same ID), so
+        # its trigger stays reachable without revealing the auto-hiding bar.
         trigger = page.locator("#display-menu-btn")
         if trigger.get_attribute("aria-expanded") != "true":
             trigger.click()
