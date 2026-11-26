@@ -30,7 +30,10 @@ def test_hacs_manifest_and_metadata_validity() -> None:
 
     assert hacs_data["name"] == "Lookout Camera Intelligence" and manifest["domain"] == "lookout"
     assert manifest["config_flow"] is True
-    assert manifest["version"] == "0.3.0"
+    assert (
+        manifest["version"]
+        == json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
+    )
     assert "httpx>=0.27.0" in manifest["requirements"]
     assert "voluptuous>=0.11.7" in manifest["requirements"]
 
