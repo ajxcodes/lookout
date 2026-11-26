@@ -479,6 +479,18 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             return str(camera.native_device_id)
         return str(camera_id)
 
+    def resolve_device_identity(self, camera_id: str) -> tuple[str, str] | None:
+        """Resolve a camera id to ``(mac, product_model)`` or ``None`` when unknown."""
+        try:
+            return self._resolve_mac_model(camera_id)
+        except WyzeStreamSourceError:
+            return None
+
+    @property
+    def user_id(self) -> str | None:
+        """Return the logged-in Wyze user id without forcing client creation."""
+        return getattr(self._client_instance, "_user_id", None)
+
     # ------------------------------------------------------------------
     # Media capture
     # ------------------------------------------------------------------

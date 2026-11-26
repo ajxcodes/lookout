@@ -171,3 +171,24 @@ class EvictionResult:
     files_deleted: int = 0
     bytes_freed: int = 0
     events_pruned: int = 0
+
+
+@dataclass(frozen=True)
+class MotionTagState:
+    """Tri-state outcome of a motion-tag capability read.
+
+    ``supported`` is False when the device does not advertise the cloud
+    ``motion-detection`` capability (for example cam v3's HL stack).
+    """
+
+    supported: bool
+    enabled: bool | None = None
+
+
+@dataclass(frozen=True)
+class MotionTagWriteResult:
+    """Outcome of a motion-tag write, including the raw transport response."""
+
+    supported: bool
+    enabled: bool | None = None
+    raw: dict[str, Any] = field(default_factory=dict)

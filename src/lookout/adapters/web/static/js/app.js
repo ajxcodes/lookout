@@ -146,6 +146,9 @@ class LookoutApp {
     this.csCamEventTypes = document.getElementById("cs-cam-event-types");
     this.csCamNotifyPass1 = document.getElementById("cs-cam-notify-pass1");
     this.csCamNotifyPass2 = document.getElementById("cs-cam-notify-pass2");
+    this.csMotionTagGroup = document.getElementById("cs-motion-tag-group");
+    this.csCamMotionTag = document.getElementById("cs-cam-motion-tag");
+    this.csMotionTagStatus = document.getElementById("cs-motion-tag-status");
     this.csAuthGroup = document.getElementById("cs-auth-group");
     this.csReauthBtn = document.getElementById("cs-reauth-btn");
     this.csRemoveBtn = document.getElementById("cs-remove-btn");
@@ -1574,6 +1577,14 @@ class LookoutApp {
       if (this.csCamNotifyPass1) this.csCamNotifyPass1.checked = cam.notify_pass1 !== false;
       if (this.csCamNotifyPass2) this.csCamNotifyPass2.checked = cam.notify_pass2 !== false;
     }
+    if (this.csMotionTagGroup) {
+      this.csMotionTagGroup.style.display = "none";
+      if (this.csMotionTagStatus) this.csMotionTagStatus.textContent = "";
+    }
+    this._motionTagBaseline = null;
+    if (cam && (cam.native_provider === "wyze" || cam.provider_badge === "wyze")) {
+      this.loadMotionTagSupport(cam);
+    }
     if (this.csAuthGroup) {
       this.csAuthGroup.style.display = cam && cam.auth_required ? "" : "none";
     }
@@ -1586,6 +1597,30 @@ class LookoutApp {
     this.cameraSettingsModal.classList.remove("open");
     this.cameraSettingsModal.style.display = "none";
     this.currentSettingsCamera = null;
+  }
+
+  async loadMotionTagSupport(cam) {
+    if (!this.csMotionTagGroup) return;
+    this.csMotionTagGroup.style.display = "none";
+    this._motionTagBaseline = null;
+    if (!cam || !cam.id) return;
+    try {
+      const res = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/motion_tag`));
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !data.supported) {
+        if (this.csMotionTagStatus && data && data.enabled === null) {
+          this.csMotionTagStatus.textContent = "Not supported on this camera";
+        }
+        return;
+      }
+      this.csMotionTagGroup.style.display = "";
+      if (this.csCamMotionTag) this.csCamMotionTag.checked = data.enabled === true;
+      this._motionTagBaseline = data.enabled === true;
+      if (this.csMotionTagStatus) this.csMotionTagStatus.textContent = "";
+    } catch (err) {
+      console.warn("Motion tag probe failed:", err);
+    }
   }
 
   async saveCameraSettings() {
@@ -1612,6 +1647,30 @@ class LookoutApp {
       if (res.ok) await this.fetchCameras();
     } catch (err) {
       console.warn("Camera settings save failed:", err);
+    }
+    if (
+      this.csMotionTagGroup &&
+      this.csMotionTagGroup.style.display !== "none" &&
+      this.csCamMotionTag &&
+      this.csCamMotionTag.checked !== this._motionTagBaseline
+    ) {
+      try {
+        const mtRes = await fetch(
+          resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/motion_tag`),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: this.csCamMotionTag.checked }),
+          }
+        );
+        if (mtRes.ok) {
+          const mtData = await mtRes.json();
+          cam.motion_tag_enabled = mtData.enabled === true;
+          this._motionTagBaseline = cam.motion_tag_enabled;
+        }
+      } catch (err) {
+        console.warn("Motion tag save failed:", err);
+      }
     }
     this.closeCameraSettings();
   }
