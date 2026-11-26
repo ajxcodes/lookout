@@ -222,6 +222,12 @@ class CameraConfig(BaseModel):
             "continuous_recording.enabled setting)"
         ),
     )
+    motion_tag_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Tri-state motion-tag toggle for Wyze ascent/cam4-class devices (None = unknown/hidden)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _sync_notification_flags(self) -> Self:
@@ -326,6 +332,16 @@ class WyzeConfig(BaseModel):
         default=30.0,
         gt=0.0,
         description="Base seconds for exponential reconnect backoff on stream failures",
+    )
+    wcsa_base_url: str = Field(
+        default="https://app.wyzecam.com", description="Wyze wcsa cloud base URL"
+    )
+    device_management_base_url: str = Field(
+        default="https://devicemgmt-service.wyze.com",
+        description="Wyze device-management REST base URL",
+    )
+    wcsa_timeout_seconds: float = Field(
+        default=30.0, gt=0.0, description="Timeout for wcsa/device-management REST calls"
     )
 
 

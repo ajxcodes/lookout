@@ -214,3 +214,20 @@ class PtzControlPort(Protocol):
     async def get_position(self, camera_id: str) -> Any:
         """Get current pan/tilt/zoom position."""
         ...
+
+
+@runtime_checkable
+class IotCapabilityPort(Protocol):
+    """Port for Wyze device-management IoT capability reads/writes."""
+
+    async def get_iot_prop(
+        self, device_id: str, product_model: str, *, user_id: str | None = None
+    ) -> Any:
+        """Read IoT capability properties for a device."""
+        ...
+
+    async def run_action(
+        self, device_id: str, product_model: str, *, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """Run a device-management action and return the raw response."""
+        ...

@@ -24,6 +24,14 @@ from lookout.ports.egress import PtzControlPort, VideoRecorderPort
 
 logger = logging.getLogger(__name__)
 
+try:
+    from lookout.adapters.wyze_signing import WyzeSigningError as WyzeSigningError
+except Exception:  # pragma: no cover - optional import guard
+
+    class WyzeSigningError(RuntimeError):  # type: ignore[no-redef]
+        """Raised when Wyze dynamic signing fails."""
+
+
 _JPEG_MAGIC = b"\xff\xd8"
 _MP4_FTYP = b"ftyp"
 _PTZ_SPEED_MIN = 1
@@ -80,6 +88,7 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         stream_manager: NativeStreamManager | None = None,
         client: Any | None = None,
         cameras: list[Any] | None = None,
+        iot_cloud: Any | None = None,
         **kwargs: Any,
     ) -> None:
         self.config = config or WyzeConfig()
@@ -94,6 +103,7 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         self._ptz = WyzeTutkPtzAdapter(
             config=self.config, client=self, stream_manager=stream_manager
         )
+        self.iot_cloud = iot_cloud
 
     # ------------------------------------------------------------------
     # Compatibility PTZ surface (delegates to the TUTK/cloud PTZ adapter)
