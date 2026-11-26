@@ -1,4 +1,4 @@
-"""TR-1: header wraps on narrow screens and the optional density picker hides."""
+"""TR-1: header wraps on narrow screens and the density picker stays reachable."""
 
 import re
 from pathlib import Path
@@ -38,6 +38,7 @@ def _media_blocks(css: str, condition: str) -> list[str]:
 
 
 def test_header_wraps_and_density_hidden_on_small_screens() -> None:
+    """The density control used to be hidden at <=640px; it is now reachable."""
     css = CSS.read_text(encoding="utf-8")
     html = HTML.read_text(encoding="utf-8")
 
@@ -48,9 +49,14 @@ def test_header_wraps_and_density_hidden_on_small_screens() -> None:
     assert "min-width: 0" in header_actions
 
     small_blocks = _media_blocks(css, "max-width: 640px")
-    assert any(
+    assert not any(
         "#grid-density-controls" in block and "display: none" in block for block in small_blocks
     ), small_blocks
+
+    assert 'id="grid-density-select"' in html
+    select = html[html.index('id="grid-density-select"') : html.index("</select>")]
+    for value in ("auto", "1-col", "2-col", "3-col", "4-col"):
+        assert f'value="{value}"' in select
 
     assert 'id="open-settings-btn"' in html
     assert 'id="add-camera-dropdown-btn"' in html

@@ -20,8 +20,8 @@
     <div class="header-actions">
       <button class="btn btn-sm" id="jump-to-events-btn" type="button" data-icon="🕘" aria-label="Jump to events" title="Jump to events">🕘 Events</button>
       <div class="view-mode-toggles">
-        <button class="btn btn-sm active" id="view-grid-btn" type="button" data-icon="▦" aria-label="All cameras grid" title="All cameras grid" style="font-size:0.75rem;padding:2px 8px;">▦ Grid</button>
-        <button class="btn btn-sm" id="view-focus-btn" type="button" data-icon="🔍" aria-label="Focus view" title="Focus view" style="font-size:0.75rem;padding:2px 8px;">🔍 Focus</button>
+        <button class="btn btn-sm active" id="view-grid-btn" type="button" data-icon="▦" aria-label="All cameras grid" title="All cameras grid">▦ Grid</button>
+        <button class="btn btn-sm" id="view-focus-btn" type="button" data-icon="🔍" aria-label="Focus view" title="Focus view">🔍 Focus</button>
       </div>
       <button class="btn btn-sm" id="global-pause-btn" type="button" data-icon="⏸" aria-label="Pause all live streams" aria-pressed="false" title="Pause all live streams">⏸ Pause Live</button>
       <div class="grid-density-controls" id="grid-density-controls">
@@ -33,6 +33,41 @@
           <option value="3-col">3-Col</option>
           <option value="4-col">4-Col</option>
         </select>
+      </div>
+      <!-- The single Display popover is anchored to the header, so it opens in
+           both Grid and Focus views and never auto-hides with the focus bar. -->
+      <button class="btn btn-sm display-menu-btn" id="display-menu-btn" type="button" data-icon="🖥" aria-label="Display options" aria-controls="display-menu" aria-expanded="false" title="Display options">🖥 Display</button>
+      <div class="display-menu" id="display-menu" role="dialog" aria-label="Display options" hidden>
+        <div class="display-menu-title">Display</div>
+
+        <!-- One explicit 3-state control replaces the ambiguous
+             Pin / Hide pair. Each state is a real button with an
+             aria-pressed state and a stable data-mode for tests. -->
+        <div class="display-menu-row">
+          <span class="display-menu-label" id="display-acoustic-label">Acoustic mode</span>
+          <div class="acoustic-mode-controls" id="acoustic-mode-controls">
+            <div class="acoustic-mode-segment" id="acoustic-mode-control" role="group" aria-label="Acoustic panel display mode" data-mode="below">
+              <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-overlay" type="button" data-mode="overlay" data-icon="📌" aria-pressed="false" aria-label="Acoustic panel: Overlay" title="Overlay the acoustic panel on the video">Overlay</button>
+              <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-below" type="button" data-mode="below" data-icon="▤" aria-pressed="true" aria-label="Acoustic panel: Below" title="Show the acoustic panel below the player">Below</button>
+              <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-hidden" type="button" data-mode="hidden" data-icon="▾" aria-pressed="false" aria-label="Acoustic panel: Hidden" title="Hide the acoustic panel">Hidden</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="display-menu-row">
+          <span class="display-menu-label">Events panel</span>
+          <button id="events-panel-toggle" class="events-panel-toggle timeline-collapse display-toggle" type="button" data-icon="▾" aria-pressed="false" title="Collapse events panel">▾ Collapse / Expand</button>
+        </div>
+
+        <div class="display-menu-row">
+          <span class="display-menu-label">AI details</span>
+          <button id="display-ai-details-toggle" class="display-toggle" type="button" data-icon="✨" aria-pressed="true" title="Show AI details for events">✨ Show</button>
+        </div>
+
+        <div class="display-menu-row">
+          <span class="display-menu-label">Pin clock</span>
+          <button id="display-clock-pin-toggle" class="display-toggle" type="button" data-icon="📌" aria-pressed="false" title="Keep the time readout visible when controls hide">📌 Unpinned</button>
+        </div>
       </div>
       <button class="btn" id="open-settings-btn" type="button" data-icon="⚙" aria-label="Settings" title="Settings">⚙ Settings</button>
       <div class="add-camera-menu-wrapper" style="position:relative;display:inline-block;">
@@ -135,45 +170,6 @@
                 </div>
               </div>
 
-              <!-- Single entry point for every view-state control. The popover
-                   itself is a sibling of the scroll row so it is never clipped
-                   on narrow screens. -->
-              <button class="btn btn-sm display-menu-btn" id="display-menu-btn" type="button" data-icon="🖥" aria-label="Display options" aria-controls="display-menu" aria-expanded="false" title="Display options">🖥 Display</button>
-            </div>
-
-            <!-- Unified Display popover: every view-state control lives here,
-                 with the existing IDs/data attributes preserved. -->
-            <div class="display-menu" id="display-menu" role="dialog" aria-label="Display options" hidden>
-              <div class="display-menu-title">Display</div>
-
-              <!-- One explicit 3-state control replaces the ambiguous
-                   Pin / Hide pair. Each state is a real button with an
-                   aria-pressed state and a stable data-mode for tests. -->
-              <div class="display-menu-row">
-                <span class="display-menu-label" id="display-acoustic-label">Acoustic mode</span>
-                <div class="acoustic-mode-controls" id="acoustic-mode-controls">
-                  <div class="acoustic-mode-segment" id="acoustic-mode-control" role="group" aria-label="Acoustic panel display mode" data-mode="below">
-                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-overlay" type="button" data-mode="overlay" data-icon="📌" aria-pressed="false" aria-label="Acoustic panel: Overlay" title="Overlay the acoustic panel on the video">Overlay</button>
-                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-below" type="button" data-mode="below" data-icon="▤" aria-pressed="true" aria-label="Acoustic panel: Below" title="Show the acoustic panel below the player">Below</button>
-                    <button class="btn btn-sm acoustic-mode-btn" id="acoustic-mode-hidden" type="button" data-mode="hidden" data-icon="▾" aria-pressed="false" aria-label="Acoustic panel: Hidden" title="Hide the acoustic panel">Hidden</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="display-menu-row">
-                <span class="display-menu-label">Events panel</span>
-                <button id="events-panel-toggle" class="events-panel-toggle timeline-collapse display-toggle" type="button" data-icon="▾" aria-pressed="false" title="Collapse events panel">▾ Collapse / Expand</button>
-              </div>
-
-              <div class="display-menu-row">
-                <span class="display-menu-label">AI details</span>
-                <button id="display-ai-details-toggle" class="display-toggle" type="button" data-icon="✨" aria-pressed="true" title="Show AI details for events">✨ Show</button>
-              </div>
-
-              <div class="display-menu-row">
-                <span class="display-menu-label">Pin clock</span>
-                <button id="display-clock-pin-toggle" class="display-toggle" type="button" data-icon="📌" aria-pressed="false" title="Keep the time readout visible when controls hide">📌 Unpinned</button>
-              </div>
             </div>
 
             <!-- Live Session Duration Overlay HUD (e.g. 🔴 LIVE 00:01:24).

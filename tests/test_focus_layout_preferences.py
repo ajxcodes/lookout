@@ -31,15 +31,6 @@ OVERLAY_IDS = (
     "loop-toggle",
     "snapshot-playback-controls",
     "download-btn",
-    "acoustic-mode-controls",
-    "acoustic-mode-control",
-    "acoustic-mode-overlay",
-    "acoustic-mode-below",
-    "acoustic-mode-hidden",
-    "display-menu-btn",
-    "display-menu",
-    "display-ai-details-toggle",
-    "display-clock-pin-toggle",
     "live-duration-badge",
     "focus-time-readout",
 )
@@ -66,10 +57,11 @@ def test_control_overlay_keeps_all_existing_ids_without_duplicates() -> None:
 
 def test_display_popover_hosts_all_view_state_controls() -> None:
     html = INDEX.read_text(encoding="utf-8")
-    scroll_start = html.index('id="control-bar-scroll"')
+    # The popover is header-anchored now, so it precedes the focus bar instead
+    # of sitting inside its scroll row. Only the header/badge bounds matter.
     menu_start = html.index('id="display-menu"')
     menu_end = html.index('id="live-duration-badge"')
-    assert scroll_start < menu_start < menu_end
+    assert menu_start < menu_end
 
     region = html[menu_start:menu_end]
     for control_id in (

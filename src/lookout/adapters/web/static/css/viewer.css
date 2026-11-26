@@ -73,18 +73,35 @@ body {
   min-width: 0;
   max-width: 100%;
   gap: var(--space-sm);
+  /* Anchors the one Display popover so it is reachable in Grid and Focus. */
+  position: relative;
 }
 
-/* Small-screen header: hide the optional density picker and tighten spacing. */
+/* Small-screen header: keep the density picker reachable and tighten spacing. */
 @media (max-width: 640px) {
-  #grid-density-controls {
-    display: none;
-  }
   .app-header {
     padding: var(--space-xs) var(--space-sm);
   }
   .header-actions .btn {
     padding: var(--space-2xs) var(--space-xs);
+  }
+  #grid-density-controls {
+    min-width: 0;
+    gap: 2px;
+  }
+  #grid-density-select {
+    max-width: 100%;
+    min-width: 0;
+  }
+  /* Stronger touch affordance for the overflowing camera chip strip. */
+  .switcher-bar {
+    -webkit-overflow-scrolling: touch;
+  }
+  .switcher-bar::-webkit-scrollbar {
+    height: 8px;
+  }
+  .switcher-bar::-webkit-scrollbar-thumb {
+    background-color: var(--text-muted);
   }
 }
 
@@ -105,6 +122,21 @@ body {
   .header-actions .btn::before {
     content: attr(data-icon);
     font-size: 0.875rem;
+  }
+  /* The Display popover lives in the header too; keep its own labels intact
+     instead of letting the icon-only rule shrink and double them. */
+  .header-actions .display-menu .btn,
+  .header-actions .display-menu .acoustic-mode-btn {
+    width: auto;
+    min-width: 0;
+    height: auto;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    justify-content: flex-start;
+  }
+  .header-actions .display-menu .btn::before,
+  .header-actions .display-menu .acoustic-mode-btn::before {
+    content: none;
   }
   .header-actions .view-mode-toggles {
     gap: var(--space-2xs);
@@ -131,6 +163,13 @@ body {
   transition: all var(--transition-fast);
   background-color: var(--bg-subtle);
   color: var(--text-main);
+}
+
+/* Compact variant used by the header and the focus bar. Its sizing lives in
+   CSS (not inline styles) so the narrow-screen icon-only rule can override it. */
+.btn-sm {
+  padding: var(--space-2xs) var(--space-xs);
+  font-size: 0.8125rem;
 }
 
 .btn:hover {
@@ -183,6 +222,7 @@ body {
 .cam-tab {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-md);
   border-radius: var(--radius-full);
@@ -1771,6 +1811,12 @@ body {
   .display-menu {
     right: 6px;
     min-width: 230px;
+  }
+  .display-menu-row {
+    flex-wrap: wrap;
+  }
+  .display-menu .acoustic-mode-segment {
+    flex-wrap: wrap;
   }
   .focus-stage .acoustic-panel {
     padding: 4px 8px;

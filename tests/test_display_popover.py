@@ -66,10 +66,16 @@ def test_popover_is_outside_the_scroll_row_and_uses_hidden_attribute() -> None:
     html = INDEX.read_text(encoding="utf-8")
     css = CSS.read_text(encoding="utf-8")
 
-    scroll_start = html.index('id="control-bar-scroll"')
+    trigger_start = html.index('id="display-menu-btn"')
     menu_start = html.index('id="display-menu"')
+    scroll_start = html.index('id="control-bar-scroll"')
+    focus_start = html.index('id="focus-stage"')
     badge_start = html.index('id="live-duration-badge"')
-    assert scroll_start < menu_start < badge_start
+    # Header-anchored: trigger and panel precede the focus bar entirely, so
+    # switchToGrid() (which hides #focus-stage) cannot remove the control.
+    assert html.index('class="header-actions"') < trigger_start < menu_start
+    assert menu_start < scroll_start < badge_start
+    assert menu_start < focus_start
     menu = html[menu_start:badge_start]
     assert 'id="display-menu-btn"' not in menu
     assert 'role="dialog"' in menu and 'aria-label="Display options"' in menu
