@@ -43,6 +43,9 @@ RUN npm install --omit=dev --save-exact ring-client-api@14.3.0 && \
 FROM python:3.12-slim-bookworm AS runtime
 
 ARG RELEASE_VERSION=""
+# BEGIN LOOKOUT VERSION FALLBACK (managed by scripts/sync_version.py)
+ENV RELEASE_VERSION="${RELEASE_VERSION:-0.7.0}"
+# END LOOKOUT VERSION FALLBACK
 ARG GO2RTC_VERSION=1.9.14
 ARG TARGETARCH
 LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"

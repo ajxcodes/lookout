@@ -2,6 +2,9 @@ ARG BUILD_FROM=python:3.12-slim-bookworm
 FROM ${BUILD_FROM}
 
 ARG RELEASE_VERSION=""
+# BEGIN LOOKOUT VERSION FALLBACK (managed by scripts/sync_version.py)
+ENV RELEASE_VERSION="${RELEASE_VERSION:-0.7.0}"
+# END LOOKOUT VERSION FALLBACK
 LABEL org.opencontainers.image.source="https://github.com/ajxcodes/lookout"
 LABEL org.opencontainers.image.version="${RELEASE_VERSION}"
 

@@ -52,7 +52,7 @@ To ensure flawless interoperability with Home Assistant OS, Supervised, and Cont
 ### Tier 3: Runtime Network Ingress & Ingestion Verification
 - **Tool**: Container bridge network with `curlimages/curl` or host test client.
 - **Endpoints**:
-  - `GET /health`: Asserts HTTP 200 and `{"status": "ok", "configured": ..., "version": "0.1.0"}`.
+  - `GET /health`: Asserts HTTP 200 and `{"status": "ok", "configured": ..., "version": "0.7.0"}`.
   - `POST /api/v1/events/trigger`: Simulates incoming Home Assistant camera trigger webhook, confirming event ingestion into `EventProcessingService` and real-time SSE broadcast.
 
 ---

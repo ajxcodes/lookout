@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Version drift guard
+        run: python3 scripts/sync_version.py --check
+
       - name: Lint with Ruff
         run: uv run ruff check .
 
@@ -164,6 +167,25 @@ jobs:
           create-release: true
           package-json: "true"
 
+      - name: Reconcile generated version files with release
+        if: steps.autotag.outputs.new-tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.autotag.outputs.new-tag }}
+        run: |
+          BARE_VERSION="${RELEASE_TAG#v}"
+          CURRENT_VERSION="$(jq -r .version package.json)"
+          if [ "${BARE_VERSION}" != "${CURRENT_VERSION}" ]; then
+            python3 -c 'import json, sys, pathlib; p = pathlib.Path("package.json"); d = json.loads(p.read_text(encoding="utf-8")); d["version"] = sys.argv[1]; p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")' "${BARE_VERSION}"
+          fi
+          python3 scripts/sync_version.py --write
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json ha-addon/config.yaml custom_components/lookout/manifest.json src/lookout/adapters/web/static/index.html Dockerfile ha-addon/Dockerfile
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(version): sync ${RELEASE_TAG} [skip ci]"
+            git push
+          fi
+
   container-publish:
     name: Multi-Arch Container Build & Publish
     runs-on: ubuntu-latest
@@ -257,6 +279,10 @@ jobs:
             type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v0.') }}
           labels: |
             org.opencontainers.image.source=https://github.com/ajxcodes/lookout
+
+      - name: Validate release tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME}" = "v$(jq -r .version package.json)"
 
       - name: Build and push multi-arch container image
         uses: docker/build-push-action@v6
