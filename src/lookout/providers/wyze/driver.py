@@ -14,6 +14,8 @@ from lookout.providers.base import (
     ProviderManifest,
     StreamDescriptor,
 )
+from lookout.providers.credential_probe import wyze_credentials_present
+from lookout.providers.wyze.authenticator import WyzeSdkIssuer, WyzeTokenIssuer
 from lookout.providers.wyze.discovery import probe_wyze
 from lookout.providers.wyze.routes import create_wyze_router
 from lookout.providers.wyze.sync import sync_wyze_environment
@@ -29,10 +31,26 @@ class WyzeProviderDriver(BaseProviderDriver):
     display_name: str = "Wyze Cam Bridge"
     default_ports: dict[str, int] = {"http": 5000, "rtsp": 8554}
 
-    def __init__(self, session_ttl_seconds: float = 600.0) -> None:
+    def __init__(
+        self,
+        session_ttl_seconds: float = 600.0,
+        token_issuer: WyzeTokenIssuer | None = None,
+    ) -> None:
         super().__init__(session_ttl_seconds=session_ttl_seconds)
         self._manifest_cache: ProviderManifest | None = None
         self._router: APIRouter | None = None
+        self._token_issuer: WyzeTokenIssuer | None = token_issuer
+
+    @property
+    def token_issuer(self) -> WyzeTokenIssuer:
+        """Lazily construct the real SDK-backed issuer."""
+        if self._token_issuer is None:
+            self._token_issuer = WyzeSdkIssuer()
+        return self._token_issuer
+
+    def set_token_issuer(self, issuer: WyzeTokenIssuer | None) -> None:
+        """Inject an issuer (used by tests and the auth service)."""
+        self._token_issuer = issuer
 
     def get_ui_manifest(self) -> ProviderManifest:
         """Return UI manifest loaded from manifest.json."""
@@ -42,20 +60,29 @@ class WyzeProviderDriver(BaseProviderDriver):
         return self._manifest_cache
 
     def authenticate(self, credentials: dict[str, Any]) -> AuthResult:
-        """Initiate Wyze authentication challenge."""
-        session_id = f"wyze_session_{uuid.uuid4().hex[:12]}"
-        email = credentials.get("email", "")
-        password = credentials.get("password", "")
+        """Begin a real Wyze SDK login via the issuer, returning a 2FA challenge."""
+        email = str(credentials.get("email", ""))
+        password = str(credentials.get("password", ""))
         api_key = credentials.get("api_key")
         api_id = credentials.get("api_id")
+        totp_key = credentials.get("totp_key")
+        try:
+            issuer_session_id = self.token_issuer.begin_login(
+                email, password, key_id=api_id, api_key=api_key, totp_key=totp_key
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message=f"Wyze login could not be started: {exc}",
+            )
 
+        session_id = f"wyze_session_{uuid.uuid4().hex[:12]}"
         self.store_session(
             session_id,
             {
                 "email": email,
-                "password": password,
-                "api_key": api_key,
-                "api_id": api_id,
+                "issuer_session_id": issuer_session_id,
                 "provider": self.provider_id,
             },
         )
@@ -64,11 +91,11 @@ class WyzeProviderDriver(BaseProviderDriver):
             session_id=session_id,
             provider=self.provider_id,
             method="email/sms/totp",
-            message="2FA verification code sent to your registered Wyze device/email",
+            message="Enter the 2FA code from your authenticator app or SMS",
         )
 
     def verify_2fa(self, session_id: str, code: str) -> AuthResult:
-        """Verify Wyze 2FA challenge code and issue tokens."""
+        """Complete the Wyze SDK 2FA exchange and return real tokens."""
         session = self.get_session(session_id)
         if not session:
             return AuthResult(
@@ -76,15 +103,43 @@ class WyzeProviderDriver(BaseProviderDriver):
                 provider=self.provider_id,
                 message="Invalid or expired session",
             )
+        issuer_session_id = session.get("issuer_session_id")
+        if not issuer_session_id:
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message="Invalid or expired issuer session",
+            )
+        try:
+            tokens = self.token_issuer.complete(str(issuer_session_id), code)
+        except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            self.token_issuer.dispose(str(issuer_session_id))
+            self._sessions.pop(session_id, None)
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message=f"Wyze 2FA verification failed: {exc}",
+            )
+        self.token_issuer.dispose(str(issuer_session_id))
+        self._sessions.pop(session_id, None)
 
-        email = session.get("email", "")
         return AuthResult(
             status="authenticated",
             provider=self.provider_id,
-            auth_token="mock-wyze-token-12345",
-            refresh_token="mock-wyze-refresh-token-12345",
-            email=email,
+            auth_token=tokens.get("access_token"),
+            refresh_token=tokens.get("refresh_token"),
+            email=session.get("email", ""),
         )
+
+    def has_valid_credentials(self, config: LookoutConfig | None = None) -> dict[str, Any]:
+        """Delegate offline credential discovery to the shared probe."""
+        return wyze_credentials_present(config)
+
+    def dispose_session(self, session_id: str) -> None:
+        """Dispose any issuer session referenced by a driver session."""
+        session = self._sessions.pop(session_id, None)
+        if session and session.get("issuer_session_id"):
+            self.token_issuer.dispose(str(session["issuer_session_id"]))
 
     def probe_existing(self, config: LookoutConfig | None = None) -> DiscoveryResult:
         """Probe for existing Wyze bridge instances or configuration."""

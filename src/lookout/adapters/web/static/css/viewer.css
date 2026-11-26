@@ -23,8 +23,10 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   padding: var(--space-sm) var(--space-lg);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-xs);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -65,8 +67,85 @@ body {
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
   gap: var(--space-sm);
+  /* Anchors the one Display popover so it is reachable in Grid and Focus. */
+  position: relative;
+}
+
+/* Small-screen header: keep the density picker reachable and tighten spacing. */
+@media (max-width: 640px) {
+  .app-header {
+    padding: var(--space-xs) var(--space-sm);
+  }
+  .header-actions .btn {
+    padding: var(--space-2xs) var(--space-xs);
+  }
+  #grid-density-controls {
+    min-width: 0;
+    gap: 2px;
+  }
+  #grid-density-select {
+    max-width: 100%;
+    min-width: 0;
+  }
+  /* Stronger touch affordance for the overflowing camera chip strip. */
+  .switcher-bar {
+    -webkit-overflow-scrolling: touch;
+  }
+  .switcher-bar::-webkit-scrollbar {
+    height: 8px;
+  }
+  .switcher-bar::-webkit-scrollbar-thumb {
+    background-color: var(--text-muted);
+  }
+}
+
+/* On phones the whole action row stays icon-only so the header remains one
+   row at 320–384px. Every button keeps its id, aria-label and title. */
+@media (max-width: 480px) {
+  .header-actions {
+    gap: var(--space-2xs);
+  }
+  .header-actions .btn {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 0;
+    justify-content: center;
+  }
+  .header-actions .btn::before {
+    content: attr(data-icon);
+    font-size: 0.875rem;
+  }
+  /* The Display popover lives in the header too; keep its own labels intact
+     instead of letting the icon-only rule shrink and double them. */
+  .header-actions .display-menu .btn,
+  .header-actions .display-menu .acoustic-mode-btn {
+    width: auto;
+    min-width: 0;
+    height: auto;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    justify-content: flex-start;
+  }
+  .header-actions .display-menu .btn::before,
+  .header-actions .display-menu .acoustic-mode-btn::before {
+    content: none;
+  }
+  .header-actions .view-mode-toggles {
+    gap: var(--space-2xs);
+  }
+}
+
+/* Jump-to-events is a narrow-screen affordance only; desktop shows the drawer. */
+#jump-to-events-btn {
+  display: none;
 }
 
 /* Base Buttons */
@@ -84,6 +163,13 @@ body {
   transition: all var(--transition-fast);
   background-color: var(--bg-subtle);
   color: var(--text-main);
+}
+
+/* Compact variant used by the header and the focus bar. Its sizing lives in
+   CSS (not inline styles) so the narrow-screen icon-only rule can override it. */
+.btn-sm {
+  padding: var(--space-2xs) var(--space-xs);
+  font-size: 0.8125rem;
 }
 
 .btn:hover {
@@ -114,11 +200,29 @@ body {
   gap: var(--space-xs);
   overflow-x: auto;
   white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+/* When the chip strip actually overflows, fade its right edge so the scroll
+   affordance is visible without hiding any chip from keyboard/pointer users. */
+.switcher-bar[data-scrollable="true"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent 100%);
+}
+
+.switcher-bar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.switcher-bar::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: var(--radius-full);
 }
 
 .cam-tab {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-md);
   border-radius: var(--radius-full);
@@ -154,12 +258,50 @@ body {
   border-radius: var(--radius-full);
 }
 
-/* Main Layout Grid */
+/* Main Layout Grid -- fluid, resizable events drawer. */
 .viewer-main {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: minmax(0, 1fr) 6px var(--events-panel-width, clamp(320px, 22vw, 720px));
   flex: 1;
   min-height: 0;
+  max-height: calc(100vh - 60px);
+  overflow: auto;
+}
+
+/* Collapsing the events pane reclaims its entire column: the stage becomes
+   the single grid column and the separator disappears. The JS mirrors the
+   collapsed state with .events-collapsed for browsers without :has(). */
+.viewer-main:has(.timeline-section.collapsed),
+.viewer-main.events-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.viewer-main:has(.timeline-section.collapsed) #events-resize-handle,
+.viewer-main.events-collapsed #events-resize-handle {
+  display: none;
+}
+
+.viewer-main:has(.timeline-section.collapsed) .timeline-section.collapsed,
+.viewer-main.events-collapsed .timeline-section.collapsed {
+  height: auto;
+  min-height: 0;
+  border-left: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.events-resize-handle {
+  width: 6px;
+  background-color: var(--border-subtle);
+  cursor: col-resize;
+  flex: 0 0 6px;
+  touch-action: none;
+}
+
+.events-resize-handle:hover,
+.events-resize-handle:focus-visible {
+  background-color: var(--accent-primary);
+  outline: 1px solid var(--accent-primary);
 }
 
 @media (max-width: 960px) {
@@ -167,6 +309,14 @@ body {
     grid-template-columns: 1fr;
     display: flex;
     flex-direction: column;
+    max-height: none;
+    overflow: visible;
+  }
+  .events-resize-handle {
+    display: none;
+  }
+  #jump-to-events-btn {
+    display: inline-flex;
   }
 }
 
@@ -181,13 +331,28 @@ body {
 
 .video-container {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   aspect-ratio: 16 / 9;
+  max-width: calc(65vh * 16 / 9);
+  max-height: 65vh;
+  margin: 0 auto;
   background-color: #000000;
   border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-md);
   touch-action: none;
+}
+
+/* The video itself. Sibling controls/panel let the acoustic visualizer switch
+   between normal flow and a pinned bottom overlay without moving DOM nodes. */
+.video-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
 }
 
 .video-player {
@@ -197,11 +362,285 @@ body {
   display: block;
 }
 
+/* Single translucent, theme-aware control bar pinned to the top of the
+   player. It only covers its own box, so video interaction elsewhere stays
+   available. Playback buttons, focus-stage actions, acoustic mode buttons,
+   and the LIVE badge all live here without duplicating any control. */
+.focus-control-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background-color: rgba(15, 23, 42, 0.72);
+  background-color: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-main);
+}
+
+/* The groups share one scrollable row. Keeping them in a wrapper (rather than
+   making the bar itself scroll) lets the LIVE badge stay pinned top-right and
+   non-overlapping while the controls scroll underneath a fade affordance. */
+.control-bar-scroll {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.focus-stage-actions,
+.playback-essentials,
+.player-controls-bar,
+.acoustic-mode-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.focus-stage-actions,
+.playback-essentials,
+.acoustic-mode-controls {
+  flex: 0 0 auto;
+}
+
+.focus-control-overlay .btn,
+.focus-control-overlay .btn-pill {
+  padding: 3px 8px;
+  font-size: 0.75rem;
+}
+
+.focus-control-overlay .btn-pill {
+  padding: 0.2rem 0.5rem;
+}
+
+/* Single 3-state acoustic control (Overlay / Below / Hidden). Exactly one
+   button is active; the active state is both visual and exposed via
+   aria-pressed. data-mode keeps a stable hook for the UX suite. */
+.acoustic-mode-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background-color: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+}
+
+.acoustic-mode-segment .acoustic-mode-btn {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.acoustic-mode-segment .acoustic-mode-btn:hover {
+  color: var(--text-main);
+}
+
+.acoustic-mode-segment .acoustic-mode-btn[aria-pressed="true"],
+.acoustic-mode-segment .acoustic-mode-btn.active {
+  background-color: var(--accent-primary);
+  color: var(--text-inverse);
+  border-color: var(--accent-primary);
+}
+
+/* Unified Display popover. One button in the bar opens every view-state
+   control; the panel is absolutely positioned against the bar (not inside the
+   horizontally scrollable row) so it is never clipped at narrow widths. */
+.display-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: var(--space-sm);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 250px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background-color: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+  box-shadow: var(--shadow-md, var(--shadow-sm));
+  color: var(--text-main);
+}
+
+.display-menu[hidden] {
+  display: none;
+}
+
+.display-menu-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.display-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.display-menu-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.display-toggle {
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.display-toggle[aria-pressed="true"] {
+  background-color: var(--accent-primary);
+  color: var(--text-inverse);
+  border-color: var(--accent-primary);
+}
+
+.display-toggle:disabled,
+.display-toggle[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+/* Compact, pinnable wall-clock / event-time readout inside the bar.
+   Theme-independent video-player OSD: the pill keeps its dark background in
+   both colour schemes, so its foregrounds are fixed light values rather than
+   theme tokens (a light-theme dark-on-dark pairing is unreadable). */
+.focus-time-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full, 9999px);
+  background: rgba(15, 23, 42, 0.6);
+  color: #f8fafc;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.focus-clock-home {
+  color: #cbd5e1;
+}
+
+.focus-event-time {
+  color: #93c5fd;
+}
+
+.focus-event-age {
+  color: #cbd5e1;
+}
+
+/* Pinning keeps only the readout visible after the bar auto-hides: the bar
+   becomes a transparent, non-interactive shell and every sibling fades out. */
+.focus-control-overlay.controls-hidden.time-readout-pinned {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.focus-control-overlay.controls-hidden.time-readout-pinned > :not(.focus-time-readout) {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Snapshot fallback has no media; make the disabled reason discoverable. */
+.focus-control-overlay .btn[aria-disabled="true"],
+.tile-stream-btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+.return-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+}
+
+/* One shared play/pause + mute pair works for both live and event media. */
+.focus-control-overlay[data-mode="live"] .playback-toggles,
+.focus-control-overlay[data-mode="live"] .snapshot-action-controls,
+.focus-control-overlay[data-mode="live"] #video-download-wrap {
+  display: none;
+}
+
+/* Auto-hide: reveal on pointer movement/tap/focus, hide only after idle while
+   playing. Focus inside the bar or hover keeps the bar visible indefinitely. */
+.focus-control-overlay {
+  transition: opacity var(--transition-fast), visibility var(--transition-fast);
+}
+
+.focus-control-overlay.controls-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* The playback group reads as part of the single translucent bar. */
+.focus-control-overlay .player-controls-bar {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* Opt-in placement: the same bar drops into normal flow below the video. */
+.video-container.controls-below .focus-control-overlay {
+  position: static;
+  border-bottom: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* When the bar is below, the badge stays at the top-right of the player.
+   The bar is static in that mode, so the badge resolves against the video
+   container instead of the bar. */
+.video-container.controls-below #live-duration-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin-left: 0;
+  z-index: 31;
+}
+
 /* Live Session Duration HUD Overlay (e.g. 🔴 LIVE 00:01:24) */
 .live-duration-badge {
-  position: absolute;
-  top: 14px;
-  right: 14px;
+  position: relative;
+  margin-left: auto;
   background: rgba(15, 23, 42, 0.75);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -214,11 +653,21 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  z-index: 10;
+  flex: 0 0 auto;
+  z-index: 31;
   letter-spacing: 0.5px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   pointer-events: none;
+}
+
+/* Grid tiles keep their original floating clock badge; only the focus-stage
+   badge is docked into the unified control bar. */
+.tile-clock-badge {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  margin-left: 0;
 }
 
 .live-indicator-dot {
@@ -281,6 +730,27 @@ body {
   background-color: #ffffff;
 }
 
+/* Graceful degradation: the snapshot stays visible and a short status line
+   explains why. Ring On-Demand gets a provider-specific hint from JS. */
+.live-unavailable-status {
+  position: relative;
+  z-index: 10;
+  max-width: min(90%, 460px);
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.snapshot-overlay {
+  flex-direction: column;
+}
+
 /* Player Controls Bar */
 .player-controls-bar {
   display: flex;
@@ -314,7 +784,9 @@ body {
   border-color: var(--accent-primary);
 }
 
-/* Acoustic Waveform & VU Meter */
+/* Acoustic Waveform & VU Meter -- normal flow under the player by default.
+   The .video-container mode classes below opt into a pinned translucent
+   overlay or a fully collapsed (hidden) panel. */
 .acoustic-panel {
   background-color: var(--bg-surface);
   border-radius: var(--radius-md);
@@ -323,6 +795,35 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  flex: 0 0 auto;
+}
+
+/* Pinned over the lower part of the video: theme-aware and translucent,
+   click-through so zoom/pan on the video still works. It sits below the
+   top control bar in stacking order. */
+.video-container.acoustic-overlay .acoustic-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  pointer-events: none;
+  background-color: rgba(15, 23, 42, 0.72);
+  background-color: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* Hidden (formerly "collapsed") gives all reclaimed height back to the video.
+   The legacy class is kept so saved sessions/upgrades keep rendering. */
+.video-container.acoustic-collapsed .acoustic-panel {
+  display: none;
+}
+
+.video-container.acoustic-hidden .acoustic-panel {
+  display: none;
 }
 
 .acoustic-header {
@@ -426,11 +927,18 @@ body {
 .timeline-list {
   flex: 1 1 0%;
   min-height: 0;
+  max-height: 70vh;
+  height: 60vh;
   overflow-y: auto;
   padding: var(--space-sm);
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+}
+
+.timeline-section.collapsed .timeline-list,
+.timeline-section.collapsed .filter-bar {
+  display: none;
 }
 
 .timeline-group-header {
@@ -490,8 +998,10 @@ body {
 
 .event-header-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-xs);
+  row-gap: 4px;
   margin-bottom: 2px;
 }
 
@@ -555,15 +1065,14 @@ body {
 
 .event-time {
   font-size: 0.6875rem;
-  color: var(--text-muted);
+  color: var(--text-muted-aa);
 }
 
 .event-summary {
   font-size: 0.8125rem;
   color: var(--text-main);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .telemetry-row {
@@ -965,21 +1474,21 @@ body {
 }
 
 .badge-provider.ring {
-  background-color: rgba(0, 112, 204, 0.2);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.4);
+  background-color: var(--badge-ring-bg);
+  color: var(--badge-ring-fg);
+  border: 1px solid var(--badge-ring-border);
 }
 
 .badge-provider.wyze {
-  background-color: rgba(0, 195, 137, 0.18);
-  color: #34d399;
-  border: 1px solid rgba(52, 211, 153, 0.4);
+  background-color: var(--badge-wyze-bg);
+  color: var(--badge-wyze-fg);
+  border: 1px solid var(--badge-wyze-border);
 }
 
 .badge-provider.generic {
-  background-color: rgba(100, 116, 139, 0.2);
-  color: #94a3b8;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  background-color: var(--badge-generic-bg);
+  color: var(--badge-generic-fg);
+  border: 1px solid var(--badge-generic-border);
 }
 
 /* Stream Mode Badges */
@@ -994,15 +1503,15 @@ body {
 }
 
 .badge-stream.live_rtc {
-  background-color: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background-color: var(--badge-live-bg);
+  color: var(--badge-live-fg);
+  border: 1px solid var(--badge-live-border);
 }
 
 .badge-stream.on_demand {
-  background-color: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background-color: var(--badge-ondemand-bg);
+  color: var(--badge-ondemand-fg);
+  border: 1px solid var(--badge-ondemand-border);
 }
 
 /* Media Badges in Timeline */
@@ -1052,6 +1561,38 @@ body {
   -webkit-user-drag: none;
 }
 
+/* Snapshot-only events (media purged / no clip) size the stage to the image
+   instead of reserving a full video-player box with an empty black area. The
+   badge, timestamp and Download Snapshot / Inspect Frame controls stay in
+   place; the container simply stops forcing 16:9 height. */
+.video-container.snapshot-only {
+  background-color: transparent;
+}
+
+.video-container.snapshot-only .video-surface {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-container.snapshot-only .event-snapshot-card {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-width: 100%;
+  max-height: min(70vh, 480px);
+  background-color: transparent;
+}
+
+.video-container.snapshot-only .snapshot-card-img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: min(70vh, 480px);
+  object-fit: contain;
+}
+
 .snapshot-badge {
   position: absolute;
   top: 12px;
@@ -1095,11 +1636,216 @@ body {
   min-height: 0;
 }
 
+/* Focus stage: a viewport-fitting flex column. The video is the only
+   flexible item, so the button row, player controls, acoustic panel and AI
+   details all stay visible (1280x800 desktop and 375x667 phone). The
+   min-height floor keeps the stage a visible, usable surface even before any
+   media is selected (when every child collapses to zero height); it is still
+   below the viewport-fitting max-height applied by fitFocusStage(). */
 .focus-stage {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-xs);
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 240px;
+  overflow: hidden;
+}
+
+/* JS measures the space actually available below the header/switcher/scrubber
+   so the stage also fits where viewer-main has no definite height (narrow
+   layouts). Without JS the video keeps its natural 16:9 ratio. */
+.focus-stage.is-fitted {
+  max-height: var(--focus-available-height, none);
+}
+
+.focus-stage .video-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: auto;
+  max-height: none;
+}
+
+.focus-stage.is-fitted .video-container {
+  aspect-ratio: auto;
+  max-height: none;
+}
+
+/* The video flexes; the normal-flow acoustic panel keeps its height. In
+   overlay/collapsed modes the panel leaves the flow, so the video grows. */
+.focus-stage .video-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.focus-stage .acoustic-panel {
+  flex: 0 0 auto;
+}
+
+.focus-stage > .focus-ai-details-card {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+/* Maximized and native fullscreen share one consistent full-width column:
+   no 924px video next to 1280px controls, and no empty gap below. */
+.focus-stage.maximized,
+.focus-stage:fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg-app);
+  padding: var(--space-md);
+  overflow: hidden;
+  max-height: none;
+}
+
+.focus-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+.focus-stage.maximized .video-container,
+.focus-stage:fullscreen .video-container {
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+}
+
+.focus-stage.maximized > .focus-ai-details-card,
+.focus-stage:fullscreen > .focus-ai-details-card {
+  max-height: 120px;
+}
+
+/* Compact the secondary panels on phones, fold-inner and tablets (<=960px).
+   The control bar becomes a single icon-only, horizontally scrollable row:
+   every control keeps its ID and accessible name, stays reachable, and can
+   never be clipped. Above 960px the desktop keeps the full, wrapped bar. */
+@media (max-width: 960px) {
+  .focus-stage {
+    gap: 4px;
+    min-height: 200px;
+  }
+  .focus-control-overlay {
+    flex-wrap: nowrap;
+    flex: 0 0 auto;
+    height: 44px;
+    min-height: 44px;
+    padding: 4px 6px;
+    gap: 6px;
+    align-items: center;
+  }
+  .control-bar-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+    padding-right: 24px;
+    gap: 4px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent 100%);
+  }
+  .control-bar-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .focus-control-overlay .focus-stage-actions,
+  .focus-control-overlay .playback-essentials,
+  .focus-control-overlay .player-controls-bar,
+  .focus-control-overlay .acoustic-mode-controls,
+  .focus-control-overlay .playback-toggles {
+    flex-wrap: nowrap;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+  .focus-control-overlay .player-controls-bar {
+    padding: 0;
+    background: transparent;
+  }
+  .focus-control-overlay .speed-label {
+    display: none;
+  }
+  .focus-control-overlay .btn,
+  .focus-control-overlay .btn-pill {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 0;
+    line-height: 1;
+    justify-content: center;
+  }
+  .focus-control-overlay .btn::before,
+  .focus-control-overlay .btn-pill::before {
+    content: attr(data-icon);
+    font-size: 0.875rem;
+  }
+  .focus-control-overlay .return-live-dot {
+    display: none;
+  }
+  .focus-control-overlay #live-duration-badge {
+    flex: 0 0 auto;
+    margin-left: 0;
+    padding: 3px 6px;
+    font-size: 0.625rem;
+  }
+  .focus-time-readout {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: calc(100% - 32px);
+    flex-wrap: wrap;
+    margin-left: 0;
+    padding: 2px 6px;
+    gap: 1px 4px;
+    font-size: 0.625rem;
+    white-space: normal;
+  }
+  .focus-time-readout .readout-label {
+    display: none;
+  }
+  .display-menu {
+    right: 6px;
+    min-width: 230px;
+  }
+  .display-menu-row {
+    flex-wrap: wrap;
+  }
+  .display-menu .acoustic-mode-segment {
+    flex-wrap: wrap;
+  }
+  .focus-stage .acoustic-panel {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+  .focus-stage .acoustic-canvas-wrap {
+    height: 32px;
+  }
+  .focus-stage > .focus-ai-details-card {
+    max-height: 56px;
+    padding: 4px 8px;
+  }
+  /* Global header pause control stays icon-only on narrow screens. */
+  #global-pause-btn {
+    width: 32px;
+    min-width: 32px;
+    padding: var(--space-2xs);
+    font-size: 0;
+  }
+  #global-pause-btn::before {
+    content: attr(data-icon);
+    font-size: 0.875rem;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 960px) {
+  .focus-stage > .focus-ai-details-card {
+    max-height: 72px;
+  }
 }
 
 .live-grid-container {
@@ -1108,8 +1854,31 @@ body {
   width: 100%;
 }
 
+/* Auto-Fit is capped at 3 columns so wide stages are filled instead of
+   leaving most of the viewport empty below a single short row. */
 .live-grid-container.density-auto {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(200px, 1fr);
+}
+
+@media (max-width: 640px) {
+  .live-grid-container.density-auto {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1440px) {
+  .live-grid-container.density-auto {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Let tiles grow vertically on roomy layouts so the stage is not left blank. */
+@media (min-width: 961px) {
+  .density-auto .tile-stage {
+    flex: 1;
+    aspect-ratio: auto;
+  }
 }
 
 .live-grid-container.density-1-col {
@@ -1184,6 +1953,63 @@ body {
   display: block;
 }
 
+/* Per-tile play/pause + mute. Hidden until the tile's video surface is tapped
+   or the tile is hovered/focused; interacting with the buttons never hides it. */
+.tile-stream-controls {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 25;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition-fast), visibility var(--transition-fast);
+}
+
+.tile-stream-controls.controls-visible,
+.camera-grid-tile:hover .tile-stream-controls,
+.camera-grid-tile:focus-within .tile-stream-controls {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.tile-stream-btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background-color: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.tile-stream-btn[aria-pressed="true"] {
+  border-color: var(--accent-primary);
+}
+
+.tile-stage[data-paused="true"]::after {
+  content: "⏸ Paused";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 24;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(15, 23, 42, 0.78);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .tile-overlay {
   position: absolute;
   inset: 0;
@@ -1211,6 +2037,28 @@ body {
   border-color: var(--accent-primary);
 }
 
+/* Tile-level graceful degradation status. Positioned above the retry button
+   so both stay visible over the snapshot background. */
+.tile-live-status {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 12;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  text-align: center;
+  pointer-events: none;
+}
+
+.tile-live-status[hidden] {
+  display: none;
+}
+
 /* ==========================================================================
    Focus Mode AI Details & Telemetry Card & Event Camera Tags
    ========================================================================== */
@@ -1224,6 +2072,12 @@ body {
   flex-direction: column;
   gap: var(--space-xs);
   box-shadow: var(--shadow-sm);
+}
+
+/* The Display popover's AI toggle is authoritative: it overrides the inline
+   display set by event-player.js without moving or restyling the card. */
+.focus-ai-details-card.ai-details-hidden {
+  display: none !important;
 }
 
 .ai-details-header {
@@ -1325,6 +2179,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  white-space: nowrap;
   font-size: 0.6875rem;
   font-weight: 600;
   padding: 1px 6px;

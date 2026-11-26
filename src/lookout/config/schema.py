@@ -1,6 +1,6 @@
 """Pydantic configuration schemas with strict cross-field validation."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,6 +21,7 @@ class ResidentConfig(BaseModel):
     enrolled_faces: list[str] = Field(
         default_factory=list, description="List of face embedding or reference image paths"
     )
+    emoji: str = Field(default="👤", description="Display emoji for this catalog entity")
 
 
 class PetConfig(BaseModel):
@@ -34,6 +35,7 @@ class PetConfig(BaseModel):
     breed: str | None = Field(default=None, description="Animal breed")
     color: str | None = Field(default=None, description="Coat color")
     enrolled_photos: list[str] = Field(default_factory=list, description="List of reference photos")
+    emoji: str = Field(default="🐶", description="Display emoji for this catalog entity")
 
 
 class VehicleConfig(BaseModel):
@@ -50,6 +52,7 @@ class VehicleConfig(BaseModel):
     enrolled_photos: list[str] = Field(
         default_factory=list, description="List of reference photo paths or filenames"
     )
+    emoji: str = Field(default="🚗", description="Display emoji for this catalog entity")
 
 
 class PolygonZoneConfig(BaseModel):
@@ -106,6 +109,23 @@ class PtzPresetConfig(BaseModel):
     zoom: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized zoom position")
 
 
+class ContinuousRecordingConfig(BaseModel):
+    """Configuration for always-on continuous recording into the shared pool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether continuous recording is active")
+    segment_seconds: int = Field(
+        default=60, ge=1, description="Length of each recorded segment in seconds"
+    )
+    retention_days: int = Field(
+        default=1, ge=1, description="Target retention in days (FIFO rollover is the hard limit)"
+    )
+    max_storage_gb: float = Field(
+        default=50.0, gt=0.0, description="Shared storage cap in gigabytes"
+    )
+
+
 class CameraConfig(BaseModel):
     """Configuration for an ingested camera feed."""
 
@@ -124,12 +144,25 @@ class CameraConfig(BaseModel):
         default=None, description="Camera stream delivery mode (e.g. on_demand, live_rtc)"
     )
     enabled: bool = Field(default=True, description="Whether camera feed ingestion is active")
+    notifications_enabled: bool = Field(
+        default=True, description="Whether notifications are enabled for this camera"
+    )
     notifications_muted: bool = Field(
         default=False, description="Whether camera notifications are muted"
     )
-    mqtt_id: str | None = Field(
+    notification_min_threat: ThreatLevel | None = Field(
         default=None,
-        description="Device id used on MQTT bridge topics (e.g. ring-mqtt device id)",
+        description=(
+            "Minimum threat level to trigger notifications (None inherits global threshold)"
+        ),
+    )
+    notification_event_types: list[str] = Field(
+        default_factory=lambda: ["motion", "sound", "person", "ding"],
+        description="Event types that trigger notifications",
+    )
+    notify_pass1: bool = Field(default=True, description="Whether to send instant Pass 1 alerts")
+    notify_pass2: bool = Field(
+        default=True, description="Whether to send enriched Pass 2 clip updates"
     )
     location: str | None = Field(default=None, description="Physical location (e.g., Front Porch)")
     sensitivity: float = Field(
@@ -150,8 +183,8 @@ class CameraConfig(BaseModel):
         description="Whether to render session timestamp overlay (auto-enabled for Ring)",
     )
     ptz_enabled: bool = Field(default=False, description="Whether PTZ control is enabled")
-    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "mqtt-wyze", "native-wyze", "none"] = (
-        Field(default="none", description="PTZ control protocol")
+    ptz_protocol: Literal["go2rtc-wyze", "go2rtc-onvif", "native-wyze", "none"] = Field(
+        default="none", description="PTZ control protocol"
     )
     ptz_cam_name: str | None = Field(
         default=None,
@@ -167,10 +200,36 @@ class CameraConfig(BaseModel):
     native_device_id: str | None = Field(
         default=None, description="Native provider device id for this camera"
     )
-    live_stream_url: str | None = Field(
-        default=None,
-        description="Optional RTSP/HTTP H.264 source used for Ring true live view",
+    ha_enabled: bool = Field(
+        default=True, description="Whether this camera is published to Home Assistant"
     )
+    ha_entity_name: str | None = Field(
+        default=None, description="Home Assistant entity name / display name"
+    )
+    ha_unique_id: str | None = Field(
+        default=None, description="Home Assistant unique id (defaults to camera id)"
+    )
+    ha_device_class: str | None = Field(default=None, description="Home Assistant device class")
+    ha_icon: str | None = Field(default=None, description="Home Assistant icon")
+    ha_event_types: list[str] = Field(
+        default_factory=lambda: ["motion", "person", "sound", "ding"],
+        description="Lookout event types mapped to Home Assistant event entities",
+    )
+    continuous_recording: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this camera records continuously (None inherits the global "
+            "continuous_recording.enabled setting)"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _sync_notification_flags(self) -> Self:
+        if not self.notifications_enabled:
+            self.notifications_muted = True
+        elif self.notifications_muted:
+            self.notifications_enabled = False
+        return self
 
     @field_validator("stream_url")
     @classmethod
@@ -217,6 +276,12 @@ class Go2RtcConfig(BaseModel):
         default=None,
         description="Directory for the embedded go2rtc config/log files",
     )
+    native_rtsp_port: int = Field(
+        default=8554,
+        gt=0,
+        le=65535,
+        description="Loopback RTSP listener port for embedded go2rtc (H.264 transcoding)",
+    )
 
 
 class WyzeConfig(BaseModel):
@@ -231,12 +296,6 @@ class WyzeConfig(BaseModel):
     totp_key: str | None = Field(default=None, description="Wyze TOTP secret key for automatic 2FA")
     auth_token: str | None = Field(default=None, description="Wyze API access token")
     refresh_token: str | None = Field(default=None, description="Wyze API refresh token")
-    external_bridge_url: str | None = Field(
-        default=None, description="External docker-wyze-bridge Web API endpoint"
-    )
-    bridge_rtsp_url: str | None = Field(
-        default=None, description="External docker-wyze-bridge RTSP endpoint"
-    )
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
     native_ingestion: bool = Field(
         default=False, description="Whether native Wyze ingestion is enabled"
@@ -246,6 +305,27 @@ class WyzeConfig(BaseModel):
     )
     discovery_enabled: bool = Field(
         default=True, description="Whether native Wyze device discovery is enabled"
+    )
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
+    )
+    bridge_rtsp_url: str | None = Field(
+        default=None, description="Optional RTSP URL for legacy/external Wyze bridge"
+    )
+    external_bridge_url: str | None = Field(
+        default=None, description="Optional base URL for external Wyze bridge API"
+    )
+    stream_dtls: bool = Field(
+        default=True, description="Whether the go2rtc wyze:// TUTK source uses DTLS"
+    )
+    stream_subtype: str = Field(
+        default="hd", description="Stream subtype requested from the Wyze TUTK producer"
+    )
+    stream_reconnect_backoff_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Base seconds for exponential reconnect backoff on stream failures",
     )
 
 
@@ -264,9 +344,6 @@ class RingConfig(BaseModel):
     )
     email: str | None = Field(default=None, description="Ring account email")
     session_id: str | None = Field(default=None, description="Active 2FA challenge session ID")
-    external_stream_url: str | None = Field(
-        default=None, description="External ring-mqtt stream URL"
-    )
     oauth_url: str = Field(
         default="https://oauth.ring.com", description="Ring OAuth authentication endpoint"
     )
@@ -287,9 +364,15 @@ class RingConfig(BaseModel):
         default=True,
         description="Whether to render an elapsed session timestamp overlay on Ring live streams",
     )
-    live_rtsp_url: str | None = Field(
-        default=None,
-        description="Optional RTSP URL for Ring live H.264 streams (ring-mqtt style)",
+    logged_out: bool = Field(
+        default=False,
+        description="Credentials were cleared locally via logout; suppress env/sidecar rediscovery",
+    )
+    api_user_agent: str | None = Field(
+        default=None, description="Override the client user agent sent to Ring (device-compatible)"
+    )
+    api_version: int | None = Field(
+        default=None, description="Override the Ring clients_api version header"
     )
 
 
@@ -408,6 +491,11 @@ class StorageConfig(BaseModel):
     low_watermark_percent: float = Field(
         default=90.0, gt=0.0, le=100.0, description="Safe buffer target percentage of quota"
     )
+
+    @property
+    def max_storage_bytes(self) -> int:
+        return int(self.max_storage_gb * (1024**3))
+
     warning_threshold_percent: float = Field(
         default=90.0, gt=0.0, le=100.0, description="Warning alert trigger"
     )
@@ -488,8 +576,8 @@ class CascadeConfig(BaseModel):
         default=25.0, gt=0.0, description="Cumulative timeout across all tiers"
     )
     fallback_category: EventCategory = Field(
-        default=EventCategory.UNKNOWN_VISITOR,
-        description="Default fallback category when all tiers fail",
+        default=EventCategory.ABSTAINED,
+        description="Neutral category when all inference tiers fail (abstain, never guess)",
     )
     min_confidence: float = Field(
         default=0.5,
@@ -533,7 +621,36 @@ class AudioClassifierConfig(BaseModel):
 
     model_path: str = Field(default="models/yamnet.tflite", description="YAMNet model file path")
     confidence_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Minimum confidence for acoustic events"
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence before an acoustic label may set an event category",
+    )
+    sound_label_categories: dict[str, EventCategory | None] = Field(
+        default_factory=lambda: {
+            # Confident emergency labels escalate to an acoustic anomaly.
+            "glass_break": EventCategory.ACOUSTIC_ANOMALY,
+            "car_alarm": EventCategory.ACOUSTIC_ANOMALY,
+            "smoke_alarm": EventCategory.ACOUSTIC_ANOMALY,
+            "siren": EventCategory.ACOUSTIC_ANOMALY,
+            "gunshot": EventCategory.ACOUSTIC_ANOMALY,
+            "scream": EventCategory.ACOUSTIC_ANOMALY,
+            # Benign / non-discriminating labels never set an acoustic category.
+            "alarm": None,
+            "other": None,
+            "ambient": None,
+            "silence": None,
+            "doorbell": None,
+            "speech": None,
+            "bark": None,
+            "dog_bark": None,
+            "dog_whimper": None,
+            "cat_meow": None,
+        },
+        description=(
+            "Configurable YAMNet-style label to event-category mapping. A null value marks a "
+            "benign label that must not raise an acoustic event; absent labels abstain."
+        ),
     )
     sample_rate: int = Field(default=16000, gt=0, description="Expected audio sample rate in Hz")
     emergency_labels: list[str] = Field(
@@ -557,11 +674,32 @@ class MqttConfig(BaseModel):
     port: int = Field(default=1883, ge=1, le=65535, description="MQTT broker port")
     username: str | None = Field(default=None, description="MQTT username")
     password: str | None = Field(default=None, description="MQTT password")
-    ring_topic: str = Field(default="ring", description="ring-mqtt base topic")
-    wyze_topic: str = Field(default="wyzebridge", description="wyze-bridge base topic")
     cooldown_seconds: float = Field(
         default=30.0, ge=0.0, description="Minimum seconds between events per camera"
     )
+
+
+class HomeAssistantConfig(BaseModel):
+    """Configuration for Home Assistant integration and sync."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether Home Assistant sync is active")
+    base_url: str | None = Field(
+        default="http://localhost:8123", description="Home Assistant base URL"
+    )
+    access_token: str | None = Field(
+        default=None, description="Long-lived Home Assistant access token"
+    )
+    ingress_url: str | None = Field(
+        default=None, description="Home Assistant ingress URL for deep links"
+    )
+    mqtt_host: str | None = Field(default=None, description="Optional MQTT broker host override")
+    mqtt_port: int | None = Field(
+        default=None, ge=1, le=65535, description="Optional MQTT broker port override"
+    )
+    mqtt_username: str | None = Field(default=None, description="Optional MQTT username override")
+    mqtt_password: str | None = Field(default=None, description="Optional MQTT password override")
 
 
 class LookoutConfig(BaseModel):
@@ -570,6 +708,13 @@ class LookoutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system_name: str = Field(default="Lookout", description="System installation name")
+    display_timezone: str = Field(
+        default="",
+        description=(
+            "IANA timezone (e.g. America/New_York) used by the viewer for event "
+            "timestamps; empty means browser-local time"
+        ),
+    )
     hardware_profile: str | None = Field(
         default=None,
         description="Declarative edge hardware sizing profile name (e.g. intel-n100-mini-pc)",
@@ -594,12 +739,19 @@ class LookoutConfig(BaseModel):
     zones: list[PolygonZoneConfig] = Field(default_factory=list)
     light_ml: LightMLConfig = Field(default_factory=LightMLConfig)
     mqtt: MqttConfig = Field(default_factory=MqttConfig)
+    continuous_recording: ContinuousRecordingConfig = Field(
+        default_factory=ContinuousRecordingConfig,
+        description="Always-on continuous recording policy",
+    )
     public_url: str | None = Field(
         default=None, description="Public base URL of Lookout (used for notification links/media)"
     )
     home_assistant_url: str | None = Field(
         default=None,
         description="Home Assistant base URL; when set, notification links open its Lookout panel",
+    )
+    home_assistant: HomeAssistantConfig = Field(
+        default_factory=HomeAssistantConfig, description="Home Assistant integration settings"
     )
 
     @model_validator(mode="after")
@@ -653,6 +805,34 @@ class LookoutConfig(BaseModel):
         return self
 
 
+def resolve_record_audio(camera: Any, config: Any | None = None) -> bool:
+    """Resolve the effective ``record_audio`` value for a camera.
+
+    Precedence: a per-camera ``record_audio`` override, then the global
+    ``transcode.record_audio`` value, then ``True``. ``camera`` may be a
+    :class:`CameraConfig`, a lightweight camera stub, or a camera-id string
+    (looked up in ``config.cameras``).
+    """
+    if isinstance(camera, str):
+        matched: Any = None
+        for candidate in getattr(config, "cameras", None) or []:
+            if str(getattr(candidate, "id", "")) == camera:
+                matched = candidate
+                break
+        camera = matched
+
+    override = getattr(camera, "record_audio", None)
+    if override is not None:
+        return bool(override)
+
+    transcode = getattr(config, "transcode", None)
+    global_value = getattr(transcode, "record_audio", None)
+    if global_value is not None:
+        return bool(global_value)
+
+    return True
+
+
 SENSITIVE_KEYS: set[str] = {
     "password",
     "auth_token",
@@ -661,6 +841,11 @@ SENSITIVE_KEYS: set[str] = {
     "totp_key",
     "key_id",
     "client_secret",
+    "home_assistant_access_token",
+    "home_assistant_token",
+    "ha_access_token",
+    "access_token",
+    "mqtt_password",
 }
 
 

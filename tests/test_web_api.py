@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from lookout.adapters.ai_cascade import CascadeVisionAdapter
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.app import create_app
-from lookout.config.schema import CameraConfig, LookoutConfig, StorageConfig
+from lookout.config.schema import CameraConfig, LookoutConfig, ResidentConfig, StorageConfig
 from lookout.domain.models import (
     BoundingBox,
     CameraEvent,
@@ -212,6 +212,100 @@ def test_entities_api_endpoints_crud(client: TestClient) -> None:
     assert del_res.status_code == 200
 
 
+def test_entities_emoji_crud_and_update(client: TestClient) -> None:
+    """TR-5 (AC1/AC2/AC7): POST/GET/upsert round trip with a settable emoji."""
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "pet-emoji-1",
+            "name": "Mochi",
+            "entity_type": "pet",
+            "species": "dog",
+            "emoji": "🐕",
+        },
+    )
+    assert create_res.status_code == 200
+
+    get_res = client.get("/api/entities/pet-emoji-1")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == "Mochi"
+    assert get_res.json()["emoji"] == "🐕"
+
+    before_len = len(client.get("/api/entities").json()["entities"])
+
+    update_res = client.post(
+        "/api/entities",
+        json={
+            "id": "pet-emoji-1",
+            "name": "Mochi Jr",
+            "entity_type": "pet",
+            "species": "dog",
+            "emoji": "🦮",
+        },
+    )
+    assert update_res.status_code == 200
+
+    updated = client.get("/api/entities/pet-emoji-1").json()
+    assert updated["name"] == "Mochi Jr"
+    assert updated["emoji"] == "🦮"
+
+    after = client.get("/api/entities").json()["entities"]
+    assert len(after) == before_len
+    assert sum(1 for e in after if e["id"] == "pet-emoji-1") == 1
+
+    # The upsert replaces (never appends to) the in-memory and matcher stores.
+    assert set(client.app.state.custom_entities) == {"pet-emoji-1"}
+    matcher = client.app.state.event_service.entity_matcher
+    if matcher is not None:
+        assert sum(1 for p in matcher.pets if p.id == "pet-emoji-1") == 1
+
+    del_res = client.delete("/api/entities/pet-emoji-1")
+    assert del_res.status_code == 200
+
+
+def test_list_entities_emits_emoji_for_all_sources(client: TestClient) -> None:
+    """TR-9 (AC2/AC3): every listed entity exposes a resolved, non-null emoji."""
+    config = client.app.state.config
+    assert config is not None
+    config.residents.append(ResidentConfig(id="res-config-1", name="Config Resident"))
+
+    # Posting a pending entity with an emoji also persists it in members_repo.
+    create_res = client.post(
+        "/api/entities",
+        json={
+            "id": "member-emoji-1",
+            "name": "Cat",
+            "entity_type": "pet",
+            "species": "cat",
+            "emoji": "🐈",
+        },
+    )
+    assert create_res.status_code == 200
+
+    # A runtime-only custom entity carrying an explicit emoji (no member row).
+    client.app.state.custom_entities["custom-emoji-1"] = {
+        "id": "custom-emoji-1",
+        "name": "Custom Fox",
+        "entity_type": "pet",
+        "species": "fox",
+        "attributes": {},
+        "enrolled_photos": [],
+        "enrolled_faces": [],
+        "emoji": "🦊",
+    }
+
+    res = client.get("/api/entities")
+    assert res.status_code == 200
+    entities = res.json()["entities"]
+    assert entities
+    assert all(e.get("emoji") for e in entities), "every entity must emit a non-null emoji"
+
+    by_id = {e["id"]: e for e in entities}
+    assert by_id["res-config-1"]["emoji"] == "👤"
+    assert by_id["member-emoji-1"]["emoji"] == "🐈"
+    assert by_id["custom-emoji-1"]["emoji"] == "🦊"
+
+
 def test_enrich_event_endpoint(client: TestClient) -> None:
     """Verify POST /api/events/{event_id}/enrich runs Pass 2 clip enrichment."""
     sample_frames = [
@@ -230,6 +324,24 @@ def test_enrich_event_endpoint(client: TestClient) -> None:
 
     res_404 = client.post("/api/events/non-existent-event/enrich", json={"frames": []})
     assert res_404.status_code == 404
+
+
+def test_enrich_event_endpoint_second_pass(client: TestClient) -> None:
+    """TR-12: Verify POST /api/events/{event_id}/enrich second pass returns enriched fields."""
+    sample_frames = [
+        "dog pet squatting elimination lawn",
+        "dog pet squatting elimination lawn",
+    ]
+    response = client.post(
+        "/api/events/event-2/enrich",
+        json={"frames": sample_frames},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "event-2"
+    # Enriched fields present in body
+    assert "metadata" in data
+    assert data["metadata"].get("sustained_elimination") is True
 
 
 def test_entity_photo_upload_and_delete(client: TestClient) -> None:
@@ -278,3 +390,78 @@ def test_entity_photo_upload_size_limit_exceeded(client: TestClient) -> None:
     res = client.post("/api/entities/pet-corgi/photos", files=files)
     assert res.status_code == 413
     assert "File too large. Max size is 15MB." in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse(
+    tmp_path: Path,
+) -> None:
+    """Verify _on_clip_ready persists media_uri to SQLite even with binary clip_frame_samples."""
+    from lookout.adapters.sqlite.repository import SqliteEventRepository
+
+    db_path = tmp_path / "lookout.db"
+    cfg = LookoutConfig(
+        system_name="Test Lookout",
+        storage=StorageConfig(base_path=str(tmp_path), database_path=str(db_path)),
+        cameras=[
+            CameraConfig(
+                id="front-porch",
+                name="Front Porch",
+                stream_url="rtsp://localhost:8554/front_porch",
+            ),
+        ],
+    )
+    repo = SqliteEventRepository(db_path=str(db_path))
+    app = create_app(config=cfg, repository=repo)
+
+    svc = app.state.event_service
+    evt = await svc.ingest_raw_event(
+        "front-porch",
+        {"metadata": {"trigger": "motion"}, "snapshot_uri": "/media/events/snap.jpg"},
+    )
+    evt.media_uri = f"/media/events/front-porch_{evt.id}.mp4"
+    evt.metadata["clip_frame_samples"] = [b"\xff\xd8\xff\xe0fake-jpeg-bytes\xff\xd9"]
+
+    q = await app.state.broadcast_hub.subscribe()
+    await app.state.on_clip_ready(evt)
+
+    saved = await repo.get_by_id(evt.id)
+    assert saved is not None
+    assert saved.media_uri == f"/media/events/front-porch_{evt.id}.mp4"
+    assert "clip_frame_samples" not in saved.metadata
+    assert saved.metadata.get("clip_frame_samples_count") == 1
+    assert not q.empty()
+
+
+def test_events_api_preserves_contract_and_exposes_abstain_reason(
+    client: TestClient, seeded_repo: InMemoryEventRepository
+) -> None:
+    """TR-23 (AC8): abstained events keep the API contract with additive metadata."""
+    seeded_repo._events["event-abstain"] = CameraEvent(
+        id="event-abstain",
+        camera_id="front-porch",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.ABSTAINED,
+        threat_level=ThreatLevel.INFO,
+        summary="Unclassified activity on camera front-porch",
+        metadata={"abstain_reason": "unmapped_label"},
+    )
+
+    response = client.get("/api/events")
+    assert response.status_code == 200
+    entry = next(event for event in response.json()["events"] if event["id"] == "event-abstain")
+    for key in (
+        "id",
+        "camera_id",
+        "timestamp",
+        "category",
+        "threat_level",
+        "summary",
+        "metrics",
+        "provenance",
+        "matched_entities",
+        "metadata",
+    ):
+        assert key in entry
+    assert entry["category"] == "abstained"
+    assert entry["metadata"]["abstain_reason"] == "unmapped_label"

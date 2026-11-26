@@ -48,11 +48,54 @@ async def providers_status(request: Request) -> dict[str, Any]:
             ),
         },
     }
+    for pid in ("wyze", "ring"):
+        native_block[pid]["logged_out"] = bool(
+            getattr(getattr(active_config, pid, None), "logged_out", False)
+        )
     manager = getattr(request.app.state, "native_stream_manager", None)
     if manager is not None:
-        native_block["stream_manager"] = await manager.status()
+        from lookout.adapters.web.app import _redact_source
+
+        manager_status = await manager.status()
+        streams = manager_status.get("streams")
+        if isinstance(streams, dict):
+            manager_status["streams"] = {
+                name: _redact_source(source) for name, source in streams.items()
+            }
+        native_block["stream_manager"] = manager_status
     poller = getattr(request.app.state, "native_event_poller", None)
     native_block["event_poller_running"] = bool(getattr(poller, "running", False))
+    # #64: global poller failure count.
+    health = getattr(poller, "health", None) if poller is not None else None
+    native_block["event_poller_consecutive_failures"] = (
+        int(health.get("consecutive_failures", 0)) if isinstance(health, dict) else 0
+    )
+    # Collector: per-camera poller status and failure details.
+    poller_status = None
+    if poller is not None:
+        try:
+            raw = poller.status() if callable(getattr(poller, "status", None)) else None
+            if raw is not None and hasattr(raw, "__await__"):
+                raw = await raw
+            poller_status = raw
+        except Exception:  # noqa: BLE001
+            poller_status = None
+    native_block["event_poller"] = poller_status
+    native_block["event_poller_last_error"] = getattr(poller, "last_error", None)
+    native_block["event_poller_last_success"] = getattr(poller, "last_success", None)
+    native_block["event_poller_last_event_count"] = getattr(poller, "last_event_count", 0)
+    event_poller_errors: list[str] = []
+    event_poller_errors_by_camera: dict[str, Any] = {}
+    if isinstance(poller_status, dict):
+        for container_key in ("cameras", "health", "per_camera"):
+            container = poller_status.get(container_key)
+            if isinstance(container, dict):
+                for cam_id, cam_health in container.items():
+                    if isinstance(cam_health, dict) and cam_health.get("last_error"):
+                        event_poller_errors.append(str(cam_health["last_error"]))
+                        event_poller_errors_by_camera[str(cam_id)] = cam_health.get("last_error")
+    native_block["event_poller_errors"] = event_poller_errors
+    native_block["event_poller_errors_by_camera"] = event_poller_errors_by_camera
 
     return {"providers": manifests, "native": native_block}
 

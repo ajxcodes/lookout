@@ -2,6 +2,11 @@
  * Recorded event video player and dedicated snapshot card presentation component.
  */
 import { resolveUrl } from "../utils/url.js";
+import {
+  eventTimeWithLocalHint,
+  formatInDisplayZone,
+  getDisplayTimezone,
+} from "../utils/timezone.js";
 import { ZoomController } from "./zoom-controller.js";
 
 export class EventPlayer {
@@ -17,6 +22,9 @@ export class EventPlayer {
     onEnded,
   }) {
     this.video = videoElement;
+    this.videoContainer = this.video
+      ? this.video.closest(".video-container")
+      : document.querySelector(".video-container");
     this.controlsContainer = controlsContainer;
     this.snapshotCard = snapshotCardElement || document.getElementById("event-snapshot-card");
     this.snapshotImg = snapshotImgElement || document.getElementById("snapshot-card-img");
@@ -67,6 +75,9 @@ export class EventPlayer {
   }
 
   stop() {
+    if (this.videoContainer) {
+      this.videoContainer.classList.remove("snapshot-only");
+    }
     if (this.video) {
       this.video.pause();
       this.video.style.display = "none";
@@ -85,6 +96,12 @@ export class EventPlayer {
 
   renderSnapshotCard(eventItem) {
     this.updateAiDetailsCard(eventItem);
+
+    // Snapshot-only events size the stage to the image instead of reserving a
+    // full video-player box (which left a large empty black area).
+    if (this.videoContainer) {
+      this.videoContainer.classList.add("snapshot-only");
+    }
 
     if (this.video) {
       this.video.pause();
@@ -107,7 +124,20 @@ export class EventPlayer {
       }
 
       if (this.snapshotMeta) {
-        const timeStr = new Date(eventItem.timestamp).toLocaleString();
+        // Primary metadata time follows the configured display zone; the
+        // browser-local time is kept as a secondary label ("show both").
+        const timeInfo = eventTimeWithLocalHint(eventItem.timestamp, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        const localLabel = timeInfo.local
+          ? `<span class="meta-time-local" title="Browser local time (${getDisplayTimezone()}): ${timeInfo.local}">Local: ${timeInfo.local}</span>`
+          : "";
+        const timeStr = timeInfo.primary || formatInDisplayZone(new Date(eventItem.timestamp));
         const categoryStr = (eventItem.category || "Motion").replace(/_/g, " ");
         const entities = (eventItem.matched_entities || []).join(", ");
         this.snapshotMeta.innerHTML = `
@@ -115,6 +145,7 @@ export class EventPlayer {
           <div class="snapshot-info-overlay">
             <span class="meta-camera">${eventItem.camera_id}</span>
             <span class="meta-time">${timeStr}</span>
+            ${localLabel}
             <span class="meta-category">${categoryStr}</span>
             ${entities ? `<span class="meta-entities">Entities: ${entities}</span>` : ""}
           </div>
@@ -159,6 +190,9 @@ export class EventPlayer {
     }
 
     // Event has playable MP4 media
+    if (this.videoContainer) {
+      this.videoContainer.classList.remove("snapshot-only");
+    }
     if (this.snapshotCard) {
       this.snapshotCard.style.display = "none";
     }
@@ -209,6 +243,32 @@ export class EventPlayer {
     if (this.video) {
       this.video.playbackRate = speed;
     }
+  }
+
+  setPaused(paused) {
+    if (!this.video) return;
+    if (paused) {
+      this.video.pause();
+    } else if (this.video.src) {
+      this.video.play().catch(() => {});
+    }
+  }
+
+  setMuted(muted) {
+    if (this.video) this.video.muted = Boolean(muted);
+  }
+
+  isSnapshotOnly() {
+    const event = this.currentEvent;
+    if (!event) return false;
+    const purged = Boolean(event.metadata && event.metadata.media_purged);
+    const hasMedia = Boolean(
+      event.media_uri ||
+        event.clip_url ||
+        event.video_url ||
+        (event.media_type === "video" && `/media/events/${event.id}.mp4`)
+    );
+    return purged || !hasMedia;
   }
 
   toggleLoop() {
@@ -332,7 +392,13 @@ export class EventPlayer {
       (this.currentEvent.camera_id
         ? `/media/${this.currentEvent.camera_id}/${this.currentEvent.id}.jpg`
         : `/media/events/${this.currentEvent.id}.jpg`);
-    const dateStr = this.currentEvent.timestamp ? new Date(this.currentEvent.timestamp).toLocaleTimeString() : "";
+    const dateStr = this.currentEvent.timestamp
+      ? formatInDisplayZone(new Date(this.currentEvent.timestamp), {
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      : "";
     const title = `${this.currentEvent.camera_id || "Camera"} - ${dateStr}`;
     this.openLightbox(resolveUrl(rawThumb), title);
   }

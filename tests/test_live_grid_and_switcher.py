@@ -31,6 +31,47 @@ def test_camera_switcher_rich_metadata_badges() -> None:
     assert wyze_card["stream_mode"] == "live_rtc"
 
 
+def test_wyze_card_exposes_hd_focus_stream_id_and_ring_does_not() -> None:
+    wyze_cam = CameraConfig(
+        id="mochi_pan_cam",
+        name="Mochi Pan Cam",
+        stream_url="wyze://10.0.0.2?uid=u&enr=e&mac=m&model=x&subtype=hd&dtls=true",
+        native_provider="wyze",
+    )
+    wyze_card = build_camera_card_data(wyze_cam)
+    assert wyze_card["provider_badge"] == "wyze"
+    assert wyze_card["stream_mode"] == "live_rtc"
+    assert wyze_card["focus_stream_id"] == "mochi_pan_cam_hd"
+
+    ring_cam = CameraConfig(
+        id="front_door",
+        name="Front Door",
+        stream_url="rtsp://ring-mqtt/front_door",
+        native_provider="ring",
+    )
+    ring_card = build_camera_card_data(ring_cam)
+    assert ring_card["provider_badge"] == "ring"
+    assert ring_card["stream_mode"] == "on_demand"
+    assert "focus_stream_id" not in ring_card
+
+
+def test_live_player_signals_on_focus_stream_id_but_snapshots_use_base_id() -> None:
+    player_js = Path("src/lookout/adapters/web/static/js/components/live-player.js").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "const streamId = this.activeCamera.focus_stream_id || this.activeCamera.id;" in player_js
+    )
+    assert "/api/cameras/${encodeURIComponent(this.activeCamera.id)}/snapshot" in player_js
+
+
+def test_live_grid_signals_on_base_camera_id() -> None:
+    grid_js = Path("src/lookout/adapters/web/static/js/components/live-grid.js").read_text(
+        encoding="utf-8"
+    )
+    assert "const streamId = streamSrc || cam.id;" in grid_js
+
+
 def test_camera_semantic_icon_inference() -> None:
     assert infer_camera_icon("Front Door") == "🚪" and infer_camera_icon("Backyard") == "🌲"
     assert infer_camera_icon("Mochi Crate") == "🐾"
@@ -147,3 +188,35 @@ def test_ring_timestamp_overlay_and_focus_autoplay() -> None:
     assert "live-duration-timer" in index_html
     assert "isLiveRtc" in app_js
     assert "this.livePlayer.startLive()" in app_js
+
+
+def test_live_grid_prefers_h264_and_records_fallback_reason() -> None:
+    js = Path("src/lookout/adapters/web/static/js/components/live-grid.js").read_text(
+        encoding="utf-8"
+    )
+    assert "setCodecPreferences" in js
+    assert "H264" in js
+    assert "liveFallbackReason" in js
+    assert "restoreSnapshotFallback" in js
+
+
+def test_live_grid_and_timeline_order_latest_snapshots_first() -> None:
+    """TR-11: Verify timeline sorts descending by timestamp and app updates snapshot overlays."""
+    timeline_js = Path("src/lookout/adapters/web/static/js/components/timeline.js").read_text(
+        encoding="utf-8"
+    )
+    live_grid_js = Path("src/lookout/adapters/web/static/js/components/live-grid.js").read_text(
+        encoding="utf-8"
+    )
+    live_player_js = Path("src/lookout/adapters/web/static/js/components/live-player.js").read_text(
+        encoding="utf-8"
+    )
+    app_js = Path("src/lookout/adapters/web/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "new Date(b.timestamp) - new Date(a.timestamp)" in timeline_js
+    assert "updateCameraSnapshot" in live_grid_js
+    assert "updateCameraSnapshot" in live_player_js
+    assert "this.liveGrid.updateCameraSnapshot" in app_js
+    assert "this.livePlayer.updateCameraSnapshot" in app_js
+    assert "this.events = this.timeline.events" in app_js
+    assert "this.eventPlayer.loadEvent(eventData)" in app_js

@@ -86,7 +86,7 @@
       <!-- Sidecar Bridge Integrations -->
       <div style="background:var(--bg-subtle);padding:var(--space-md);border-radius:var(--radius-md);margin-bottom:var(--space-md);">
         <h3 style="font-size:0.875rem;font-weight:600;margin-bottom:var(--space-xs);">Bridge Sidecars & Ecosystem Accounts</h3>
-        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-sm);">Auto-detects running docker-wyze-bridge or ring-mqtt instances, or connect with 2FA.</p>
+        <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-sm);">Connect directly via native 2FA cloud authentication and embedded go2rtc streams.</p>
         
         <div id="sidecar-providers-list" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);margin-bottom:var(--space-sm);">
           <!-- Wyze Provider Card -->
@@ -95,7 +95,7 @@
               <span style="font-weight:600;font-size:0.8125rem;">Wyze Cam Bridge</span>
               <span class="badge" id="badge-wyze-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
             </div>
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-wyze">docker-wyze-bridge (RTSP port 8554)</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-wyze">Native Wyze Cloud + embedded go2rtc</div>
             <div style="display:flex;gap:var(--space-xs);">
               <button class="btn btn-sm" id="btn-adopt-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
               <button class="btn btn-sm btn-primary" id="btn-auth-wyze" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
@@ -108,7 +108,7 @@
               <span style="font-weight:600;font-size:0.8125rem;">Ring Video Doorbell</span>
               <span class="badge" id="badge-ring-status" style="font-size:0.6875rem;padding:2px 6px;border-radius:4px;background:var(--bg-subtle);color:var(--text-muted);">Checking...</span>
             </div>
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-ring">ring-mqtt bridge (SIP/RTSP)</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:var(--space-xs);" id="desc-ring">Native Ring Cloud + embedded go2rtc</div>
             <div style="display:flex;gap:var(--space-xs);">
               <button class="btn btn-sm" id="btn-adopt-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Adopt Stream</button>
               <button class="btn btn-sm btn-primary" id="btn-auth-ring" type="button" style="font-size:0.75rem;padding:3px 8px;">Authenticate</button>
@@ -134,6 +134,15 @@
         <div class="form-group">
           <label class="form-label" for="cam-url">Stream URL (RTSP / HTTP / Ring)</label>
           <input class="form-input" id="cam-url" type="text" placeholder="rtsp://localhost:8554/front_porch">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cam-location">Location</label>
+          <input class="form-input" id="cam-location" type="text" placeholder="Front Porch">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cam-enabled">
+            <input type="checkbox" id="cam-enabled" checked> Enabled
+          </label>
         </div>
         <div class="form-group">
           <label class="form-label" for="cam-type">Camera Type</label>
@@ -172,6 +181,44 @@
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button class="btn" id="btn-cancel-2fa" type="button">Cancel</button>
           <button class="btn btn-primary" id="btn-verify-2fa" type="button">Verify Code</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Real provider credential modal (no credentials are ever hardcoded) -->
+    <div class="modal-backdrop" id="modal-credentials" role="dialog" aria-modal="true" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:10000;">
+      <div class="modal-box" style="background:#1e293b;padding:24px;border-radius:8px;max-width:420px;width:90%;color:#fff;box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 id="cred-title" style="margin:0;font-size:1.125rem;font-weight:600;">Provider Login</h3>
+          <button class="btn" id="cred-close" type="button" style="padding:2px 8px;">✕</button>
+        </div>
+        <p id="cred-desc" style="font-size:0.875rem;color:#94a3b8;margin-bottom:16px;">Enter your provider credentials to issue real tokens.</p>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label" for="cred-email" style="display:block;margin-bottom:4px;font-size:0.8125rem;">Email</label>
+          <input class="form-input" id="cred-email" type="email" autocomplete="username" style="width:100%;box-sizing:border-box;">
+        </div>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label" for="cred-password" style="display:block;margin-bottom:4px;font-size:0.8125rem;">Password</label>
+          <input class="form-input" id="cred-password" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;">
+        </div>
+        <div id="cred-wyze-fields" style="display:none;">
+          <div class="form-group" style="margin-bottom:12px;">
+            <label class="form-label" for="cred-api-id" style="display:block;margin-bottom:4px;font-size:0.8125rem;">API Key ID</label>
+            <input class="form-input" id="cred-api-id" type="text" style="width:100%;box-sizing:border-box;">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label class="form-label" for="cred-api-key" style="display:block;margin-bottom:4px;font-size:0.8125rem;">API Key</label>
+            <input class="form-input" id="cred-api-key" type="password" style="width:100%;box-sizing:border-box;">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label class="form-label" for="cred-totp" style="display:block;margin-bottom:4px;font-size:0.8125rem;">TOTP secret (if 2FA is enabled)</label>
+            <input class="form-input" id="cred-totp" type="password" style="width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+        <div id="cred-status" style="font-size:0.8125rem;margin-bottom:16px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button class="btn" id="btn-cred-cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" id="btn-cred-submit" type="button">Authenticate</button>
         </div>
       </div>
     </div>

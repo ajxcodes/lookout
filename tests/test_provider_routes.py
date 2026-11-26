@@ -1,22 +1,22 @@
 """Integration tests for provider REST routes and dynamic sub-router mounting."""
 
 import pytest
+from auth_test_helpers import inject_fake_issuers, make_client
 from fastapi.testclient import TestClient
 
-from lookout.adapters.memory import InMemoryEventRepository
-from lookout.adapters.web.app import create_app
 from lookout.config.schema import LookoutConfig, RingConfig, WyzeConfig
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(tmp_path) -> TestClient:
+    inject_fake_issuers()
     config = LookoutConfig(
         system_name="Provider Routes Test",
         wyze=WyzeConfig(email="user@wyze.com"),
         ring=RingConfig(email="user@ring.com"),
     )
-    app = create_app(config=config, repository=InMemoryEventRepository())
-    return TestClient(app)
+    test_client, _app, _path = make_client(tmp_path, config)
+    return test_client
 
 
 def test_providers_manifest_endpoint(client: TestClient) -> None:

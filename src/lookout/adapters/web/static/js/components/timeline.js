@@ -4,6 +4,14 @@
 import { TelemetryRenderer } from "./telemetry.js";
 import { infer_camera_icon } from "./switcher.js";
 import { resolveUrl } from "../utils/url.js";
+import {
+  eventTimeWithLocalHint,
+  formatInBrowserZone,
+  formatInDisplayZone,
+  getDisplayTimezone,
+  zonedDayKey,
+  zonedHour,
+} from "../utils/timezone.js";
 
 export class TimelineList {
   constructor({ container, onSelectEvent, onDeleteEvent }) {
@@ -14,6 +22,9 @@ export class TimelineList {
     this.selectedEventId = null;
     this.cameras = [];
     this.camerasMap = {};
+    this.pageSize = 25;
+    this.visibleCount = this.pageSize;
+    this._observer = null;
   }
 
   setCameras(cameras) {
@@ -28,7 +39,10 @@ export class TimelineList {
   }
 
   setEvents(events) {
-    this.events = events;
+    this.events = Array.isArray(events)
+      ? [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      : [];
+    this.visibleCount = this.pageSize;
     this.render();
   }
 
@@ -39,11 +53,17 @@ export class TimelineList {
     } else {
       this.events.unshift(eventItem);
     }
+    this.events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     this.render();
   }
 
   removeEvent(eventId) {
     this.events = this.events.filter((e) => e.id !== eventId);
+    this.render();
+  }
+
+  loadMore() {
+    this.visibleCount = Math.min(this.events.length, this.visibleCount + this.pageSize);
     this.render();
   }
 
@@ -61,7 +81,7 @@ export class TimelineList {
       if (diffSec < 60) return "just now";
       if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
       if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return formatInDisplayZone(date, { month: "short", day: "numeric" });
     } catch {
       return "";
     }
@@ -121,13 +141,13 @@ export class TimelineList {
     try {
       const date = new Date(isoString);
       const now = new Date();
-      const isToday = date.toDateString() === now.toDateString();
+      // Day/hour bucketing follows the configured display zone (or the
+      // browser-local zone when none is configured).
+      const isToday = zonedDayKey(date) === zonedDayKey(now);
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const isYesterday = zonedDayKey(date) === zonedDayKey(yesterday);
 
-      const yesterday = new Date(now);
-      yesterday.setDate(now.getDate() - 1);
-      const isYesterday = date.toDateString() === yesterday.toDateString();
-
-      const hour = date.getHours();
+      const hour = zonedHour(date);
       let partOfDay = "Morning";
       if (hour >= 12 && hour < 17) partOfDay = "Afternoon";
       else if (hour >= 17 && hour < 21) partOfDay = "Evening";
@@ -135,7 +155,7 @@ export class TimelineList {
 
       if (isToday) return `Today - ${partOfDay}`;
       if (isYesterday) return `Yesterday - ${partOfDay}`;
-      return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${partOfDay}`;
+      return `${formatInDisplayZone(date, { month: "short", day: "numeric" })} - ${partOfDay}`;
     } catch {
       return "Earlier";
     }
@@ -158,13 +178,33 @@ export class TimelineList {
 
     let currentGroup = null;
 
-    this.events.forEach((evt) => {
+    // Fixed-height scroll container support for infinite scroll.
+    if (this.container && !this._scrollBound) {
+      this.container.style.maxHeight = this.container.style.maxHeight || "60vh";
+      this.container.style.overflowY = "auto";
+      this.container.addEventListener("scroll", () => {
+        if (this.container.scrollTop + this.container.clientHeight >= this.container.scrollHeight - 20) {
+          this.loadMore();
+        }
+      });
+      this._scrollBound = true;
+    }
+
+    this.events.slice(0, this.visibleCount).forEach((evt) => {
       const groupName = this.getGroupBucket(evt.timestamp);
       if (groupName !== currentGroup) {
         currentGroup = groupName;
         const groupHeader = document.createElement("div");
         groupHeader.className = "timeline-group-header";
         groupHeader.textContent = currentGroup;
+        if (getDisplayTimezone()) {
+          groupHeader.title = `Browser local time: ${formatInBrowserZone(new Date(evt.timestamp), {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}`;
+        }
         this.container.appendChild(groupHeader);
       }
 
@@ -201,6 +241,13 @@ export class TimelineList {
       const camIcon = (cam && cam.icon) ? cam.icon : infer_camera_icon(camName);
       const camBadge = `<span class="event-camera-tag">${camIcon} ${camName}</span>`;
 
+      // Primary timestamp uses the configured display zone; when one is set the
+      // browser-local value is also available as a tooltip ("show both").
+      const eventTime = eventTimeWithLocalHint(evt.timestamp);
+      const timeTitleAttr = eventTime.localTitle
+        ? ` title="${eventTime.localTitle.replaceAll('"', "&quot;")}"`
+        : "";
+
       card.innerHTML = `
         <div class="thumb-wrap" style="position:relative;">
           <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
@@ -211,7 +258,7 @@ export class TimelineList {
             ${this.getCategoryPill(evt.category)}
             ${camBadge}
             ${tierBadge}
-            <span class="event-time">${this.formatRelativeTime(evt.timestamp)}</span>
+            <span class="event-time"${timeTitleAttr}>${this.formatRelativeTime(evt.timestamp)}</span>
           </div>
           <div class="event-summary" title="${evt.summary || ""}">${evt.summary || "Motion detected"}</div>
           ${entityBadges}
@@ -269,5 +316,23 @@ export class TimelineList {
 
       this.container.appendChild(card);
     });
+
+    // Infinite scroll sentinel
+    if (this.visibleCount < this.events.length) {
+      const sentinel = document.createElement("div");
+      sentinel.className = "timeline-load-more-sentinel";
+      sentinel.textContent = "Loading more...";
+      this.container.appendChild(sentinel);
+      if ("IntersectionObserver" in window && !this._observer) {
+        this._observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) this.loadMore();
+          });
+        });
+      }
+      if (this._observer) {
+        this._observer.observe(sentinel);
+      }
+    }
   }
 }

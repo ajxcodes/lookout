@@ -6,11 +6,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from lookout.config.schema import WyzeConfig
+from lookout.providers import auth_service
 
 if TYPE_CHECKING:
     from lookout.providers.wyze.driver import WyzeProviderDriver
@@ -23,6 +22,17 @@ class VerifyRequest(BaseModel):
 
     session_id: str = Field(..., description="Active 2FA session ID")
     code: str = Field(..., description="Verification code")
+
+
+def _persist_path(request: Request) -> Path | None:
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path and Path(config_path).exists():
+        return Path(config_path)
+    return None
+
+
+def _sidecar_dir(request: Request) -> Path:
+    return Path(getattr(request.app.state, "sidecar_dir", "data/sidecars"))
 
 
 def create_wyze_router(driver: WyzeProviderDriver) -> APIRouter:
@@ -39,37 +49,66 @@ def create_wyze_router(driver: WyzeProviderDriver) -> APIRouter:
         return driver.probe_existing(active_config).model_dump()
 
     @router.post("/login")
-    async def login(credentials: dict[str, Any]) -> dict[str, Any]:
-        res = driver.authenticate(credentials)
-        if res.status == "error":
-            raise HTTPException(status_code=400, detail=res.message or "Login failed")
-        return res.model_dump()
+    async def login(credentials: dict[str, Any], request: Request) -> dict[str, Any]:
+        result = auth_service.login(
+            "wyze",
+            credentials,
+            getattr(request.app.state, "config", None),
+            driver=driver,
+            force=bool(credentials.get("force", False)),
+            sidecar_dir=_sidecar_dir(request),
+        )
+        return auth_service.sanitize_auth_result(result)
 
     @router.post("/verify")
     async def verify(payload: VerifyRequest, request: Request) -> dict[str, Any]:
-        res = driver.verify_2fa(payload.session_id, payload.code)
-        if res.status == "authenticated":
-            active_config = getattr(request.app.state, "config", None)
-            if active_config is not None:
-                if active_config.wyze is None:
-                    active_config.wyze = WyzeConfig()
-                active_config.wyze.auth_token = res.auth_token
-                active_config.wyze.refresh_token = res.refresh_token
-                if res.email:
-                    active_config.wyze.email = res.email
+        result = await auth_service.verify(
+            "wyze",
+            payload.session_id,
+            payload.code,
+            getattr(request.app.state, "config", None),
+            driver=driver,
+            request_state=request.app.state,
+            sidecar_dir=_sidecar_dir(request),
+            config_path=_persist_path(request),
+        )
+        return auth_service.sanitize_auth_result(result)
 
-                # Synchronize environment
-                driver.sync_environment(active_config, Path("data/sidecars"))
+    @router.post("/rotate")
+    async def rotate(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        config = getattr(request.app.state, "config", None)
+        result = auth_service.login(
+            "wyze",
+            payload,
+            config,
+            driver=driver,
+            force=True,
+            sidecar_dir=_sidecar_dir(request),
+        )
+        if result.status == "2fa_required" and payload.get("code"):
+            result = await auth_service.verify(
+                "wyze",
+                str(result.session_id),
+                str(payload["code"]),
+                config,
+                driver=driver,
+                request_state=request.app.state,
+                sidecar_dir=_sidecar_dir(request),
+                config_path=_persist_path(request),
+            )
+        return auth_service.sanitize_auth_result(result)
 
-                config_path = getattr(request.app.state, "config_path", None)
-                if config_path and Path(config_path).exists():
-                    Path(config_path).write_text(
-                        yaml.safe_dump(active_config.model_dump(mode="json"), sort_keys=False),
-                        encoding="utf-8",
-                    )
-        elif res.status == "error":
-            raise HTTPException(status_code=400, detail=res.message or "Verification failed")
-        return res.model_dump()
+    @router.post("/logout")
+    async def logout(request: Request) -> dict[str, Any]:
+        result = auth_service.logout(
+            "wyze",
+            getattr(request.app.state, "config", None),
+            driver=driver,
+            request_state=request.app.state,
+            sidecar_dir=_sidecar_dir(request),
+            config_path=_persist_path(request),
+        )
+        return auth_service.sanitize_auth_result(result)
 
     @router.post("/test")
     async def test(payload: dict[str, Any] | None = None) -> dict[str, Any]:

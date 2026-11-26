@@ -45,7 +45,6 @@ from lookout.adapters.memory import (
     MockVideoRecorderAdapter,
     MockVisionInferenceAdapter,
 )
-from lookout.adapters.mqtt_ptz import MqttWyzePtzAdapter
 from lookout.adapters.native_stream_manager import NativeStreamManager
 from lookout.adapters.ntfy import (
     NtfyAdapter,
@@ -83,7 +82,6 @@ __all__ = [
     "GeminiVisionProvider",
     "Go2RtcAdapter",
     "Go2RtcPtzAdapter",
-    "MqttWyzePtzAdapter",
     "NSM2",
     "NativeStreamManager",
     "RingNativeAdapter",

@@ -14,9 +14,19 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
-from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
+from lookout.adapters.native_stream_manager import (
+    MediaCaptureError,
+    NativeStreamManager,
+    redact_error,
+)
+from lookout.adapters.ring_api_compat import (
+    RingProfileState,
+    is_authz_denied,
+    skip_legacy_session,
+)
+from lookout.adapters.ring_api_compat import apply as apply_profile
 from lookout.config.schema import RingConfig
 from lookout.domain.models import CameraEvent, DetectionMetrics, EventCategory, ThreatLevel
 from lookout.ports.egress import VideoRecorderPort
@@ -61,20 +71,51 @@ def encode_ring_token(inner: dict[str, Any]) -> str:
     ).decode("ascii")
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        value = int(value)
     if isinstance(value, datetime):
         return _as_utc(value)
-    if isinstance(value, str):
+    if isinstance(value, (int, float)):
         try:
-            return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+            return _as_utc(value)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        try:
+            return _as_utc(float(stripped))
         except ValueError:
             return None
     return None
@@ -88,11 +129,13 @@ def _category_from(kind: Any, detection_type: Any) -> EventCategory:
         return EventCategory.VEHICLE
     if "animal" in text or "pet" in text or "dog" in text or "cat" in text:
         return EventCategory.ANIMAL_WILDLIFE
-    if "person" in text or "human" in text or "motion" in text:
+    if "shadow" in text or "wind" in text or "leaves" in text:
+        return EventCategory.FALSE_POSITIVE
+    if "person" in text or "human" in text:
         return EventCategory.UNKNOWN_VISITOR
-    if "ding" in text or "doorbell" in text:
-        return EventCategory.UNKNOWN_VISITOR
-    return EventCategory.UNKNOWN_VISITOR
+    if "motion" in text or "ding" in text or "doorbell" in text:
+        return EventCategory.ABSTAINED
+    return EventCategory.ABSTAINED
 
 
 class RingNativeAdapter(VideoRecorderPort):
@@ -116,6 +159,18 @@ class RingNativeAdapter(VideoRecorderPort):
         self._auth: Any | None = None
         self._lock = asyncio.Lock()
         self._devices_cache: list[dict[str, Any]] = []
+        self._last_error: str | None = None
+        self._last_success: Any | None = None
+        self._last_event_count: int = 0
+        self._ring_client_created_at: Any | None = None
+        self._last_ring_raw_empty: bool = False
+        self.consecutive_failures: int = 0
+        runtime_dir = (
+            kwargs.get("runtime_dir")
+            or os.environ.get("LOOKOUT_GO2RTC_DIR")
+            or Path(tempfile.gettempdir()) / "lookout-go2rtc"
+        )
+        self._profile_state = RingProfileState.from_config(config, runtime_dir)
 
     # ------------------------------------------------------------------
     # Auth / client
@@ -131,7 +186,21 @@ class RingNativeAdapter(VideoRecorderPort):
             )
         return str(token)
 
-    async def _ring(self) -> Any:
+    async def _invalidate_ring_client(self) -> None:
+        auth, self._auth = self._auth, None
+        self._ring_client = None
+        self._ring_client_created_at = None
+        if auth is not None:
+            async_close = getattr(auth, "async_close", None)
+            if async_close is not None:
+                with contextlib.suppress(Exception):
+                    await async_close()
+
+    async def _ring(self, force: bool = False) -> Any:
+        if self._external_client is not None and not force:
+            return self._external_client
+        if force and self._external_client is None:
+            await self._invalidate_ring_client()
         if self._external_client is not None:
             return self._external_client
         if self._ring_client is not None:
@@ -147,21 +216,43 @@ class RingNativeAdapter(VideoRecorderPort):
                     "to use native Ring ingestion"
                 ) from exc
 
-            from lookout import __version__
-
+            profile = self._profile_state.current()
+            apply_profile(profile)
             inner = decode_ring_token(self._token())
+            # Ring's ext_authz gateway rejects the product's own lookout/<version>
+            # signature; always present a device-compatible user agent.
             auth = Auth(
-                f"lookout/{__version__}",
+                profile.user_agent,
                 token={"refresh_token": inner["rt"]},
                 hardware_id=inner.get("hid"),
             )
             await auth.async_refresh_tokens()
             ring = Ring(auth)
+            # Ring's ext_authz gateway rejects the legacy clients_api/session
+            # bootstrap with 406. The data endpoints work with the bearer token
+            # alone, so mark the client session-ready without that POST.
+            skip_legacy_session(ring)
             await ring.async_update_devices()
             self._auth = auth
             self._ring_client = ring
+            self._ring_client_created_at = datetime.now(UTC)
             self._persist_refreshed_token(auth)
+            self._profile_state.mark_success()
             return ring
+
+    @property
+    def last_success_at(self) -> Any | None:
+        """Timestamp of the last successful event poll (no credential material)."""
+        return self._last_success
+
+    async def refresh_client(self) -> Any:
+        return await self._ring(force=True)
+
+    async def recreate_client(self) -> Any:
+        return await self._ring(force=True)
+
+    async def reset_client(self) -> None:
+        await self._invalidate_ring_client()
 
     def _persist_refreshed_token(self, auth: Any) -> None:
         """Re-encode the refreshed token so go2rtc keeps working across restarts."""
@@ -287,15 +378,31 @@ class RingNativeAdapter(VideoRecorderPort):
                     return device
         return None
 
+    def build_bridge_source(self, camera_id: str, refresh_token: str | None = None) -> str:
+        """Build the go2rtc ``exec:`` source using the ring-client-api H.264 bridge."""
+        bridge_path = Path(__file__).resolve().parent / "ring_bridge" / "index.mjs"
+        token = refresh_token if refresh_token is not None else self._token()
+        return f"exec:node {bridge_path} --camera-id {camera_id} --refresh-token {token}"
+
     def _resolve_source(self, camera_id: str, snapshot: bool = False) -> str:
         camera = self._camera_config(camera_id)
         if camera is not None:
             stream_url = getattr(camera, "stream_url", None)
             if stream_url and str(stream_url).startswith("ring:"):
                 source = str(stream_url)
-                if snapshot and "&snapshot" not in source:
-                    source += "&snapshot"
-                return source
+                if snapshot:
+                    if "&snapshot" not in source:
+                        source += "&snapshot"
+                    return source
+                params = parse_qs(urlsplit(source).query)
+                bridge_cam_id = (
+                    params.get("camera_id", [None])[0]
+                    or params.get("device_id", [None])[0]
+                    or getattr(camera, "native_device_id", None)
+                    or camera_id
+                )
+                token = params.get("refresh_token", [None])[0]
+                return self.build_bridge_source(str(bridge_cam_id), refresh_token=token)
         device = None
         if camera is not None:
             device = self._find_cached(str(camera.native_device_id or ""))
@@ -305,7 +412,16 @@ class RingNativeAdapter(VideoRecorderPort):
             raise RingStreamSourceError(
                 f"No Ring device resolved for camera '{camera_id}'. Run native discovery first."
             )
-        return self.build_stream_source(device, snapshot=snapshot)
+        if snapshot:
+            return self.build_stream_source(device, snapshot=True)
+        bridge_cam_id = (
+            device.get("device_api_id")
+            or device.get("camera_id")
+            or device.get("id")
+            or device.get("device_id")
+            or camera_id
+        )
+        return self.build_bridge_source(str(bridge_cam_id))
 
     async def _resolve_ring_device(self, camera_id: str) -> Any:
         camera = self._camera_config(camera_id)
@@ -344,10 +460,32 @@ class RingNativeAdapter(VideoRecorderPort):
         return temp_name
 
     async def capture_snapshot(self, camera_id: str) -> str:
-        """Capture a real JPEG frame for a native Ring camera."""
+        """Capture a real JPEG frame from the camera's live H.264 bridge stream.
+
+        The old ``ring:...&snapshot`` producer re-ran Ring's 406-prone
+        ``clients_api/session`` bootstrap inside go2rtc. Snapshots now come from
+        the working ``exec:`` bridge stream registered under the base camera id.
+        """
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id, snapshot=True)
         manager = self._require_stream_manager()
+        # Best-effort cleanup of a stale snapshot stream left by an older build,
+        # so it stops reconnecting and logging 406 from go2rtc.
+        stale_stream_id = f"{camera_id}_snapshot"
+        streams = getattr(manager, "streams", None)
+        if isinstance(streams, dict) and stale_stream_id in streams:
+            remove_stream = getattr(manager, "remove_stream", None)
+            if callable(remove_stream):
+                try:
+                    await remove_stream(stale_stream_id)
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    logger.debug(
+                        "Could not remove stale Ring snapshot stream '%s': %s",
+                        stale_stream_id,
+                        exc,
+                    )
+            else:
+                streams.pop(stale_stream_id, None)
+        source = self._resolve_source(camera_id, snapshot=False)
         await manager.ensure_stream(camera_id, source)
         content = await manager.frame(camera_id)
         if not content.startswith(_JPEG_MAGIC):
@@ -362,62 +500,48 @@ class RingNativeAdapter(VideoRecorderPort):
         source = self._resolve_source(camera_id, snapshot=False)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
-        # Prime a consumer (frame capture) so on-demand Ring streams negotiate
-        # SPS/dimensions before the MP4 request. Swallow priming failures; the
-        # subsequent clip call still propagates MediaCaptureError on total failure.
-        with contextlib.suppress(MediaCaptureError):
-            await manager.frame(camera_id)
         content = await manager.clip(camera_id, duration_seconds)
         if _MP4_FTYP not in content[:64]:
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
         return self._write_temp(".mp4", content)
 
-    async def prepare_live_stream(self, camera_id: str) -> None:
+    async def ensure_h264_stream(self, camera_id: Any = None, **kwargs: Any) -> Any:
+        """Resolve/register the transcoded H.264 stream for a Ring camera."""
+        camera_id = camera_id if camera_id is not None else kwargs.get("camera_id")
         camera_id = str(camera_id)
-        source = self._resolve_source(camera_id, snapshot=False)
         manager = self._require_stream_manager()
-        await manager.ensure_stream(camera_id, source)
-        with contextlib.suppress(MediaCaptureError):
-            await manager.frame(camera_id)
-        # Register the ffmpeg H.264 transcode stream (no ensure_h264_stream helper on this branch).
-        await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
-        with contextlib.suppress(MediaCaptureError):
-            await manager.frame(f"{camera_id}_h264")
+        if hasattr(manager, "ensure_h264_stream"):
+            return await manager.ensure_h264_stream(camera_id)
+        # Fallback for managers that only expose ensure_stream.
+        return await manager.ensure_stream(f"{camera_id}_h264", f"ffmpeg:{camera_id}#video=h264")
 
-    async def ensure_live_stream(
-        self, camera_id: str, live_source: str | None = None, **kwargs: Any
-    ) -> None:
-        camera_id = str(camera_id)
-        if live_source is None:
-            live_source = (
-                kwargs.get("live_source")
-                or kwargs.get("source")
-                or kwargs.get("url")
-                or kwargs.get("stream_url")
-            )
-        if live_source is None:
-            camera = self._camera_config(camera_id)
-            if camera is not None:
-                live_source = getattr(camera, "live_stream_url", None)
-        if live_source is None:
-            live_source = getattr(self.config, "live_rtsp_url", None)
-        manager = self._require_stream_manager()
-        if hasattr(manager, "ensure_live_stream"):
-            try:
-                await manager.ensure_live_stream(camera_id, live_source)
-            except TypeError:
-                await manager.ensure_live_stream(camera_id)
-        else:
-            await manager.ensure_stream(f"{camera_id}_live", live_source)
+    # Compatibility aliases for H.264 transcoding helpers.
+    async def ensure_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
 
-    async def ensure_ring_live_stream(self, *args: Any, **kwargs: Any) -> None:
-        return await self.ensure_live_stream(*args, **kwargs)
+    async def register_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
 
-    async def register_live_stream(self, *args: Any, **kwargs: Any) -> None:
-        return await self.ensure_live_stream(*args, **kwargs)
+    async def register_transcoded_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
 
-    async def start_live_stream(self, *args: Any, **kwargs: Any) -> None:
-        return await self.ensure_live_stream(*args, **kwargs)
+    async def start_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def create_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def add_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_ring_h264_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def transcode_stream(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
+
+    async def ensure_h264(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.ensure_h264_stream(*args, **kwargs)
 
     # ------------------------------------------------------------------
     # Events
@@ -427,40 +551,90 @@ class RingNativeAdapter(VideoRecorderPort):
     ) -> list[dict[str, Any]]:
         """Poll real Ring history events for a camera."""
         camera_id = str(camera_id)
-        device = await self._resolve_ring_device(camera_id)
-        history = await device.async_history(limit=20)
-        if not isinstance(history, Sequence):
-            return []
-        payloads: list[dict[str, Any]] = []
-        for item in history:
-            if not isinstance(item, dict):
+
+        async def _attempt() -> list[dict[str, Any]]:
+            device = await self._resolve_ring_device(camera_id)
+            history = await device.async_history(limit=50)
+            raw_empty = not (isinstance(history, Sequence) and len(history) > 0)
+            if not isinstance(history, Sequence):
+                history = []
+            payloads: list[dict[str, Any]] = []
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                created = _parse_datetime(item.get("created_at"))
+                if since is not None and created is not None and created < _as_utc(since):
+                    continue
+                cv_properties = item.get("cv_properties")
+                detection_type = (
+                    cv_properties.get("detection_type") if isinstance(cv_properties, dict) else None
+                )
+                kind = item.get("kind")
+                event_id = str(item.get("id") or item.get("ding_id") or "")
+                payloads.append(
+                    {
+                        "event_id": event_id,
+                        "camera_id": camera_id,
+                        "timestamp": created.isoformat() if created else None,
+                        "kind": kind,
+                        "answered": item.get("answered"),
+                        "detection_type": detection_type,
+                        "metadata": {
+                            "provider": "ring",
+                            "recording": item.get("recording"),
+                            "snapshot_url": item.get("snapshot_url"),
+                            "cv_properties": cv_properties,
+                        },
+                    }
+                )
+            # Track raw emptiness for caller's retry decision.
+            self._last_ring_raw_empty = raw_empty
+            return payloads
+
+        max_attempts = max(2, len(self._profile_state.profiles) + 1)
+        denials = 0
+        for attempt in range(max_attempts):
+            try:
+                payloads = await _attempt()
+            except Exception as exc:  # noqa: BLE001 - caller handles
+                self.consecutive_failures += 1
+                self._last_error = redact_error(f"{type(exc).__name__}: {exc}")
+                if is_authz_denied(exc):
+                    denials += 1
+                    if denials >= len(self._profile_state.profiles):
+                        raise RingAuthError(
+                            "ring_authz_denied: Ring rejected all available client profiles "
+                            f"({denials} of {len(self._profile_state.profiles)} profile(s)) "
+                            f"after {attempt + 1} attempt(s); check the refresh token "
+                            "and retry later."
+                        ) from exc
+                    self._profile_state.rotate()
+                    await self._invalidate_ring_client()
+                    continue
+                if attempt == 0:
+                    await self._invalidate_ring_client()
+                    continue
+                raise
+
+            raw_empty = getattr(self, "_last_ring_raw_empty", False)
+            # Retry once on suspicious empty history for internal (non-external) clients.
+            if raw_empty and attempt == 0 and self._external_client is None:
+                await self._invalidate_ring_client()
                 continue
-            created = _parse_datetime(item.get("created_at"))
-            if since is not None and created is not None and created < _as_utc(since):
-                continue
-            cv_properties = item.get("cv_properties")
-            detection_type = (
-                cv_properties.get("detection_type") if isinstance(cv_properties, dict) else None
-            )
-            kind = item.get("kind")
-            event_id = str(item.get("id") or item.get("ding_id") or "")
-            payloads.append(
-                {
-                    "event_id": event_id,
-                    "camera_id": camera_id,
-                    "timestamp": created.isoformat() if created else None,
-                    "kind": kind,
-                    "answered": item.get("answered"),
-                    "detection_type": detection_type,
-                    "metadata": {
-                        "provider": "ring",
-                        "recording": item.get("recording"),
-                        "snapshot_url": item.get("snapshot_url"),
-                        "cv_properties": cv_properties,
-                    },
-                }
-            )
-        return payloads
+
+            # Persist rotated tokens after a successful fetch.
+            if self._auth is not None:
+                with contextlib.suppress(Exception):
+                    self._persist_refreshed_token(self._auth)
+
+            self._last_success = datetime.now(UTC)
+            self._last_event_count = len(payloads)
+            self._last_error = None
+            self.consecutive_failures = 0
+            return payloads
+
+        # Should not reach here, but keep a safe fallback.
+        return []
 
     async def ingest_event(self, payload: dict[str, Any] | None = None) -> CameraEvent:
         """Build a CameraEvent from a real Ring event payload."""

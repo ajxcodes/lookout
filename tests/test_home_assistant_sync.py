@@ -1,0 +1,418 @@
+"""Tests for Home Assistant sync manager."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import pytest
+import respx
+from httpx import Response
+
+from lookout.adapters.home_assistant_sync import HomeAssistantSyncManager
+from lookout.config.deep_links import get_deep_link_base
+from lookout.config.schema import (
+    CameraConfig,
+    HomeAssistantConfig,
+    LookoutConfig,
+    MqttConfig,
+)
+
+
+class FakeMqtt:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, Any, bool]] = []
+
+    def publish(self, topic: str, payload: Any = None, retain: bool = False, **kwargs: Any) -> None:
+        self.published.append((topic, payload, bool(retain)))
+
+
+class FakeHttp:
+    """Minimal HTTP client stub so REST cleanup never touches the network."""
+
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def delete(self, url: str, **kwargs: Any) -> Response:
+        self.deleted.append(url)
+        return Response(200, json={})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_connection_success_returns_ok() -> None:
+    respx.get("http://ha:8123/api/").mock(return_value=Response(200, json={"message": "ok"}))
+    manager = HomeAssistantSyncManager(base_url="http://ha:8123", access_token="token")
+    result = await manager.test_connection()
+    assert result["ok"] is True
+    assert result["status"] == 200
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_does_not_raise() -> None:
+    manager = HomeAssistantSyncManager(base_url="http://127.0.0.1:1", access_token="token")
+    result = await manager.test_connection()
+    assert result["ok"] is False
+    assert isinstance(result.get("error"), str)
+
+
+@pytest.mark.asyncio
+async def test_sync_camera_publishes_retained_discovery() -> None:
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    base = "http://ha:8123/lookout/viewer"
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123",
+        access_token="token",
+        mqtt_client=mqtt,
+        deep_link_base=base,
+    )
+    result = await manager.sync_camera(camera)
+    assert result["ok"] is True
+    topics = [t for t, _, _ in mqtt.published]
+    assert any(t == "homeassistant/camera/cam1/config" for t in topics)
+    camera_payloads = [
+        json.loads(p) for (t, p, r) in mqtt.published if t == "homeassistant/camera/cam1/config"
+    ]
+    assert camera_payloads
+    assert "name" in camera_payloads[0]
+    # AC14: viewer query parameters on the shared base, no path segments.
+    assert camera_payloads[0]["configuration_url"] == f"{base}?camera_id=cam1&live=true"
+    device = camera_payloads[0]["device"]
+    assert device["configuration_url"] == f"{base}?camera_id=cam1&live=true"
+
+
+@pytest.mark.asyncio
+async def test_discovery_payloads_omit_none_values() -> None:
+    """HA rejects discovery configs that carry explicit ``null`` optional keys."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    await manager.sync_camera(camera)
+
+    configs = [json.loads(p) for (t, p, _) in mqtt.published if t.endswith("/config")]
+    assert configs
+    for cfg in configs:
+        assert not any(value is None for value in cfg.values()), cfg
+
+    # Optional camera keys with no configured value are omitted entirely.
+    camera_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam1/config"
+    )
+    assert "icon" not in camera_cfg
+    assert "device_class" not in camera_cfg
+
+    # Explicitly configured optional values are still published.
+    mqtt.published.clear()
+    styled = CameraConfig(
+        id="cam2",
+        name="Styled Cam",
+        stream_url="rtsp://example/cam2",
+        ha_device_class="door",
+        ha_icon="mdi:door",
+    )
+    await manager.sync_camera(styled)
+    styled_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam2/config"
+    )
+    assert styled_cfg["device_class"] == "door"
+    assert styled_cfg["icon"] == "mdi:door"
+
+
+@pytest.mark.asyncio
+async def test_remove_camera_clears_retained_discovery() -> None:
+    mqtt = FakeMqtt()
+    http = FakeHttp()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt, http_client=http
+    )
+    await manager.sync_camera(camera)
+    published_topics = [t for t, _, _ in mqtt.published]
+    mqtt.published.clear()
+    result = await manager.remove_camera("cam1")
+    assert result["ok"] is True
+    cleared_topics = [t for t, _, _ in mqtt.published]
+    for topic in published_topics:
+        assert topic in cleared_topics
+    for _, payload, retain in mqtt.published:
+        assert (payload in ("", None, b"")) and retain is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_on_boot_no_duplicates() -> None:
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt, cameras=[camera]
+    )
+    await manager.sync_all()
+    first_topics = [t for t, _, _ in mqtt.published]
+    mqtt.published.clear()
+    await manager.sync_all()
+    second_topics = [t for t, _, _ in mqtt.published]
+    assert set(first_topics) == set(second_topics)
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_does_not_break_pipeline() -> None:
+    class BadMqtt:
+        def publish(self, *a: Any, **k: Any) -> None:
+            raise RuntimeError("boom")
+
+    mqtt = BadMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    result = await manager.sync_camera(camera)
+    assert result["ok"] is False
+    assert (
+        manager.get_status().get("last_error") is not None or result.get("last_error") is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_entity_carries_link_attribute() -> None:
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    await manager.sync_camera(camera)
+    event_payloads = [json.loads(p) for (t, p, r) in mqtt.published if "event" in t]
+    assert event_payloads
+    assert any("link" in p or "url" in p for p in event_payloads)
+
+
+def test_base_url_autodetect_from_home_assistant_url() -> None:
+    """TR-12: default HA base_url falls through to top-level home_assistant_url."""
+    config = LookoutConfig(home_assistant_url="http://ha.example:8123")
+    manager = HomeAssistantSyncManager(config=config)
+    assert manager.base_url == "http://ha.example:8123"
+
+
+def test_deep_link_base_precedence() -> None:
+    """TR-16: ingress_url > <home_assistant_url>/lookout/viewer > public_url."""
+    # (a) ingress_url wins over both other sources; trailing slash stripped.
+    config = LookoutConfig(
+        home_assistant=HomeAssistantConfig(
+            ingress_url="https://ha.example.com/api/hassio_ingress/abc/"
+        ),
+        home_assistant_url="https://ha.example.com/",
+        public_url="https://lookout.example.com/",
+    )
+    assert get_deep_link_base(config) == "https://ha.example.com/api/hassio_ingress/abc"
+
+    # (b) home_assistant_url path wins over public_url.
+    config = LookoutConfig(
+        home_assistant_url="https://ha.example.com/",
+        public_url="https://lookout.example.com/",
+    )
+    assert get_deep_link_base(config) == "https://ha.example.com/lookout/viewer"
+
+    # (c) no HA configured -> public_url (plain Lookout browser link).
+    config = LookoutConfig(public_url="https://lookout.example.com/")
+    assert get_deep_link_base(config) == "https://lookout.example.com"
+
+    # (d) nothing configured -> None.
+    assert get_deep_link_base(LookoutConfig()) is None
+    assert get_deep_link_base(None) is None
+
+
+def test_sync_manager_uses_shared_deep_link_base_from_config() -> None:
+    """AC14: the sync manager resolves its base from the shared helper."""
+    config = LookoutConfig(
+        home_assistant=HomeAssistantConfig(ingress_url="https://ha.example.com/ingress/abc"),
+        home_assistant_url="https://ha.example.com",
+        public_url="https://lookout.example.com",
+    )
+    manager = HomeAssistantSyncManager(config=config)
+    assert manager.deep_link_base == "https://ha.example.com/ingress/abc"
+
+
+@pytest.mark.asyncio
+async def test_deep_links_never_empty_without_base() -> None:
+    """A missing deep-link base still yields a sensible relative viewer URL."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(mqtt_client=mqtt)  # no config, no base
+    await manager.sync_camera(camera)
+
+    cam_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam1/config"
+    )
+    assert cam_cfg["configuration_url"] == "/lookout/viewer?camera_id=cam1&live=true"
+    event_cfg = next(
+        json.loads(p)
+        for (t, p, _) in mqtt.published
+        if t == "homeassistant/event/cam1_event/config"
+    )
+    assert event_cfg["link"] == "/lookout/viewer?camera_id=cam1"
+    assert event_cfg["url"] == event_cfg["link"]
+
+
+def test_mqtt_defaults_from_mqtt_config() -> None:
+    """TR-13: HA MQTT overrides fall through to the existing mqtt config block."""
+    config = LookoutConfig(mqtt=MqttConfig(host="mqtt.example", port=1884))
+    manager = HomeAssistantSyncManager(config=config)
+    assert manager.mqtt_host == "mqtt.example"
+    assert manager.mqtt_port == 1884
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mqtt_only_mode_status_and_test_connection() -> None:
+    """TR-14: without a token, status is mqtt-only and no REST call is made."""
+    config = LookoutConfig(home_assistant_url="http://ha.example:8123")
+    manager = HomeAssistantSyncManager(config=config)
+    assert manager.get_status()["mode"] == "mqtt-only"
+
+    route = respx.get("http://ha.example:8123/api/").mock(return_value=Response(401))
+    result = await manager.test_connection()
+    assert result["ok"] is True
+    assert result["mode"] == "mqtt-only"
+    assert "no HA credentials" in result["message"]
+    assert "401" not in str(result)
+    assert not route.called
+    assert manager.get_status().get("last_error") is None
+
+
+@pytest.mark.asyncio
+async def test_discovery_payloads_include_topics_and_initial_states() -> None:
+    """Every discovery payload advertises a state topic; benign states follow."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    result = await manager.sync_camera(camera)
+    assert result["ok"] is True
+
+    configs = [json.loads(p) for (t, p, _) in mqtt.published if t.endswith("/config")]
+    assert configs
+    assert all("state_topic" in cfg for cfg in configs)
+
+    camera_cfg = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "homeassistant/camera/cam1/config"
+    )
+    # The MQTT camera needs an image topic in addition to its state topic.
+    assert camera_cfg.get("topic")
+    assert camera_cfg["state_topic"]
+
+    # binary_sensor, both sensors and the event entity carry value templates.
+    templated = [cfg for cfg in configs if cfg.get("value_template")]
+    assert len(templated) >= 4
+    assert all("{{" in cfg["value_template"] for cfg in templated)
+
+    # A benign JSON state payload is published for each advertised state topic.
+    state_topics = {cfg["state_topic"] for cfg in configs}
+    published_states = {t: json.loads(p) for (t, p, _) in mqtt.published if t in state_topics}
+    assert set(published_states) == state_topics
+    assert all(isinstance(payload, dict) for payload in published_states.values())
+
+
+@pytest.mark.asyncio
+async def test_event_deep_link_is_concrete_and_placeholder_free() -> None:
+    """Event discovery/state use viewer query params, never path segments or ``{event_id}``."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    ingress = "http://ha:8123/api/hassio_ingress/abc"
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123",
+        access_token="token",
+        mqtt_client=mqtt,
+        deep_link_base=ingress,
+    )
+    await manager.sync_camera(camera)
+
+    all_payloads = "\n".join(str(p) for (_, p, _) in mqtt.published)
+    assert "{event_id}" not in all_payloads
+    assert "/events/" not in all_payloads
+    assert "/cameras/" not in all_payloads
+
+    event_cfg = next(
+        json.loads(p)
+        for (t, p, _) in mqtt.published
+        if t == "homeassistant/event/cam1_event/config"
+    )
+    expected = f"{ingress}?camera_id=cam1"
+    assert event_cfg["link"] == expected
+    assert event_cfg["url"] == expected
+    assert event_cfg["configuration_url"] == expected
+    assert event_cfg["value_template"] == "{{ value_json | tojson }}"
+
+    event_state = next(
+        json.loads(p) for (t, p, _) in mqtt.published if t == "lookout/cam1/event/state"
+    )
+    assert event_state["link"] == expected
+    assert event_state["url"] == expected
+
+
+@pytest.mark.asyncio
+async def test_event_state_payload_is_valid_json_with_event_type() -> None:
+    """The event state topic carries a HA-parseable JSON event payload."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    ingress = "http://ha:8123/api/hassio_ingress/abc"
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123",
+        access_token="token",
+        mqtt_client=mqtt,
+        deep_link_base=ingress,
+    )
+    await manager.sync_camera(camera)
+
+    raw = next(p for (t, p, _) in mqtt.published if t == "lookout/cam1/event/state")
+    assert isinstance(raw, str)
+    payload = json.loads(raw)  # HA logs an error if this is not JSON
+    assert payload["event_type"] == "lookout"
+    assert payload["link"] == f"{ingress}?camera_id=cam1"
+    assert payload["url"] == payload["link"]
+
+    event_cfg = next(
+        json.loads(p)
+        for (t, p, _) in mqtt.published
+        if t == "homeassistant/event/cam1_event/config"
+    )
+    # The template renders the whole JSON object, preserving ``event_type`` so
+    # HA's event platform can parse it instead of a bare URL string.
+    assert "tojson" in event_cfg["value_template"]
+    assert "lookout" in event_cfg["event_types"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_remove_camera_rest_cleanup_is_best_effort() -> None:
+    """AC4: REST mode attempts device registry deletion without breaking removal."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    await manager.sync_camera(camera)
+    delete_route = respx.delete("http://ha:8123/api/devices/lookout_cam1").mock(
+        return_value=Response(200, json={})
+    )
+    result = await manager.remove_camera("cam1")
+    assert result["ok"] is True
+    assert delete_route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_remove_camera_rest_failure_does_not_break_removal() -> None:
+    """A failing HA REST cleanup is swallowed; discovery cleanup still runs."""
+    mqtt = FakeMqtt()
+    camera = CameraConfig(id="cam1", name="Porch Cam", stream_url="rtsp://example/cam")
+    manager = HomeAssistantSyncManager(
+        base_url="http://ha:8123", access_token="token", mqtt_client=mqtt
+    )
+    await manager.sync_camera(camera)
+    respx.delete("http://ha:8123/api/devices/lookout_cam1").mock(return_value=Response(500))
+    result = await manager.remove_camera("cam1")
+    assert result["ok"] is True
+    # The MQTT retained-config clearing still happened.
+    assert any(payload in ("", None, b"") for (_, payload, _) in mqtt.published)

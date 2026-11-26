@@ -4,17 +4,26 @@
 import { resolveUrl } from "../utils/url.js";
 
 export class SettingsModal {
-  constructor({ modalBackdrop, onClose, onAiModeChanged }) {
+  constructor({ modalBackdrop, onClose, onAiModeChanged, onFocusViewChanged }) {
     this.modal = modalBackdrop;
     this.onClose = onClose;
     this.onAiModeChanged = onAiModeChanged;
+    this.onFocusViewChanged = onFocusViewChanged;
+
+    this.focusControlsToggle = this.modal ? this.modal.querySelector("#setting-focus-controls-overlay") : null;
+    this.acousticModeSelect = this.modal ? this.modal.querySelector("#setting-acoustic-mode") : null;
+    this.eventsCollapsedToggle = this.modal ? this.modal.querySelector("#setting-events-collapsed") : null;
 
     this.aiSelect = this.modal ? this.modal.querySelector("#setting-ai-mode") : null;
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
     this.facesContainer = this.modal ? (this.modal.querySelector("#face-gallery-list") || this.modal.querySelector("#faces-grid")) : null;
     this.entitiesContainer = this.modal ? this.modal.querySelector("#entity-catalog-list") : null;
     this.integrationsContainer = this.modal ? this.modal.querySelector("#sidecar-integrations-list") : null;
+    this.cameraNotificationsContainer = this.modal ? this.modal.querySelector("#camera-notifications-list") : null;
+    this.homeAssistantContainer = this.modal ? this.modal.querySelector("#home-assistant-settings") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
+    this.currentResetScope = null;
+    this._lastFocused = null;
 
     this.archiveToggle = this.modal ? this.modal.querySelector("#setting-archive-enabled") : null;
     this.archiveFields = this.modal ? this.modal.querySelector("#archive-settings-fields") : null;
@@ -32,6 +41,16 @@ export class SettingsModal {
     if (closeBtn) {
       closeBtn.addEventListener("click", () => this.close());
     }
+
+    // Focus view preferences apply immediately and are persisted by the app.
+    const focusControls = [
+      this.focusControlsToggle,
+      this.acousticModeSelect,
+      this.eventsCollapsedToggle,
+    ].filter(Boolean);
+    focusControls.forEach((control) => {
+      control.addEventListener("change", () => this._emitFocusViewChange());
+    });
 
     if (this.archiveToggle && this.archiveFields) {
       this.archiveToggle.addEventListener("change", (e) => {
@@ -112,11 +131,28 @@ export class SettingsModal {
       });
     }
 
+    // Reset section multi-confirmation flow.
+    const resetButtons = this.modal ? this.modal.querySelectorAll(".reset-btn") : [];
+    resetButtons.forEach((btn) => {
+      btn.addEventListener("click", () => this.startReset(btn.getAttribute("data-scope")));
+    });
+    const resetConfirmBtn = this.modal ? this.modal.querySelector("#reset-confirm-btn") : null;
+    if (resetConfirmBtn) {
+      resetConfirmBtn.addEventListener("click", () => this.confirmReset());
+    }
+    const resetCancelBtn = this.modal ? this.modal.querySelector("#reset-cancel-btn") : null;
+    if (resetCancelBtn) {
+      resetCancelBtn.addEventListener("click", () => this.cancelReset());
+    }
+
     this.modal.addEventListener("click", (e) => {
       if (e.target === this.modal) {
         this.close();
       }
     });
+
+    // Keyboard focus lifecycle: Escape closes, Tab is trapped inside the dialog.
+    document.addEventListener("keydown", (event) => this._handleKeydown(event));
 
     if (this.aiSelect) {
       this.aiSelect.addEventListener("change", async (e) => {
@@ -164,13 +200,98 @@ export class SettingsModal {
     }
   }
 
+  _emitFocusViewChange() {
+    if (!this.onFocusViewChanged) return;
+    const acousticMode = this.acousticModeSelect
+      ? this.acousticModeSelect.value
+      : "below";
+    this.onFocusViewChanged({
+      controlsOverlay: this.focusControlsToggle
+        ? this.focusControlsToggle.checked
+        : true,
+      acousticMode,
+      acousticPinned: acousticMode === "overlay",
+      eventsCollapsed: this.eventsCollapsedToggle
+        ? this.eventsCollapsedToggle.checked
+        : false,
+    });
+  }
+
+  /** Mirror the persisted preferences into the Settings controls. */
+  setFocusViewPreferences(prefs) {
+    if (!prefs) return;
+    if (this.focusControlsToggle) {
+      this.focusControlsToggle.checked = prefs.controlsOverlay !== false;
+    }
+    if (this.acousticModeSelect) {
+      const mode = prefs.acousticMode === "collapsed" ? "hidden" : prefs.acousticMode;
+      this.acousticModeSelect.value =
+        ["overlay", "below", "hidden"].indexOf(mode) !== -1 ? mode : "below";
+    }
+    if (this.eventsCollapsedToggle) {
+      this.eventsCollapsedToggle.checked = Boolean(prefs.eventsCollapsed);
+    }
+  }
+
+  _getFocusableElements() {
+    if (!this.modal) return [];
+    const selector = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    return Array.from(this.modal.querySelectorAll(selector)).filter((el) => {
+      if (el.disabled) return false;
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+      return el.getClientRects().length > 0;
+    });
+  }
+
+  _focusFirst() {
+    const focusables = this._getFocusableElements();
+    if (focusables.length) {
+      focusables[0].focus();
+    } else if (this.modal) {
+      this.modal.setAttribute("tabindex", "-1");
+      this.modal.focus();
+    }
+  }
+
+  _trapFocus(event) {
+    const focusables = this._getFocusableElements();
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    } else if (!this.modal.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  _handleKeydown(event) {
+    if (!this.modal || !this.modal.classList.contains("open")) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.close();
+    } else if (event.key === "Tab") {
+      this._trapFocus(event);
+    }
+  }
+
   async open() {
     if (!this.modal) return;
+    this._lastFocused = document.activeElement;
     this.modal.classList.add("open");
+    this._focusFirst();
     await this.loadSettings();
     await this.loadFaces();
     await this.loadEntities();
     await this.loadIntegrations();
+    await this.loadCameraNotifications();
+    await this.loadHomeAssistant();
     await this.loadStorage();
   }
 
@@ -180,6 +301,65 @@ export class SettingsModal {
     if (this.onClose) {
       this.onClose();
     }
+    if (this._lastFocused && this._lastFocused.isConnected) {
+      this._lastFocused.focus();
+    }
+  }
+
+  async startReset(scope) {
+    this.currentResetScope = scope;
+    const summaryEl = this.modal ? this.modal.querySelector("#reset-impact-summary") : null;
+    try {
+      const res = await fetch(resolveUrl("/api/system/reset/preview"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (summaryEl) {
+        summaryEl.textContent =
+          data.summary || data.impact_summary || data.impact || JSON.stringify(data);
+      }
+    } catch (err) {
+      if (summaryEl) summaryEl.textContent = "Preview failed.";
+    }
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "block";
+    const input = this.modal ? this.modal.querySelector("#reset-confirm-input") : null;
+    if (input) input.value = "";
+  }
+
+  cancelReset() {
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "none";
+    this.currentResetScope = null;
+  }
+
+  async confirmReset() {
+    const input = this.modal ? this.modal.querySelector("#reset-confirm-input") : null;
+    if (!input || input.value !== "RESET") {
+      window.alert('Type "RESET" to confirm.');
+      return;
+    }
+    // Second confirmation dialog.
+    if (!window.confirm("This action cannot be undone. Proceed?")) {
+      return;
+    }
+    const scope = this.currentResetScope;
+    try {
+      const res = await fetch(resolveUrl("/api/system/reset/execute"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "RESET", scope }),
+      });
+      if (res.ok) {
+        await this.open();
+      }
+    } catch (err) {
+      console.error("Reset failed:", err);
+    }
+    const wrap = this.modal ? this.modal.querySelector("#reset-confirm-wrap") : null;
+    if (wrap) wrap.style.display = "none";
   }
 
   async loadEntities() {
@@ -197,35 +377,86 @@ export class SettingsModal {
         return;
       }
 
+      const defaultEmoji = {
+        resident: "👤",
+        pet: "🐶",
+        vehicle: "🚗",
+        thing: "📦",
+      };
+
       entities.forEach((ent) => {
         const row = document.createElement("div");
         row.className = "entity-row";
 
-        let icon = "👤";
-        if (ent.entity_type === "vehicle") icon = "🚗";
-        else if (ent.entity_type === "pet") icon = "🐶";
-
-        row.innerHTML = `
-          <div class="entity-meta">
-            <span>${icon}</span>
-            <div>
-              <div style="font-size:0.8125rem;font-weight:600;">${ent.name}</div>
-              <div class="text-muted" style="font-size:0.6875rem;">${ent.entity_type} ${ent.species ? `(${ent.species})` : ""}</div>
+        const renderView = () => {
+          const icon = ent.emoji || defaultEmoji[ent.entity_type] || "👤";
+          row.innerHTML = `
+            <div class="entity-meta">
+              <span>${icon}</span>
+              <div>
+                <div style="font-size:0.8125rem;font-weight:600;">${ent.name}</div>
+                <div class="text-muted" style="font-size:0.6875rem;">${ent.entity_type} ${ent.species ? `(${ent.species})` : ""}</div>
+              </div>
             </div>
-          </div>
-          <div class="entity-actions">
-            <button class="btn" style="padding:2px 6px;font-size:0.6875rem;" title="Delete entity">✕</button>
-          </div>
-        `;
+            <div class="entity-actions">
+              <button class="btn entity-edit" style="padding:2px 6px;font-size:0.6875rem;" title="Edit entity">Edit</button>
+              <button class="btn entity-delete" style="padding:2px 6px;font-size:0.6875rem;" title="Delete entity">✕</button>
+            </div>
+          `;
 
-        const delBtn = row.querySelector("button");
-        delBtn.addEventListener("click", async () => {
-          await fetch(resolveUrl(`/api/entities/${encodeURIComponent(ent.id)}`), {
-            method: "DELETE",
+          row.querySelector(".entity-edit").addEventListener("click", renderEdit);
+          row.querySelector(".entity-delete").addEventListener("click", async () => {
+            await fetch(resolveUrl(`/api/entities/${encodeURIComponent(ent.id)}`), {
+              method: "DELETE",
+            });
+            await this.loadEntities();
           });
-          await this.loadEntities();
-        });
+        };
 
+        const renderEdit = () => {
+          const currentEmoji = ent.emoji || defaultEmoji[ent.entity_type] || "👤";
+          row.innerHTML = `
+            <div class="entity-edit-form" style="display:flex;flex-direction:column;gap:6px;width:100%;">
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input class="input-control entity-emoji-input" type="text" value="${currentEmoji}" title="Emoji" style="width:52px;text-align:center;" />
+                <input class="input-control entity-name-input" type="text" value="${ent.name}" title="Name" style="flex:1;" />
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-primary entity-save" style="padding:2px 8px;font-size:0.6875rem;">Save</button>
+                <button class="btn entity-cancel" style="padding:2px 8px;font-size:0.6875rem;">Cancel</button>
+              </div>
+            </div>
+          `;
+
+          row.querySelector(".entity-cancel").addEventListener("click", renderView);
+          row.querySelector(".entity-save").addEventListener("click", async () => {
+            const name = row.querySelector(".entity-name-input").value.trim() || ent.name;
+            const emoji = row.querySelector(".entity-emoji-input").value.trim() || currentEmoji;
+            try {
+              const saveRes = await fetch(resolveUrl("/api/entities"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  id: ent.id,
+                  name: name,
+                  emoji: emoji,
+                  entity_type: ent.entity_type,
+                  species: ent.species,
+                  attributes: ent.attributes || {},
+                  enrolled_photos: ent.enrolled_photos || [],
+                  enrolled_faces: ent.enrolled_faces || [],
+                }),
+              });
+              if (saveRes.ok) {
+                await this.loadEntities();
+              }
+            } catch (err) {
+              console.warn("Failed to save entity:", err);
+            }
+          });
+        };
+
+        renderView();
         this.entitiesContainer.appendChild(row);
       });
     } catch (err) {
@@ -573,6 +804,364 @@ export class SettingsModal {
     } finally {
       this.triggerEvictionBtn.disabled = false;
       this.triggerEvictionBtn.textContent = "⚡ Run Eviction / Sync Now";
+    }
+  }
+
+  async loadCameraNotifications() {
+    if (!this.cameraNotificationsContainer) return;
+    this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">Loading cameras...</div>';
+    try {
+      const res = await fetch("/api/cameras");
+      if (!res.ok) throw new Error("Failed to load cameras");
+      const data = await res.json();
+      const cameras = data.cameras || [];
+      if (cameras.length === 0) {
+        this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">No cameras configured.</div>';
+        return;
+      }
+
+      this.cameraNotificationsContainer.innerHTML = "";
+      const eventTypes = ["motion", "sound", "person", "ding"];
+      const threatLevels = [
+        { value: "", label: "Global Default" },
+        { value: "INFO", label: "INFO" },
+        { value: "LOW", label: "LOW" },
+        { value: "MEDIUM", label: "MEDIUM" },
+        { value: "HIGH", label: "HIGH" },
+        { value: "CRITICAL", label: "CRITICAL" },
+      ];
+
+      for (const cam of cameras) {
+        const card = document.createElement("div");
+        card.className = "camera-notification-card";
+        card.style.cssText = "padding:10px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-subtle);display:flex;flex-direction:column;gap:8px;";
+
+        const enabled = cam.notifications_enabled !== false;
+        const minThreat = cam.notification_min_threat || "";
+        const selectedTypes = new Set(cam.notification_event_types || eventTypes);
+        const pass1 = cam.notify_pass1 !== false;
+        const pass2 = cam.notify_pass2 !== false;
+        const continuousRecording = cam.continuous_recording !== false;
+
+        card.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:0.85rem;">
+              <span>${cam.icon || "📷"}</span>
+              <span>${cam.name || cam.id}</span>
+              <span class="badge" style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:var(--bg-surface);">${cam.provider_badge || "generic"}</span>
+            </div>
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-enabled" ${enabled ? "checked" : ""}>
+              <span>Alerts</span>
+            </label>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:0.78rem;">
+            <label style="display:flex;align-items:center;gap:4px;">
+              <span>Min Threat:</span>
+              <select class="cam-notif-threat" style="padding:2px 6px;border-radius:4px;border:1px solid var(--border-subtle);background:var(--bg-surface);color:inherit;">
+                ${threatLevels.map((t) => `<option value="${t.value}" ${minThreat === t.value ? "selected" : ""}>${t.label}</option>`).join("")}
+              </select>
+            </label>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${eventTypes.map((t) => `<label style="display:flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" class="cam-notif-type" value="${t}" ${selectedTypes.has(t) ? "checked" : ""}><span>${t}</span></label>`).join("")}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;font-size:0.78rem;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-pass1" ${pass1 ? "checked" : ""}>
+              <span>Pass 1 (Instant)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-notif-pass2" ${pass2 ? "checked" : ""}>
+              <span>Pass 2 (Enriched Clip)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="cam-continuous-recording" ${continuousRecording ? "checked" : ""}>
+              <span>Record continuously</span>
+            </label>
+          </div>
+          <div class="camera-ha-section" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-subtle);">
+            <div style="font-weight:600;font-size:0.8rem;margin-bottom:4px;">Home Assistant</div>
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;">
+              <input type="checkbox" class="cam-ha-enabled" ${cam.ha_enabled !== false ? "checked" : ""}>
+              <span>Enabled for HA</span>
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
+              <input class="input-control cam-ha-name" type="text" placeholder="Entity name" value="${cam.ha_entity_name || ""}">
+              <input class="input-control cam-ha-unique" type="text" placeholder="Unique id" value="${cam.ha_unique_id || ""}">
+              <input class="input-control cam-ha-class" type="text" placeholder="Device class" value="${cam.ha_device_class || ""}">
+              <input class="input-control cam-ha-icon" type="text" placeholder="Icon" value="${cam.ha_icon || ""}">
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:0.75rem;">
+              ${["motion","person","sound","ding"].map((t) => `<label style="display:flex;align-items:center;gap:3px;"><input type="checkbox" class="cam-ha-type" value="${t}" ${(cam.ha_event_types || []).includes(t) ? "checked" : ""}><span>${t}</span></label>`).join("")}
+            </div>
+            <div class="cam-ha-status" style="margin-top:6px;font-size:0.75rem;color:var(--text-muted);">Loading sync status...</div>
+          </div>
+        `;
+ 
+        const saveChanges = async () => {
+          const payload = {
+            notifications_enabled: card.querySelector(".cam-notif-enabled").checked,
+            notification_min_threat: card.querySelector(".cam-notif-threat").value || null,
+            notification_event_types: Array.from(card.querySelectorAll(".cam-notif-type:checked")).map((el) => el.value),
+            notify_pass1: card.querySelector(".cam-notif-pass1").checked,
+            notify_pass2: card.querySelector(".cam-notif-pass2").checked,
+            continuous_recording: card.querySelector(".cam-continuous-recording").checked,
+          };
+          try {
+            const patchRes = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/settings`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!patchRes.ok) throw new Error("Save failed");
+            if (this.feedbackEl) {
+              this.feedbackEl.style.color = "#10b981";
+              this.feedbackEl.textContent = `Saved notification settings for ${cam.name || cam.id}`;
+            }
+          } catch (err) {
+            if (this.feedbackEl) {
+              this.feedbackEl.style.color = "#ef4444";
+              this.feedbackEl.textContent = `Failed to save settings for ${cam.name || cam.id}`;
+            }
+          }
+        };
+
+        const saveHA = async () => {
+          const payload = {
+            ha_enabled: card.querySelector(".cam-ha-enabled").checked,
+            ha_entity_name: card.querySelector(".cam-ha-name").value.trim() || null,
+            ha_unique_id: card.querySelector(".cam-ha-unique").value.trim() || null,
+            ha_device_class: card.querySelector(".cam-ha-class").value.trim() || null,
+            ha_icon: card.querySelector(".cam-ha-icon").value.trim() || null,
+            ha_event_types: Array.from(card.querySelectorAll(".cam-ha-type:checked")).map((el) => el.value),
+          };
+          try {
+            const patchRes = await fetch(`/api/cameras/${encodeURIComponent(cam.id)}/settings`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (patchRes.ok) {
+              if (this.feedbackEl) {
+                this.feedbackEl.style.color = "#10b981";
+                this.feedbackEl.textContent = `Saved HA settings for ${cam.name || cam.id}`;
+              }
+            }
+          } catch (err) {
+            if (this.feedbackEl) {
+              this.feedbackEl.style.color = "#ef4444";
+              this.feedbackEl.textContent = `Failed to save HA settings for ${cam.name || cam.id}`;
+            }
+          }
+        };
+
+        card.querySelectorAll(".camera-ha-section input").forEach((el) => {
+          el.addEventListener("change", saveHA);
+        });
+
+        // Load sync status + last published for this camera.
+        (async () => {
+          const statusEl = card.querySelector(".cam-ha-status");
+          try {
+            const res = await fetch(resolveUrl(`/api/home-assistant/cameras/${encodeURIComponent(cam.id)}`));
+            if (res.ok) {
+              const data = await res.json();
+              if (statusEl) {
+                statusEl.textContent = `Last published: ${data.last_published || "never"}`;
+              }
+            } else if (statusEl) {
+              statusEl.textContent = "Sync status unavailable.";
+            }
+          } catch (e) {
+            if (statusEl) statusEl.textContent = "Sync status unavailable.";
+          }
+        })();
+
+        card.querySelectorAll("input, select").forEach((el) => {
+          el.addEventListener("change", saveChanges);
+        });
+
+        this.cameraNotificationsContainer.appendChild(card);
+      }
+    } catch (err) {
+      this.cameraNotificationsContainer.innerHTML = '<div style="font-size:0.8rem;color:#ef4444;">Failed to load camera notification settings.</div>';
+    }
+  }
+
+  async loadHomeAssistant() {
+    if (!this.homeAssistantContainer) return;
+    this.homeAssistantContainer.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">Loading Home Assistant settings...</div>';
+    try {
+      const [cfgRes, statusRes] = await Promise.all([
+        fetch(resolveUrl("/api/home-assistant/config")),
+        fetch(resolveUrl("/api/home-assistant/status")),
+      ]);
+      const cfg = cfgRes.ok ? await cfgRes.json() : {};
+      const status = statusRes.ok ? await statusRes.json() : {};
+      const st = status.status || status || {};
+
+      const ha = cfg.home_assistant && typeof cfg.home_assistant === "object" ? cfg.home_assistant : cfg;
+      const MQTT_ONLY_MSG = "MQTT-only mode — no HA credentials configured";
+      const mode = st.mode || status.mode || cfg.mode || ha.mode || "";
+      const mqttOnly = mode === "mqtt-only";
+      const rawLastError = String(st.last_error || "");
+      const isHttp401 = /HTTP\s*401/i.test(rawLastError);
+      // A bare HTTP 401 in mqtt-only mode is misleading (no REST call is made
+      // there). Suppress only that text; genuine sync/MQTT errors must stay
+      // visible (AC8). In REST mode, keep the friendlier credential hint.
+      let lastError = rawLastError || null;
+      if (isHttp401) {
+        lastError = mqttOnly
+          ? null
+          : rawLastError.replace(/HTTP\s*401/i, "Authentication failed (check HA credentials)");
+      }
+
+      this.homeAssistantContainer.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;grid-column:1 / -1;">
+            <input type="checkbox" id="ha-enabled" ${ha.enabled !== false ? "checked" : ""}>
+            <span>Enable Home Assistant sync</span>
+          </label>
+          <div>
+            <label class="setting-desc" style="font-weight:600;" for="ha-base-url">HA Base URL</label>
+            <input class="input-control" type="text" id="ha-base-url" value="${ha.base_url || ""}" placeholder="http://homeassistant:8123">
+          </div>
+          <div>
+            <label class="setting-desc" style="font-weight:600;" for="ha-ingress-url">Ingress URL</label>
+            <input class="input-control" type="text" id="ha-ingress-url" value="${ha.ingress_url || ""}" placeholder="https://ha.example/api/hassio_ingress/...">
+          </div>
+          <div>
+            <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-host">MQTT Host</label>
+            <input class="input-control" type="text" id="ha-mqtt-host" value="${ha.mqtt_host || ""}" placeholder="127.0.0.1">
+          </div>
+          <div>
+            <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-port">MQTT Port</label>
+            <input class="input-control" type="number" id="ha-mqtt-port" value="${ha.mqtt_port || ""}" placeholder="1883">
+          </div>
+          <div>
+            <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-username">MQTT Username</label>
+            <input class="input-control" type="text" id="ha-mqtt-username" value="${ha.mqtt_username || ""}">
+          </div>
+        </div>
+        <details id="ha-advanced" style="margin-top:8px;">
+          <summary style="cursor:pointer;font-size:0.8rem;font-weight:600;">Advanced (access token)</summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="ha-access-token">Access Token</label>
+              <input class="input-control" type="password" id="ha-access-token" value="" placeholder="${ha.access_token || "masked"}">
+            </div>
+            <div>
+              <label class="setting-desc" style="font-weight:600;" for="ha-mqtt-password">MQTT Password</label>
+              <input class="input-control" type="password" id="ha-mqtt-password" value="" placeholder="${ha.mqtt_password || "masked"}">
+            </div>
+          </div>
+        </details>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+          <button class="btn btn-primary" id="ha-save-btn" type="button">Save</button>
+          <button class="btn" id="ha-test-btn" type="button">Test Connection</button>
+          <button class="btn" id="ha-sync-btn" type="button">Sync Now</button>
+          <span id="ha-test-result" style="font-size:0.75rem;"></span>
+        </div>
+        <div style="margin-top:10px;font-size:0.8rem;">
+          <div><strong>Mode:</strong> ${mqttOnly ? "MQTT-only" : "REST"}</div>
+          <div><strong>Last sync:</strong> ${st.last_sync || "never"}</div>
+          <div><strong>Last error:</strong> ${lastError || "none"}</div>
+          <div class="text-muted" style="font-size:0.7rem;">${mqttOnly ? MQTT_ONLY_MSG : "Connection settings under Advanced are optional for MQTT discovery."}</div>
+        </div>
+        <div style="margin-top:10px;">
+          <div style="font-weight:600;font-size:0.8rem;margin-bottom:4px;">Published entities</div>
+          <div id="ha-published-entities" style="font-size:0.75rem;color:var(--text-muted);"></div>
+        </div>
+      `;
+
+      const publishedEl = this.homeAssistantContainer.querySelector("#ha-published-entities");
+      const topics = st.published_topics || {};
+      const topicKeys = Object.keys(topics);
+      if (publishedEl) {
+        if (topicKeys.length === 0) {
+          publishedEl.textContent = "No entities published yet.";
+        } else {
+          publishedEl.innerHTML = topicKeys.map((k) => `<div>${k}: ${(topics[k] || []).length} topics</div>`).join("");
+        }
+      }
+
+      const saveBtn = this.homeAssistantContainer.querySelector("#ha-save-btn");
+      if (saveBtn) {
+        saveBtn.addEventListener("click", async () => {
+          const payload = {
+            enabled: this.homeAssistantContainer.querySelector("#ha-enabled").checked,
+            base_url: this.homeAssistantContainer.querySelector("#ha-base-url").value.trim() || null,
+            ingress_url: this.homeAssistantContainer.querySelector("#ha-ingress-url").value.trim() || null,
+            mqtt_host: this.homeAssistantContainer.querySelector("#ha-mqtt-host").value.trim() || null,
+            mqtt_port: parseInt(this.homeAssistantContainer.querySelector("#ha-mqtt-port").value, 10) || null,
+            mqtt_username: this.homeAssistantContainer.querySelector("#ha-mqtt-username").value.trim() || null,
+          };
+          const tokenVal = this.homeAssistantContainer.querySelector("#ha-access-token").value.trim();
+          if (tokenVal) payload.access_token = tokenVal;
+          const mqttPw = this.homeAssistantContainer.querySelector("#ha-mqtt-password").value.trim();
+          if (mqttPw) payload.mqtt_password = mqttPw;
+          try {
+            const res = await fetch(resolveUrl("/api/home-assistant/config"), {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const resultEl = this.homeAssistantContainer.querySelector("#ha-test-result");
+            if (resultEl) {
+              resultEl.textContent = res.ok ? "Saved" : "Save failed";
+              resultEl.style.color = res.ok ? "#10b981" : "#ef4444";
+            }
+            if (res.ok) await this.loadHomeAssistant();
+          } catch (e) {
+            console.error("HA save failed:", e);
+          }
+        });
+      }
+
+      const testBtn = this.homeAssistantContainer.querySelector("#ha-test-btn");
+      if (testBtn) {
+        testBtn.addEventListener("click", async () => {
+          const resultEl = this.homeAssistantContainer.querySelector("#ha-test-result");
+          if (resultEl) resultEl.textContent = "Testing...";
+          try {
+            const res = await fetch(resolveUrl("/api/home-assistant/test"), { method: "POST" });
+            const data = await res.json();
+            if (resultEl) {
+              const effectiveMode = data.mode || mode;
+              if (effectiveMode === "mqtt-only") {
+                resultEl.textContent = data.message || MQTT_ONLY_MSG;
+                resultEl.style.color = "#10b981";
+              } else {
+                resultEl.textContent = data.ok ? `OK (${data.status || "connected"})` : `Failed: ${data.error || ""}`;
+                resultEl.style.color = data.ok ? "#10b981" : "#ef4444";
+              }
+            }
+          } catch (e) {
+            // A thrown fetch/JSON error is always a failure - never show the
+            // green MQTT-only placeholder success message here.
+            if (resultEl) {
+              resultEl.textContent = "Error";
+              resultEl.style.color = "#ef4444";
+            }
+          }
+        });
+      }
+
+      const syncBtn = this.homeAssistantContainer.querySelector("#ha-sync-btn");
+      if (syncBtn) {
+        syncBtn.addEventListener("click", async () => {
+          try {
+            await fetch(resolveUrl("/api/home-assistant/sync"), { method: "POST" });
+            await this.loadHomeAssistant();
+          } catch (e) {
+            console.error("HA sync failed:", e);
+          }
+        });
+      }
+    } catch (err) {
+      this.homeAssistantContainer.innerHTML = '<div style="font-size:0.8rem;color:#ef4444;">Failed to load Home Assistant settings.</div>';
+      console.warn("Failed to load HA settings:", err);
     }
   }
 }

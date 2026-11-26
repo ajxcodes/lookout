@@ -103,6 +103,15 @@ Lookout publishes official multi-architecture (`linux/amd64`, `linux/arm64`) OCI
 - `:X.Y` — Floating minor version tag (e.g., `:0.1`)
 - `:sha-<short>` — Immutable commit digest from `main`
 
+### Versioning policy
+`package.json` is the **single source of truth** for the Lookout version. Every other version occurrence is a generated token, not a hand-maintained declaration.
+
+- **Bump** `package.json` first — it is the only version you edit by hand. Python packaging (`pyproject.toml`), `lookout.__version__`, FastAPI `app.version` / OpenAPI, `/health`, and the viewer assets all derive from it automatically.
+- **Regenerate** the consumers with `python3 scripts/sync_version.py` and commit the generated files: `ha-addon/config.yaml`, `custom_components/lookout/manifest.json`, the `?v=` cache-busters in `src/lookout/adapters/web/static/index.html`, and the generated fallback blocks in `Dockerfile` and `ha-addon/Dockerfile`.
+- **Detect drift** with `python3 scripts/sync_version.py --check` (also run by CI's `Version drift guard` step). It exits non-zero and prints `DRIFT: <path> — expected …, found …` when any generated token diverges from `package.json`.
+- **Releases** are derived by `ajxcodes/auto-tag@v1` (`default-bump: patch`, `package-json: "true"`): a newer `package.json` version drives the tag, otherwise conventional commits drive a patch bump. CI writes the resulting tag version back into `package.json`, re-runs `sync_version.py --write`, and commits the regenerated files; the `Validate release tag matches package.json` step in `container-publish` fails if a `v*` tag disagrees with `package.json`.
+- **Local builds**: a plain `docker build .` labels the image with the canonical version via the generated `ENV RELEASE_VERSION="${RELEASE_VERSION:-…}"` fallback. An explicit `--build-arg RELEASE_VERSION=…` (as supplied by CI) still takes precedence.
+
 ### Quick Pull & Run
 ```bash
 # Pull from GitHub Container Registry (GHCR)
@@ -285,6 +294,8 @@ You can run automated local smoke tests using Docker or Podman:
 ```
 
 For complete documentation on quality gates and Home Assistant test fixtures, see [docs/TESTING.md](docs/TESTING.md).
+
+For Home Assistant setup, see [docs/HOME_ASSISTANT.md](docs/HOME_ASSISTANT.md).
 
 ---
 

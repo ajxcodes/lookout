@@ -18,6 +18,9 @@ from lookout.adapters.wyze_native import (
     WyzeStreamSourceError,
     WyzeTutkPtzAdapter,
 )
+from lookout.adapters.wyze_native import (
+    _as_utc as _wyze_as_utc,
+)
 from lookout.config.schema import CameraConfig, WyzeConfig
 from lookout.ports.egress import PtzControlPort, VideoRecorderPort
 
@@ -174,6 +177,45 @@ def test_build_stream_source_reads_nested_device_params() -> None:
 
     assert source.startswith("wyze://192.168.1.50?uid=UPE2UNBNWDFAKE01AB")
     assert "enr=mnfNV14qMEFPrcnS%2Fabc" in source
+
+
+def test_source_resolution_subtype_override_rewrites_configured_url() -> None:
+    """A requested subtype replaces ``subtype`` without disturbing other params."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), cameras=[_camera()])
+
+    default = adapter.resolve_source("office_cam")
+    assert "subtype=hd" in default
+    assert "enr=mnfNV14qMEFPrcnS%2Fabc" in default
+
+    sd = adapter.resolve_source("office_cam", "sd")
+    assert "subtype=sd" in sd
+    assert "subtype=hd" not in sd
+    assert "uid=UPE2UNBNWDFAKE01AB" in sd
+    assert "enr=mnfNV14qMEFPrcnS%2Fabc" in sd
+    assert "mac=A1B2C3D4E5F6" in sd
+    assert "dtls=true" in sd
+
+    assert adapter.resolve_source("office_cam", subtype="hd") == default
+
+
+def test_build_stream_source_subtype_override() -> None:
+    adapter = WyzeNativeAdapter(config=WyzeConfig(stream_subtype="hd"))
+    assert "subtype=hd" in adapter.build_stream_source(WYZE_DEVICE)
+    sd = adapter.build_stream_source(WYZE_DEVICE, subtype="sd")
+    assert "subtype=sd" in sd
+    assert "subtype=hd" not in sd
+
+
+async def test_capture_snapshot_uses_configured_hd_source(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    manager = FakeStreamManager()
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), stream_manager=manager, cameras=[_camera()])
+
+    await adapter.capture_snapshot("office_cam")
+
+    assert manager.ensured[0][0] == "office_cam"
+    assert manager.ensured[0][1] is not None
+    assert "subtype=hd" in manager.ensured[0][1]
 
 
 async def test_capture_snapshot_writes_real_jpeg(tmp_path: Any, monkeypatch: Any) -> None:
@@ -360,3 +402,182 @@ async def test_poll_events_maps_wyze_event_fields() -> None:
     assert payloads[0]["mac"] == "A1B2C3D4E5F6"
     assert payloads[0]["alarm_type"] == "Motion"
     assert payloads[0]["ai_tags"] == ["Person", "Vehicle"]
+
+
+def test_as_utc_handles_int_epoch_millis() -> None:
+    assert _wyze_as_utc(1700000000000) == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
+
+
+async def test_poll_events_handles_epoch_ms_time() -> None:
+    event = SimpleNamespace(
+        id="evt-ms",
+        mac="A1B2C3D4E5F6",
+        time=1700000000000,
+        alarm_type=SimpleNamespace(description="Motion"),
+        tags=[],
+        category="motion",
+        parameters={},
+    )
+    raw = FakeWyzeRawClient([WYZE_DEVICE], events=[event])
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), client=raw, cameras=[_camera()])
+    adapter.cache_devices([{**WYZE_DEVICE}])
+
+    payloads = await adapter.poll_events("office_cam", since=None)
+
+    assert payloads[0]["timestamp"] == datetime.fromtimestamp(1700000000, tz=UTC).isoformat()
+
+
+def test_build_stream_source_honors_dtls_and_subtype_config() -> None:
+    """TR-5: stream_dtls/stream_subtype config changes the TUTK source tail."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(stream_dtls=False, stream_subtype="sd"))
+    source = adapter.build_stream_source(
+        {
+            "ip": "192.168.1.50",
+            "p2p_id": "UPE2UNBNWDFAKE01AB",
+            "enr": "mnfNV14qMEFPrcnS/abc",
+            "mac": "A1B2C3D4E5F6",
+            "model": "WYZECP1_JEF",
+        }
+    )
+    assert source.endswith("&subtype=sd&dtls=false")
+
+
+def test_verify_stream_source_reports_missing_fields_and_candidates() -> None:
+    """TR-6: missing identity fields and primary/fallback candidates are reported."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), cameras=[_camera()])
+    incomplete = {k: v for k, v in WYZE_DEVICE.items() if k != "enr"}
+    adapter.cache_devices([incomplete])
+    bad = adapter.verify_stream_source("office_cam")
+    assert bad["status"] == "source_error"
+    assert "enr" in bad["missing_fields"]
+    assert bad["source"] is None
+
+    adapter.cache_devices([WYZE_DEVICE])
+    good = adapter.verify_stream_source("office_cam")
+    assert good["status"] == "ok"
+    assert good["missing_fields"] == []
+    assert good["ip"] == "192.168.1.50"
+    assert good["source"].startswith("wyze://")
+    assert good["source"].endswith("&dtls=true")
+    assert good["fallback_source"].endswith("&dtls=false")
+    assert good["fallback_source"] != good["source"]
+
+
+async def test_record_clip_primes_consumer_before_clip(tmp_path: Any, monkeypatch: Any) -> None:
+    """TR-7: record_clip primes the consumer before requesting the MP4 clip."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    class PrimeTrackingManager(FakeStreamManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        async def frame(self, camera_id: str) -> bytes:
+            self.calls.append("frame")
+            return await super().frame(camera_id)
+
+        async def negotiate_consumer(self, camera_id: str) -> None:
+            await self.frame(camera_id)
+
+        async def clip(self, camera_id: str, duration_seconds: float) -> bytes:
+            self.calls.append("clip")
+            return await super().clip(camera_id, duration_seconds)
+
+    manager = PrimeTrackingManager()
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), stream_manager=manager, cameras=[_camera()])
+    path = await adapter.record_clip("office_cam", 5.0)
+
+    assert manager.calls == ["frame", "clip"]
+    assert Path(path).read_bytes() == MP4
+    assert b"mdat" in Path(path).read_bytes()
+
+
+def _confident_car_alarm_classifier() -> Any:
+    """Stub classifier emitting a confident car_alarm taxonomy label."""
+    from lookout.domain.models import InferenceProvenance
+
+    class ConfidentCarAlarm:
+        async def classify_audio(self, audio_bytes: bytes) -> tuple[str, float, Any]:
+            return (
+                "car_alarm",
+                0.92,
+                InferenceProvenance(
+                    provider="yamnet",
+                    model_name="models/yamnet.tflite",
+                    latency_ms=1.0,
+                    confidence=0.92,
+                    raw_output="car_alarm:0.92",
+                ),
+            )
+
+    return ConfidentCarAlarm()
+
+
+async def test_wyze_sound_event_categorization_and_notification() -> None:
+    """A bare Sound trigger abstains; a confident car_alarm still escalates."""
+    from lookout.adapters.memory.notification import MockNotificationAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import EventCategory, ThreatLevel
+    from lookout.domain.service import EventProcessingService
+
+    repo = InMemoryEventRepository()
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(repository=repo, notification=notifier)
+
+    event = await service.ingest_raw_event(
+        "wyze_cam",
+        {"metadata": {"alarm_type": "Sound", "trigger": "sound"}},
+    )
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert len(notifier.sent_notifications) == 0
+
+    confident_service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        notification=notifier,
+        audio_classifier=_confident_car_alarm_classifier(),
+    )
+    escalated = await confident_service.ingest_raw_event(
+        "wyze_cam",
+        {
+            "audio": b"car alarm siren recording",
+            "metadata": {"alarm_type": "Sound", "trigger": "sound"},
+        },
+    )
+    assert escalated.category == EventCategory.ACOUSTIC_ANOMALY
+    assert escalated.threat_level == ThreatLevel.HIGH
+    assert len(notifier.sent_notifications) == 1
+
+
+async def test_wyze_sound_trigger_without_confident_audio_abstains() -> None:
+    """TR-20 (AC2, AC4): a bare sound trigger abstains; confident audio escalates."""
+    from lookout.adapters.memory.notification import MockNotificationAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import EventCategory, ThreatLevel
+    from lookout.domain.service import EventProcessingService
+
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(repository=InMemoryEventRepository(), notification=notifier)
+    event = await service.ingest_raw_event(
+        "wyze_cam",
+        {"metadata": {"alarm_type": "Sound", "trigger": "sound"}},
+    )
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert len(notifier.sent_notifications) == 0
+
+    confident_service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        notification=notifier,
+        audio_classifier=_confident_car_alarm_classifier(),
+    )
+    confident = await confident_service.ingest_raw_event(
+        "wyze_cam",
+        {
+            "audio": b"car alarm siren recording",
+            "metadata": {"alarm_type": "Sound", "trigger": "sound"},
+        },
+    )
+    assert confident.category == EventCategory.ACOUSTIC_ANOMALY
+    assert confident.threat_level == ThreatLevel.HIGH
+    assert len(notifier.sent_notifications) == 1

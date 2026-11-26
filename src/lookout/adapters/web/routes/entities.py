@@ -17,6 +17,13 @@ ALLOWED_EXTENSIONS: set[str] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"
 MAX_PHOTO_SIZE: int = 15 * 1024 * 1024  # 15MB
 CHUNK_SIZE: int = 64 * 1024  # 64KB
 
+ENTITY_DEFAULT_EMOJI: dict[str, str] = {
+    "resident": "👤",
+    "pet": "🐶",
+    "vehicle": "🚗",
+    "thing": "📦",
+}
+
 router = APIRouter(tags=["entities"])
 
 
@@ -24,10 +31,24 @@ class EntityPayload(BaseModel):
     id: str
     name: str
     entity_type: str = "resident"  # resident, pet, vehicle, thing
+    emoji: str | None = None
     species: str | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
     enrolled_photos: list[str] = Field(default_factory=list)
     enrolled_faces: list[str] = Field(default_factory=list)
+
+
+def resolve_entity_emoji(
+    entity_type: str,
+    attributes: dict[str, Any] | None = None,
+    explicit: str | None = None,
+) -> str:
+    """Resolve a display emoji: explicit value, stored attribute, then type default."""
+    if explicit:
+        return explicit
+    if attributes and attributes.get("emoji"):
+        return str(attributes["emoji"])
+    return ENTITY_DEFAULT_EMOJI.get(entity_type, "👤")
 
 
 def _get_entity_photos_dir(request: Request, entity_id: str) -> Path:
@@ -58,6 +79,9 @@ async def list_entities(request: Request) -> dict[str, Any]:
                         "entity_type": m.member_type,
                         "species": m.species,
                         "attributes": m.attributes,
+                        "emoji": resolve_entity_emoji(
+                            m.member_type, m.attributes, m.attributes.get("emoji")
+                        ),
                         "enrolled_faces": m.enrolled_faces,
                         "enrolled_photos": m.enrolled_faces,
                     }
@@ -77,6 +101,7 @@ async def list_entities(request: Request) -> dict[str, Any]:
                         "name": r.name,
                         "entity_type": "resident",
                         "attributes": {},
+                        "emoji": resolve_entity_emoji("resident", {}, r.emoji),
                         "enrolled_faces": r.enrolled_faces,
                         "enrolled_photos": r.enrolled_faces,
                     }
@@ -94,6 +119,7 @@ async def list_entities(request: Request) -> dict[str, Any]:
                             "breed": getattr(p, "breed", None),
                             "color": getattr(p, "color", None),
                         },
+                        "emoji": resolve_entity_emoji("pet", {}, p.emoji),
                         "enrolled_photos": getattr(p, "enrolled_photos", []),
                         "enrolled_faces": [],
                     }
@@ -112,6 +138,7 @@ async def list_entities(request: Request) -> dict[str, Any]:
                             "color": v.color,
                             "license_plate": v.license_plate,
                         },
+                        "emoji": resolve_entity_emoji("vehicle", {}, v.emoji),
                         "enrolled_photos": v.enrolled_photos,
                         "enrolled_faces": [],
                     }
@@ -123,7 +150,14 @@ async def list_entities(request: Request) -> dict[str, Any]:
     existing_ids = {e["id"] for e in entities}
     for eid, edata in memory_entities.items():
         if eid not in existing_ids:
-            entities.append(edata)
+            item = dict(edata)
+            item["emoji"] = resolve_entity_emoji(
+                edata.get("entity_type", "resident"),
+                edata.get("attributes"),
+                edata.get("emoji"),
+            )
+            entities.append(item)
+            existing_ids.add(eid)
 
     return {"entities": entities}
 
@@ -134,12 +168,18 @@ async def create_or_update_entity(payload: EntityPayload, request: Request) -> d
     if not hasattr(request.app.state, "custom_entities"):
         request.app.state.custom_entities = {}
 
+    stored_attributes = dict(payload.attributes)
+    if payload.emoji is not None:
+        stored_attributes["emoji"] = payload.emoji
+    resolved_emoji = resolve_entity_emoji(payload.entity_type, stored_attributes, payload.emoji)
+
     entity_dict = {
         "id": payload.id,
         "name": payload.name,
         "entity_type": payload.entity_type,
         "species": payload.species,
-        "attributes": payload.attributes,
+        "attributes": stored_attributes,
+        "emoji": resolved_emoji,
         "enrolled_photos": payload.enrolled_photos or payload.enrolled_faces,
         "enrolled_faces": payload.enrolled_faces,
     }
@@ -154,7 +194,7 @@ async def create_or_update_entity(payload: EntityPayload, request: Request) -> d
                 member_type=payload.entity_type,
                 species=payload.species,
                 enrolled_faces=payload.enrolled_photos or payload.enrolled_faces,
-                attributes=payload.attributes,
+                attributes=stored_attributes,
             )
             await repo.save(member)
         except Exception as exc:
@@ -176,6 +216,7 @@ async def create_or_update_entity(payload: EntityPayload, request: Request) -> d
                     color=payload.attributes.get("color"),
                     license_plate=payload.attributes.get("license_plate"),
                     enrolled_photos=payload.enrolled_photos,
+                    emoji=resolved_emoji,
                 )
             )
         elif payload.entity_type == "pet":
@@ -189,6 +230,7 @@ async def create_or_update_entity(payload: EntityPayload, request: Request) -> d
                     breed=payload.attributes.get("breed"),
                     color=payload.attributes.get("color"),
                     enrolled_photos=payload.enrolled_photos,
+                    emoji=resolved_emoji,
                 )
             )
         elif payload.entity_type == "resident":
@@ -199,6 +241,7 @@ async def create_or_update_entity(payload: EntityPayload, request: Request) -> d
                     id=payload.id,
                     name=payload.name,
                     enrolled_faces=payload.enrolled_faces or payload.enrolled_photos,
+                    emoji=resolved_emoji,
                 )
             )
 

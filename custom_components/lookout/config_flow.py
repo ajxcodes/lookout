@@ -52,7 +52,16 @@ except ImportError:
             return k
 
 
-from .const import CONF_API_KEY, CONF_HOST, CONF_PORT, DEFAULT_HOST, DEFAULT_PORT, DOMAIN
+from .const import (
+    CONF_ACCESS_TOKEN,
+    CONF_API_KEY,
+    CONF_HOST,
+    CONF_INGRESS_URL,
+    CONF_PORT,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    DOMAIN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +92,8 @@ class LookoutConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
             vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
             vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
             vol.Optional(CONF_API_KEY): str,
+            vol.Optional(CONF_ACCESS_TOKEN): str,
+            vol.Optional(CONF_INGRESS_URL): str,
         }
 
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)

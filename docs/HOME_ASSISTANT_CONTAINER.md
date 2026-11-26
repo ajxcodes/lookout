@@ -19,7 +19,7 @@ Deploy Lookout and `go2rtc` alongside Home Assistant:
 ```yaml
 services:
   lookout:
-    image: ghcr.io/ajxcodes/lookout:v0.3.0
+    image: ghcr.io/ajxcodes/lookout:v0.7.0
     container_name: lookout
     restart: unless-stopped
     ports:

@@ -14,17 +14,35 @@ from lookout.adapters.ai_cascade import (
     OpenCodeVisionProvider,
     StructuredOutputParser,
 )
+from lookout.adapters.entity_matcher import EntityCatalogMatcher
 from lookout.adapters.face_recognition import FaceRecognitionAdapter
 from lookout.adapters.memory import InMemoryEventRepository
+from lookout.adapters.memory.notification import MockNotificationAdapter
+from lookout.adapters.ring_native import _category_from
 from lookout.config.schema import (
     CascadeConfig,
     GeminiConfig,
     OllamaConfig,
     OpenCodeConfig,
+    PetConfig,
+    ResidentConfig,
 )
-from lookout.domain.models import EventCategory, ThreatLevel
+from lookout.domain.models import (
+    BoundingBox,
+    DetectionMetrics,
+    EventCategory,
+    InferenceProvenance,
+    ThreatLevel,
+)
 from lookout.domain.service import EventProcessingService
 from lookout.ports.egress import VisionInferencePort
+from tests.fixtures.inference_samples import (
+    CATALOG_PET_SAMPLE,
+    CATALOG_RESIDENT_SAMPLE,
+    FALSE_POSITIVE_SAMPLE,
+    UNMAPPED_LABEL_OUTPUT,
+    UNPARSEABLE_TEXT_OUTPUT,
+)
 
 
 @pytest.mark.asyncio
@@ -52,7 +70,7 @@ async def test_event_processing_service_pipeline_with_cascade() -> None:
 
 @pytest.mark.asyncio
 async def test_event_processing_service_threat_dispatch_escalation() -> None:
-    """TR-4: Threat level escalates to MEDIUM for unknown visitor detection."""
+    """No-signal cascade no longer escalates to a guessed unknown visitor."""
     repo = InMemoryEventRepository()
     cascade = CascadeVisionAdapter(cascade_config=CascadeConfig(tiers=["local_edge", "offline"]))
     service = EventProcessingService(
@@ -61,8 +79,8 @@ async def test_event_processing_service_threat_dispatch_escalation() -> None:
     )
 
     processed = await service.ingest_raw_event("cam-driveway", b"camera image bytes")
-    assert processed.threat_level == ThreatLevel.MEDIUM
-    assert processed.category == EventCategory.UNKNOWN_VISITOR
+    assert processed.threat_level == ThreatLevel.INFO
+    assert processed.category == EventCategory.ABSTAINED
 
 
 @pytest.mark.asyncio
@@ -238,7 +256,7 @@ async def test_cascade_failover_to_local_edge_tier3() -> None:
 
     category, metrics, provenance = await adapter.analyze_scene(b"image bytes")
     assert provenance.provider == "local_edge"
-    assert category == EventCategory.UNKNOWN_VISITOR
+    assert category == EventCategory.ABSTAINED
 
 
 @pytest.mark.asyncio
@@ -277,7 +295,8 @@ async def test_cascade_full_failover_to_offline_fallback_tier4() -> None:
 
     category, metrics, provenance = await adapter.analyze_scene(b"offline image")
     assert provenance.provider == "offline_fallback"
-    assert category == EventCategory.UNKNOWN_VISITOR
+    assert category == EventCategory.ABSTAINED
+    assert provenance.abstain_reason == "all_tiers_unavailable"
     assert metrics.total_latency_ms >= 0.0
 
 
@@ -321,13 +340,16 @@ def test_structured_output_parser_bounding_boxes() -> None:
     assert box.x_max == 0.8
 
 
-def test_structured_output_parser_malformed_fallback() -> None:
-    """TR-17: StructuredOutputParser falls back gracefully on malformed output."""
-    raw = "Random unparseable garbage output with no structure or recognizable tokens."
-    category, metrics, summary = StructuredOutputParser.parse(raw)
-    assert category == EventCategory.UNKNOWN_VISITOR
+def test_unparseable_text_fallback_abstains() -> None:
+    """TR-21: Unparseable text abstains with an observable reason (AC2)."""
+    category, metrics, summary, reason = StructuredOutputParser.parse_detailed(
+        UNPARSEABLE_TEXT_OUTPUT
+    )
+    assert category == EventCategory.ABSTAINED
     assert metrics.confidence == 0.5
     assert len(metrics.bounding_boxes) == 0
+    assert reason == "unparseable_output"
+    assert summary == UNPARSEABLE_TEXT_OUTPUT
 
 
 def test_cascade_implements_vision_inference_port() -> None:
@@ -368,4 +390,253 @@ async def test_cascade_falls_back_to_total_timeout_seconds() -> None:
     category, metrics, provenance = await adapter.analyze_scene(b"test")
     # Must have timed out on the slow provider and fallen back to offline_fallback
     assert provenance.provider == "offline_fallback"
-    assert category == EventCategory.UNKNOWN_VISITOR
+    assert category == EventCategory.ABSTAINED
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ollama_downscales_large_image() -> None:
+    import base64
+    import io
+    import json
+
+    from PIL import Image
+
+    img = Image.new("RGB", (2000, 2000), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    original = buf.getvalue()
+
+    captured: dict[str, bytes] = {}
+
+    def handler(request: httpx.Request) -> Response:
+        body = json.loads(request.content)
+        captured["decoded"] = base64.b64decode(body["images"][0])
+        return Response(
+            200,
+            json={
+                "response": '{"category": "false_positive", "confidence": 0.5}',
+                "prompt_eval_count": 1,
+            },
+        )
+
+    respx.post("http://localhost:11434/api/generate").mock(side_effect=handler)
+
+    provider = OllamaVisionProvider(OllamaConfig())
+    await provider.analyze(original)
+
+    assert len(captured["decoded"]) < len(original)
+
+
+class _BoxDetector:
+    """Minimal light-ML stub returning a fixed set of bounding boxes."""
+
+    def __init__(self, boxes: list[BoundingBox]) -> None:
+        self.boxes = boxes
+
+    def detect_objects(self, image_bytes: bytes) -> tuple[list[BoundingBox], float]:
+        return self.boxes, 12.0
+
+
+class _StubVision:
+    """Minimal vision stub returning a fixed category with provenance."""
+
+    def __init__(self, category: EventCategory, confidence: float = 0.9) -> None:
+        self.category = category
+        self.confidence = confidence
+
+    async def analyze_scene(
+        self, image_bytes: bytes, prompt: str | None = None
+    ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
+        return (
+            self.category,
+            DetectionMetrics(confidence=self.confidence),
+            InferenceProvenance(
+                provider="gemini",
+                model_name="gemini-3.5-flash-lite",
+                latency_ms=1.0,
+                confidence=self.confidence,
+            ),
+        )
+
+
+class _UnmappedLabelVision:
+    """Tier carrying the discovery's unmapped-label abstention reason."""
+
+    async def analyze_scene(
+        self, image_bytes: bytes, prompt: str | None = None
+    ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
+        category, metrics, _, reason = StructuredOutputParser.parse_detailed(UNMAPPED_LABEL_OUTPUT)
+        return (
+            category,
+            metrics,
+            InferenceProvenance(
+                provider="ollama",
+                model_name="moondream",
+                latency_ms=1.0,
+                confidence=metrics.confidence,
+                abstain_reason=reason,
+            ),
+        )
+
+
+class _FailingVision:
+    async def analyze_scene(
+        self, image_bytes: bytes, prompt: str | None = None
+    ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
+        raise RuntimeError("tier unavailable")
+
+
+@pytest.mark.asyncio
+async def test_unmapped_label_abstains_with_observable_reason() -> None:
+    """TR-11 (AC2): unmapped VLM labels abstain and expose the reason."""
+    category, _, _, reason = StructuredOutputParser.parse_detailed(UNMAPPED_LABEL_OUTPUT)
+    assert category == EventCategory.ABSTAINED
+    assert reason == "unmapped_label"
+
+    service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        vision_inference=_UnmappedLabelVision(),
+    )
+    event = await service.ingest_raw_event(
+        "cam-abstain", {"image": b"snapshot with unmapped label"}
+    )
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert event.metadata["abstain_reason"] == "unmapped_label"
+    assert event.provenance[0].abstain_reason == "unmapped_label"
+    assert event.category != EventCategory.UNKNOWN_VISITOR
+
+
+@pytest.mark.asyncio
+async def test_catalog_matched_resident_drives_verified_resident() -> None:
+    """TR-12 (AC1): an enrolled catalog match resolves to VERIFIED_RESIDENT."""
+    matcher = EntityCatalogMatcher(residents=[ResidentConfig(id="resident-alvin", name="Alvin")])
+    detector = _BoxDetector(
+        [BoundingBox(label="person", confidence=0.93, x_min=0.1, y_min=0.1, x_max=0.6, y_max=0.8)]
+    )
+    service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        light_ml_detector=detector,
+        entity_matcher=matcher,
+    )
+    event = await service.ingest_raw_event("cam-porch", CATALOG_RESIDENT_SAMPLE)
+    assert event.matched_entities == ["Alvin"]
+    assert event.resident_id == "resident-alvin"
+    assert event.category == EventCategory.VERIFIED_RESIDENT
+
+
+@pytest.mark.asyncio
+async def test_catalog_matched_pet_survives_vlm_and_audio_overrides() -> None:
+    """TR-13 (AC1, AC4): a catalog-matched pet cannot be downgraded by VLM/sound."""
+    matcher = EntityCatalogMatcher(pets=[PetConfig(id="pet-mochi", name="Mochi", species="dog")])
+    detector = _BoxDetector(
+        [BoundingBox(label="dog", confidence=0.90, x_min=0.2, y_min=0.3, x_max=0.7, y_max=0.8)]
+    )
+    service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        light_ml_detector=detector,
+        entity_matcher=matcher,
+        vision_inference=_StubVision(EventCategory.FALSE_POSITIVE, 0.95),
+    )
+    payload = dict(CATALOG_PET_SAMPLE)
+    payload["metadata"] = {"alarm_type": "Sound", "ai_tags": ["Dog Barking"]}
+    event = await service.ingest_raw_event("cam-porch", payload)
+    assert event.pet_id == "pet-mochi"
+    assert event.matched_entities == ["Mochi"]
+    assert event.category == EventCategory.KNOWN_PET
+    assert "Sound alarm" not in event.summary
+
+
+@pytest.mark.asyncio
+async def test_non_person_motion_false_positives_are_suppressed() -> None:
+    """TR-14 (AC3): non-person motion is suppressed/reclassified, not a visitor."""
+    service = EventProcessingService(repository=InMemoryEventRepository())
+    shadow = await service.ingest_raw_event("cam", FALSE_POSITIVE_SAMPLE)
+    assert shadow.category == EventCategory.FALSE_POSITIVE
+
+    for label in ("wind", "leaves"):
+        category, _, _, _ = StructuredOutputParser.parse_detailed(
+            f'{{"category": "{label}", "confidence": 0.9}}'
+        )
+        assert category == EventCategory.FALSE_POSITIVE
+
+    wind_service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        vision_inference=_StubVision(EventCategory.FALSE_POSITIVE, 0.91),
+    )
+    wind = await wind_service.ingest_raw_event("cam", {"image": b"wind moving leaves"})
+    assert wind.category == EventCategory.FALSE_POSITIVE
+
+    assert _category_from("motion", "") == EventCategory.ABSTAINED
+    assert _category_from("ding", "") == EventCategory.ABSTAINED
+
+    person = await service.ingest_raw_event("cam", {"metadata": {"ai_tags": ["person"]}})
+    assert person.category == EventCategory.UNKNOWN_VISITOR
+
+
+@pytest.mark.asyncio
+async def test_all_tier_failure_abstains_with_reason() -> None:
+    """TR-19 (AC2): all-tier failure abstains with a reason and sends no alert."""
+    tiers = ["ollama", "opencode_go", "gemini", "opencode_free", "local_edge", "offline"]
+    providers = {name: _FailingVision() for name in tiers if name != "offline"}
+    providers["offline"] = OfflineVisionFallbackProvider()
+    adapter = CascadeVisionAdapter(
+        cascade_config=CascadeConfig(tiers=tiers),
+        providers=providers,  # type: ignore[arg-type]
+    )
+    category, _, provenance = await adapter.analyze_scene(b"image bytes")
+    assert category == EventCategory.ABSTAINED
+    assert provenance.abstain_reason == "all_tiers_unavailable"
+
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        vision_inference=adapter,
+        notification=notifier,
+    )
+    event = await service.ingest_raw_event("cam-failed", {"image": b"image bytes"})
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert event.metadata["abstain_reason"] == "all_tiers_unavailable"
+    assert len(notifier.sent_notifications) == 0
+
+
+@pytest.mark.asyncio
+async def test_no_signal_vision_tiers_do_not_report_unknown_visitor() -> None:
+    """TR-22 (AC2, AC3): no-signal tiers abstain instead of guessing a visitor."""
+    import asyncio
+
+    class SlowProvider:
+        async def analyze_scene(
+            self, image_bytes: bytes, prompt: str | None = None
+        ) -> tuple[EventCategory, DetectionMetrics, InferenceProvenance]:
+            await asyncio.sleep(0.5)
+            return (
+                EventCategory.PACKAGE_EVENT,
+                DetectionMetrics(confidence=0.9),
+                InferenceProvenance(
+                    provider="slow",
+                    model_name="mock",
+                    latency_ms=500.0,
+                    confidence=0.9,
+                ),
+            )
+
+    category, metrics, _ = await LocalEdgeVisionProvider().analyze(b"camera image bytes")
+    assert category == EventCategory.ABSTAINED
+    assert metrics.bounding_boxes == []
+
+    offline_adapter = CascadeVisionAdapter(
+        cascade_config=CascadeConfig(tiers=["offline"]),
+        providers={"offline": OfflineVisionFallbackProvider()},
+    )
+    category, _, _ = await offline_adapter.analyze_scene(b"camera image bytes")
+    assert category == EventCategory.ABSTAINED
+
+    timeout_adapter = CascadeVisionAdapter(
+        cascade_config=CascadeConfig(tiers=["slow", "offline"], total_timeout_seconds=0.01),
+        providers={"slow": SlowProvider(), "offline": OfflineVisionFallbackProvider()},  # type: ignore[dict-item]
+    )
+    category, _, _ = await timeout_adapter.analyze_scene(b"camera image bytes")
+    assert category == EventCategory.ABSTAINED

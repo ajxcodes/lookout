@@ -11,5 +11,5 @@
     "httpx>=0.27.0",
     "voluptuous>=0.11.7"
   ],
-  "version": "0.3.0"
+  "version": "0.7.0"
 }

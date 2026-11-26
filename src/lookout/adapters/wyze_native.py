@@ -7,14 +7,16 @@ for control and an embedded go2rtc instance for TUTK media.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import math
 import os
+import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
 from lookout.config.schema import WyzeConfig
@@ -40,11 +42,32 @@ class WyzeStreamSourceError(RuntimeError):
     """Raised when a Wyze device lacks the fields required to build a go2rtc source."""
 
 
-def _as_utc(value: datetime) -> datetime:
-    """Normalize a datetime to timezone-aware UTC."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+def _as_utc(value: Any) -> datetime:
+    """Normalize a datetime/str/epoch value to a timezone-aware UTC datetime."""
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if abs(number) >= 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=UTC)
+    if isinstance(value, str):
+        stripped = value.strip()
+        # Try ISO-8601 first.
+        try:
+            return _as_utc(datetime.fromisoformat(stripped.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+        # Then try a numeric (epoch) string.
+        try:
+            return _as_utc(float(stripped))
+        except ValueError:
+            pass
+    raise ValueError(f"Cannot normalize value to UTC datetime: {value!r}")
 
 
 class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
@@ -65,6 +88,9 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         self.cameras = list(cameras) if cameras is not None else []
         self._client_instance = client
         self._devices: dict[str, dict[str, Any]] = {}
+        self._last_error: str | None = None
+        self._last_success: Any | None = None
+        self._last_event_count: int = 0
         self._ptz = WyzeTutkPtzAdapter(
             config=self.config, client=self, stream_manager=stream_manager
         )
@@ -146,10 +172,59 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             "or wyze.email/password/key_id/api_key."
         )
 
-    def _client(self) -> Any:
+    def _client(self, force: bool = False) -> Any:
+        if force:
+            self._client_instance = self._build_client()
+            return self._client_instance
         if self._client_instance is None:
             self._client_instance = self._build_client()
         return self._client_instance
+
+    def _persist_wyze_tokens(self, client: Any) -> None:
+        token = getattr(client, "_token", None)
+        refresh_token = getattr(client, "_refresh_token", None)
+        if token is not None:
+            with contextlib.suppress(Exception):
+                self.config.auth_token = token
+        if refresh_token is not None:
+            with contextlib.suppress(Exception):
+                self.config.refresh_token = refresh_token
+
+    async def _refresh_wyze_auth(self) -> bool:
+        client = self._client_instance
+        if client is None:
+            try:
+                self._client(force=True)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+        refresh_method = getattr(client, "refresh_token", None)
+        if callable(refresh_method):
+            try:
+                await self._run_sync(refresh_method)
+                self._persist_wyze_tokens(client)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+        # Rebuild if refresh fails.
+        try:
+            self._client(force=True)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def refresh_client(self) -> Any:
+        return self._client(force=True)
+
+    async def recreate_client(self) -> Any:
+        return self._client(force=True)
+
+    async def reset_client(self) -> None:
+        self._client_instance = None
+
+    @staticmethod
+    def _is_token_expired(exc: Any) -> bool:
+        return "access token has expired" in str(exc).lower()
 
     async def _run_sync(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a blocking wyze_sdk call in a worker thread."""
@@ -235,38 +310,92 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         """Public helper for tests and callers to prime the discovery cache."""
         self._cache_devices(devices)
 
-    def build_stream_source(self, device: dict[str, Any]) -> str:
-        """Build the exact go2rtc ``wyze://`` TUTK source URL for a device."""
+    @staticmethod
+    def _source_fields(device: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         params = device.get("device_params")
         if not isinstance(params, dict):
             params = {}
-        ip = device.get("ip") or params.get("ip")
-        uid = device.get("p2p_id") or params.get("p2p_id")
-        enr = device.get("enr")
-        mac = device.get("mac")
-        model = device.get("model") or device.get("product_model")
-        missing = [
-            name
-            for name, value in (
-                ("ip", ip),
-                ("p2p_id", uid),
-                ("enr", enr),
-                ("mac", mac),
-            )
-            if not value
-        ]
+        fields = {
+            "ip": device.get("ip") or params.get("ip"),
+            "p2p_id": device.get("p2p_id") or params.get("p2p_id"),
+            "enr": device.get("enr"),
+            "mac": device.get("mac"),
+            "model": device.get("model") or device.get("product_model"),
+        }
+        missing = [name for name in ("ip", "p2p_id", "enr", "mac") if not fields.get(name)]
+        return fields, missing
+
+    @staticmethod
+    def _with_subtype(source: str, subtype: str) -> str:
+        """Return a ``wyze://`` source with its ``subtype`` query value replaced.
+
+        Only the subtype parameter is touched; every other query value keeps its
+        original encoding (notably the percent-encoded ``enr``/``uid`` fields).
+        """
+        parts = urlsplit(source)
+        replacement = f"subtype={quote(subtype, safe='')}"
+        pattern = r"(^|&)subtype=[^&]*"
+        if re.search(pattern, parts.query):
+            query = re.sub(pattern, lambda m: f"{m.group(1)}{replacement}", parts.query, count=1)
+        else:
+            query = f"{parts.query}&{replacement}" if parts.query else replacement
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+    def _build_source(
+        self,
+        device: dict[str, Any],
+        *,
+        dtls: bool | None = None,
+        subtype: str | None = None,
+    ) -> str:
+        fields, missing = self._source_fields(device)
         if missing:
             raise WyzeStreamSourceError(
                 f"Cannot build wyze:// source: missing {', '.join(missing)}"
             )
+        effective_subtype = subtype or getattr(self.config, "stream_subtype", None) or "hd"
+        effective_dtls = getattr(self.config, "stream_dtls", True) if dtls is None else dtls
+        dtls_text = "true" if effective_dtls else "false"
         return (
-            f"wyze://{ip}"
-            f"?uid={quote(str(uid), safe='')}"
-            f"&enr={quote(str(enr), safe='')}"
-            f"&mac={quote(str(mac), safe='')}"
-            f"&model={quote(str(model or ''), safe='')}"
-            "&subtype=hd&dtls=true"
+            f"wyze://{fields['ip']}"
+            f"?uid={quote(str(fields['p2p_id']), safe='')}"
+            f"&enr={quote(str(fields['enr']), safe='')}"
+            f"&mac={quote(str(fields['mac']), safe='')}"
+            f"&model={quote(str(fields['model'] or ''), safe='')}"
+            f"&subtype={quote(str(effective_subtype), safe='')}&dtls={dtls_text}"
         )
+
+    def build_stream_source(self, device: dict[str, Any], *, subtype: str | None = None) -> str:
+        """Build the go2rtc ``wyze://`` TUTK source URL for a device."""
+        return self._build_source(device, subtype=subtype)
+
+    def verify_stream_source(self, camera_id: str) -> dict[str, Any]:
+        """Report required source fields, configured IP and candidate sources.
+
+        Never includes credential material: the returned values are identity
+        metadata (IP/MAC) and go2rtc source URLs that callers redact before
+        exposing them through status APIs.
+        """
+        cam_id = str(camera_id)
+        camera = self._camera_config(cam_id)
+        device = self._find_cached(camera.native_device_id) if camera is not None else None
+        if device is None:
+            device = self._find_cached(cam_id)
+        device = device or {}
+        fields, missing = self._source_fields(device)
+        source: str | None = None
+        fallback_source: str | None = None
+        if not missing:
+            source = self._build_source(device)
+            fallback_source = self._build_source(device, dtls=False)
+        return {
+            "camera_id": cam_id,
+            "ip": fields.get("ip"),
+            "missing_fields": missing,
+            "source": source,
+            "fallback_source": fallback_source,
+            "status": "ok" if not missing else "source_error",
+        }
 
     # ------------------------------------------------------------------
     # Camera resolution
@@ -285,21 +414,30 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             return None
         return self._devices.get(str(key))
 
-    def _resolve_source(self, camera_id: str) -> str:
-        """Resolve a camera id to a go2rtc wyze:// source URL."""
+    def _resolve_source(self, camera_id: str, subtype: str | None = None) -> str:
+        """Resolve a camera id to a go2rtc wyze:// source URL.
+
+        ``subtype`` optionally overrides the requested stream variant. Without
+        it, configured camera URLs and ``stream_subtype`` are used unchanged.
+        """
         camera = self._camera_config(camera_id)
         if camera is not None:
             stream_url = getattr(camera, "stream_url", None)
             if stream_url and str(stream_url).startswith("wyze://"):
-                return str(stream_url)
+                source = str(stream_url)
+                return self._with_subtype(source, subtype) if subtype else source
         device = self._find_cached(camera.native_device_id) if camera is not None else None
         if device is None:
             device = self._find_cached(camera_id)
         if device is not None:
-            return self.build_stream_source(device)
+            return self.build_stream_source(device, subtype=subtype)
         raise WyzeStreamSourceError(
             f"No Wyze device resolved for camera '{camera_id}'. Run native discovery first."
         )
+
+    def resolve_source(self, camera_id: str, subtype: str | None = None) -> str:
+        """Public source resolution with an optional ``sd``/``hd`` override."""
+        return self._resolve_source(camera_id, subtype=subtype)
 
     def _resolve_mac_model(self, camera_id: str) -> tuple[str, str]:
         camera = self._camera_config(camera_id)
@@ -368,6 +506,11 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         source = self._resolve_source(camera_id)
         manager = self._require_stream_manager()
         await manager.ensure_stream(camera_id, source)
+        # Prime the TUTK consumer best-effort so the first MP4 request carries
+        # real media samples instead of a header-only ftyp box.
+        if hasattr(manager, "negotiate_consumer"):
+            with contextlib.suppress(MediaCaptureError):
+                await manager.negotiate_consumer(camera_id)
         content = await manager.clip(camera_id, duration_seconds)
         if _MP4_FTYP not in content[:64]:
             raise MediaCaptureError(f"Clip for '{camera_id}' is not an MP4 ({len(content)} bytes)")
@@ -396,7 +539,22 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
                 )
             )
 
-        events = await self._run_sync(_fetch)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                events = await self._run_sync(_fetch)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if self._is_token_expired(exc) and attempt == 1:
+                    refreshed = await self._refresh_wyze_auth()
+                    if not refreshed:
+                        with contextlib.suppress(Exception):
+                            self._client(force=True)
+                    continue
+                self._last_error = str(exc)
+                raise
+
         payloads: list[dict[str, Any]] = []
         for event in events:
             event_time = getattr(event, "time", None)
@@ -429,6 +587,14 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
                     },
                 }
             )
+
+        # Persist rotated tokens after a successful fetch.
+        with contextlib.suppress(Exception):
+            self._persist_wyze_tokens(self._client())
+
+        self._last_success = datetime.now(UTC)
+        self._last_event_count = len(payloads)
+        self._last_error = None
         return payloads
 
     async def run_action(

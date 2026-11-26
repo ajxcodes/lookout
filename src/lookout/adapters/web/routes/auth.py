@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from lookout.adapters.sidecar_discovery import SidecarDiscoveryEngine
 from lookout.adapters.sidecar_registry import SidecarProviderRegistry
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
-from lookout.config.schema import RingConfig, WyzeConfig, mask_config_dict
+from lookout.config.schema import mask_config_dict
 
 logger = logging.getLogger(__name__)
 
@@ -78,98 +78,122 @@ async def get_auth_status(request: Request) -> dict[str, Any]:
     return status_report
 
 
+def _persist_path(request: Request) -> Path | None:
+    """Return the config path only when a real file is already present."""
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path and Path(config_path).exists():
+        return Path(config_path)
+    return None
+
+
+def _sidecar_dir(request: Request) -> Path:
+    return Path(getattr(request.app.state, "sidecar_dir", "data/sidecars"))
+
+
 @router.post("/{provider}/login")
 async def initiate_provider_login(
     provider: str, credentials: dict[str, Any], request: Request
 ) -> dict[str, Any]:
-    """Initiate provider authentication or request 2FA challenge."""
+    """Initiate provider authentication or skip when already configured."""
+    from lookout.providers import auth_service
+
     try:
         adapter = registry.get_provider(provider)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    try:
-        if hasattr(adapter, "initiate_login"):
-            result = adapter.initiate_login(credentials)
-        else:
-            result = adapter.authenticate(credentials)
-        dumped = result.model_dump() if hasattr(result, "model_dump") else result
-        return cast(dict[str, Any], dumped)
-    except Exception as exc:
-        logger.warning("Provider login failed for %s: %s", provider, exc)
-        raise HTTPException(status_code=400, detail=f"Login failed: {exc}") from exc
+    result = auth_service.login(
+        provider,
+        credentials,
+        getattr(request.app.state, "config", None),
+        driver=adapter,
+        force=bool(credentials.get("force", False)),
+        sidecar_dir=_sidecar_dir(request),
+    )
+    return auth_service.sanitize_auth_result(result)
 
 
 @router.post("/{provider}/verify")
 async def verify_provider_2fa(
     provider: str, payload: VerifyRequest, request: Request
 ) -> dict[str, Any]:
-    """Verify 2FA code, update configuration, and synchronize sidecar env files."""
+    """Verify 2FA, apply real credentials atomically and return a redacted result."""
+    from lookout.providers import auth_service
+
     try:
         adapter = registry.get_provider(provider)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    result = adapter.verify_2fa(payload.session_id, payload.code)
-    status = result.get("status") if hasattr(result, "get") else getattr(result, "status", None)
-    if status == "authenticated":
-        active_config = getattr(request.app.state, "config", None)
-        if active_config is not None:
-            if provider.lower() == "wyze":
-                if active_config.wyze is None:
-                    active_config.wyze = WyzeConfig()
-                active_config.wyze.auth_token = (
-                    result.get("auth_token")
-                    if hasattr(result, "get")
-                    else getattr(result, "auth_token", None)
-                )
-                active_config.wyze.refresh_token = (
-                    result.get("refresh_token")
-                    if hasattr(result, "get")
-                    else getattr(result, "refresh_token", None)
-                )
-                res_email = (
-                    result.get("email")
-                    if hasattr(result, "get")
-                    else getattr(result, "email", None)
-                )
-                if res_email:
-                    active_config.wyze.email = res_email
-            elif provider.lower() == "ring":
-                if active_config.ring is None:
-                    active_config.ring = RingConfig()
-                token = (
-                    result.get("refresh_token")
-                    if hasattr(result, "get")
-                    else getattr(result, "refresh_token", None)
-                ) or (
-                    result.get("auth_token")
-                    if hasattr(result, "get")
-                    else getattr(result, "auth_token", None)
-                )
-                active_config.ring.refresh_token = token
-                active_config.ring.auth_token = token
-                res_email = (
-                    result.get("email")
-                    if hasattr(result, "get")
-                    else getattr(result, "email", None)
-                )
-                if res_email:
-                    active_config.ring.email = res_email
+    result = await auth_service.verify(
+        provider,
+        payload.session_id,
+        payload.code,
+        getattr(request.app.state, "config", None),
+        driver=adapter,
+        request_state=request.app.state,
+        sidecar_dir=_sidecar_dir(request),
+        config_path=_persist_path(request),
+    )
+    return auth_service.sanitize_auth_result(result)
 
-            # Synchronize environment files to data/sidecars
-            config_synchronizer.sync_all(active_config)
 
-            # Persist updated config if config file exists
-            config_path = getattr(request.app.state, "config_path", None)
-            if config_path and Path(config_path).exists():
-                Path(config_path).write_text(
-                    yaml.safe_dump(active_config.model_dump(mode="json"), sort_keys=False),
-                    encoding="utf-8",
-                )
+@router.post("/{provider}/rotate")
+async def rotate_provider_credentials(
+    provider: str, payload: dict[str, Any], request: Request
+) -> dict[str, Any]:
+    """Force re-authentication even when credentials already exist."""
+    from lookout.providers import auth_service
 
-    dumped = result.model_dump() if hasattr(result, "model_dump") else result
-    return cast(dict[str, Any], dumped)
+    try:
+        adapter = registry.get_provider(provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    config = getattr(request.app.state, "config", None)
+    result = auth_service.login(
+        provider,
+        payload,
+        config,
+        driver=adapter,
+        force=True,
+        sidecar_dir=_sidecar_dir(request),
+    )
+    if result.status == "2fa_required" and payload.get("code"):
+        result = await auth_service.verify(
+            provider,
+            str(result.session_id),
+            str(payload["code"]),
+            config,
+            driver=adapter,
+            request_state=request.app.state,
+            sidecar_dir=_sidecar_dir(request),
+            config_path=_persist_path(request),
+        )
+    return auth_service.sanitize_auth_result(result)
+
+
+@router.post("/{provider}/logout")
+async def logout_provider(
+    provider: str, request: Request, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Clear this provider's local credentials without touching cameras."""
+    from lookout.providers import auth_service
+
+    try:
+        adapter = registry.get_provider(provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    result = auth_service.logout(
+        provider,
+        getattr(request.app.state, "config", None),
+        driver=adapter,
+        request_state=request.app.state,
+        sidecar_dir=_sidecar_dir(request),
+        config_path=_persist_path(request),
+    )
+    return auth_service.sanitize_auth_result(result)
 
 
 @router.post("/{provider}/test")

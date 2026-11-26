@@ -1,6 +1,11 @@
 # Lookout Reference Configuration
 system_name: "Lookout Home"
 
+# Optional IANA timezone for viewer timestamps (e.g. "America/New_York").
+# Empty keeps the browser-local time. When set, event/group times use this zone
+# and the browser-local value is shown as a secondary label / tooltip.
+display_timezone: ""
+
 residents:
   - id: "resident-alice"
     name: "Alice"
@@ -81,7 +86,7 @@ cascade:
     - "local_edge"
     - "offline"
   total_timeout_seconds: 25.0
-  fallback_category: "unknown_visitor"
+  fallback_category: "abstained"
 
 ollama:
   host: "http://localhost:11434"
@@ -118,10 +123,36 @@ immich:
     - "Alice"
   enabled: true
 
+home_assistant:
+  enabled: true
+  base_url: "http://localhost:8123"
+  access_token: "long-lived-access-token"
+  ingress_url: "http://localhost:8123/api/hassio_ingress/lookout"
+
 audio_classifier:
   model_path: "models/yamnet.tflite"
   confidence_threshold: 0.5
   sample_rate: 16000
+  # YAMNet-style label -> event category. null marks a benign label that never
+  # raises an acoustic event; change e.g. car_alarm to "security_intrusion" to
+  # route a specific label differently. Below-threshold scores abstain entirely.
+  sound_label_categories:
+    glass_break: "acoustic_anomaly"
+    car_alarm: "acoustic_anomaly"
+    smoke_alarm: "acoustic_anomaly"
+    siren: "acoustic_anomaly"
+    gunshot: "acoustic_anomaly"
+    scream: "acoustic_anomaly"
+    alarm: null
+    other: null
+    ambient: null
+    silence: null
+    doorbell: null
+    speech: null
+    bark: null
+    dog_bark: null
+    dog_whimper: null
+    cat_meow: null
   emergency_labels:
     - "glass_break"
     - "alarm"
