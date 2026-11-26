@@ -64,6 +64,8 @@ def _parse_category(val: Any) -> EventCategory:
             "package": EventCategory.PACKAGE_EVENT,
             "visitor": EventCategory.UNKNOWN_VISITOR,
             "person": EventCategory.UNKNOWN_VISITOR,
+            "abstained": EventCategory.ABSTAINED,
+            "unclassified": EventCategory.ABSTAINED,
             "vehicle": EventCategory.VEHICLE,
             "car": EventCategory.VEHICLE,
             "wildlife": EventCategory.ANIMAL_WILDLIFE,
@@ -80,7 +82,7 @@ def _parse_category(val: Any) -> EventCategory:
         }
         if val_lower in alias_map:
             return alias_map[val_lower]
-    return EventCategory.UNKNOWN_VISITOR
+    return EventCategory.ABSTAINED
 
 
 def _parse_threat_level(val: Any, is_threat_flag: bool | None = None) -> ThreatLevel:

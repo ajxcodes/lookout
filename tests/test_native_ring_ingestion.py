@@ -586,6 +586,6 @@ async def test_ring_ding_doorbell_event_capture() -> None:
         "front_door",
         {"metadata": {"kind": "ding", "trigger": "ding"}},
     )
-    assert event.category == EventCategory.UNKNOWN_VISITOR
+    assert event.category == EventCategory.ABSTAINED
     assert "ding" in event.summary.lower()
-    assert len(notifier.sent_notifications) == 1
+    assert len(notifier.sent_notifications) == 0

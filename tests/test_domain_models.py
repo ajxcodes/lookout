@@ -11,6 +11,7 @@ from lookout.domain.models import (
     InferenceProvenance,
     ThreatLevel,
 )
+from lookout.domain.service import EventProcessingService
 
 
 def test_camera_event_creation() -> None:
@@ -195,3 +196,19 @@ def test_pet_elimination_category_and_vehicle_predicates() -> None:
         vehicle_id="civic-1",
     )
     assert event.is_pet_elimination() is True and event.has_vehicle() is True
+
+
+def test_abstained_category_value_and_neutral_threat() -> None:
+    """TR-10 (AC2): ABSTAINED is neutral/INFO and provenance can carry a reason."""
+    assert EventCategory.ABSTAINED.value == "abstained"
+    assert (
+        EventProcessingService._evaluate_threat_level(EventCategory.ABSTAINED) == ThreatLevel.INFO
+    )
+    provenance = InferenceProvenance(
+        provider="ollama",
+        model_name="moondream",
+        latency_ms=12.0,
+        confidence=0.97,
+        abstain_reason="low_confidence",
+    )
+    assert provenance.abstain_reason == "low_confidence"

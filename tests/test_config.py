@@ -11,10 +11,12 @@ from lookout.config.loader import (
     load_config_from_yaml,
 )
 from lookout.config.schema import (
+    AudioClassifierConfig,
     CameraConfig,
+    CascadeConfig,
     NotificationTargetConfig,
 )
-from lookout.domain.models import ThreatLevel
+from lookout.domain.models import EventCategory, ThreatLevel
 
 SAMPLE_VALID_YAML = """
 system_name: "Test Lookout"
@@ -358,3 +360,18 @@ def test_storage_config_archive_settings_validation() -> None:
     """
     config = load_config_from_yaml(yaml_content)
     assert config.storage.archive_enabled is True and config.storage.archive_path is not None
+
+
+def test_abstain_and_sound_mapping_config_defaults() -> None:
+    """TR-24 (AC5, AC6): neutral fallback and thresholded sound taxonomy defaults."""
+    assert CascadeConfig().fallback_category == EventCategory.ABSTAINED
+    assert AudioClassifierConfig().confidence_threshold == 0.5
+    assert (
+        AudioClassifierConfig().sound_label_categories["smoke_alarm"]
+        == EventCategory.ACOUSTIC_ANOMALY
+    )
+    assert AudioClassifierConfig().sound_label_categories["bark"] is None
+
+    example_path = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(example_path)
+    assert config.cascade.fallback_category == EventCategory.ABSTAINED

@@ -576,8 +576,8 @@ class CascadeConfig(BaseModel):
         default=25.0, gt=0.0, description="Cumulative timeout across all tiers"
     )
     fallback_category: EventCategory = Field(
-        default=EventCategory.UNKNOWN_VISITOR,
-        description="Default fallback category when all tiers fail",
+        default=EventCategory.ABSTAINED,
+        description="Neutral category when all inference tiers fail (abstain, never guess)",
     )
     min_confidence: float = Field(
         default=0.5,
@@ -621,7 +621,36 @@ class AudioClassifierConfig(BaseModel):
 
     model_path: str = Field(default="models/yamnet.tflite", description="YAMNet model file path")
     confidence_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Minimum confidence for acoustic events"
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence before an acoustic label may set an event category",
+    )
+    sound_label_categories: dict[str, EventCategory | None] = Field(
+        default_factory=lambda: {
+            # Confident emergency labels escalate to an acoustic anomaly.
+            "glass_break": EventCategory.ACOUSTIC_ANOMALY,
+            "car_alarm": EventCategory.ACOUSTIC_ANOMALY,
+            "smoke_alarm": EventCategory.ACOUSTIC_ANOMALY,
+            "siren": EventCategory.ACOUSTIC_ANOMALY,
+            "gunshot": EventCategory.ACOUSTIC_ANOMALY,
+            "scream": EventCategory.ACOUSTIC_ANOMALY,
+            # Benign / non-discriminating labels never set an acoustic category.
+            "alarm": None,
+            "other": None,
+            "ambient": None,
+            "silence": None,
+            "doorbell": None,
+            "speech": None,
+            "bark": None,
+            "dog_bark": None,
+            "dog_whimper": None,
+            "cat_meow": None,
+        },
+        description=(
+            "Configurable YAMNet-style label to event-category mapping. A null value marks a "
+            "benign label that must not raise an acoustic event; absent labels abstain."
+        ),
     )
     sample_rate: int = Field(default=16000, gt=0, description="Expected audio sample rate in Hz")
     emergency_labels: list[str] = Field(
