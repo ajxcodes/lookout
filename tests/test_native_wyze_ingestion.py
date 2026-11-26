@@ -218,6 +218,23 @@ async def test_capture_snapshot_uses_configured_hd_source(tmp_path: Any, monkeyp
     assert "subtype=hd" in manager.ensured[0][1]
 
 
+async def test_capture_snapshot_reuses_registered_sd_stream(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """A snapshot must not clobber the grid's registered sd stream with hd."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    manager = FakeStreamManager()
+    sd_source = _camera().stream_url.replace("subtype=hd", "subtype=sd")
+    manager.streams = {"office_cam": sd_source}  # type: ignore[attr-defined]
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), stream_manager=manager, cameras=[_camera()])
+
+    await adapter.capture_snapshot("office_cam")
+
+    assert manager.ensured[0] == ("office_cam", sd_source)
+    assert "subtype=sd" in manager.ensured[0][1]
+    assert "subtype=hd" not in manager.ensured[0][1]
+
+
 async def test_capture_snapshot_writes_real_jpeg(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     manager = FakeStreamManager()
