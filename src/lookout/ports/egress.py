@@ -13,6 +13,8 @@ if TYPE_CHECKING:
         EventCategory,
         EvictionResult,
         InferenceProvenance,
+        MotionTagState,
+        MotionTagWriteResult,
         StorageStatus,
         ThreatLevel,
     )
@@ -230,4 +232,17 @@ class IotCapabilityPort(Protocol):
         self, device_id: str, product_model: str, *, user_id: str | None = None
     ) -> dict[str, Any]:
         """Run a device-management action and return the raw response."""
+        ...
+
+
+@runtime_checkable
+class MotionTagPort(Protocol):
+    """Port for the Wyze cloud motion-tag capability (ascent/cam4-class devices)."""
+
+    async def get_motion_tag(self, camera_id: str) -> MotionTagState:
+        """Read the motion-tag toggle; returns an explicit unsupported state when absent."""
+        ...
+
+    async def set_motion_tag(self, camera_id: str, enabled: bool) -> MotionTagWriteResult:
+        """Write the motion-tag toggle; returns an explicit unsupported result when absent."""
         ...

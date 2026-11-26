@@ -459,6 +459,10 @@ class CameraSettingsRequest(BaseModel):
     continuous_recording: bool | None = None
 
 
+class MotionTagRequest(BaseModel):
+    enabled: bool
+
+
 def _require_api_key(request: Request) -> None:
     auth = request.headers.get("authorization") or request.headers.get("x-api-key")
     token = None
@@ -685,6 +689,92 @@ async def camera_settings(
             "notifications_enabled": getattr(cam, "notifications_enabled", True),
             "ha_enabled": getattr(cam, "ha_enabled", None),
         },
+    }
+
+
+@router.get("/cameras/{camera_id}/motion_tag")
+@router.get("/v1/cameras/{camera_id}/motion_tag")
+async def camera_motion_tag(camera_id: str, request: Request) -> dict[str, Any]:
+    """Read the Wyze cloud motion-tag toggle for a camera.
+
+    A device that does not advertise the ``motion-detection`` capability (or a
+    camera with no injected adapter) reports ``supported: false`` with a
+    ``null`` value rather than failing the request.
+    """
+    _require_optional_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    if service is None or not hasattr(service, "get_motion_tag"):
+        return {"supported": False, "enabled": None}
+    try:
+        state = await service.get_motion_tag(camera_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced as an HTTP error below
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            raise HTTPException(status_code=int(resp.status_code), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {
+        "supported": bool(getattr(state, "supported", False)),
+        "enabled": getattr(state, "enabled", None),
+    }
+
+
+@router.post("/cameras/{camera_id}/motion_tag")
+@router.post("/v1/cameras/{camera_id}/motion_tag")
+async def camera_motion_tag_set(
+    camera_id: str, payload: MotionTagRequest, request: Request
+) -> dict[str, Any]:
+    """Write the Wyze cloud motion-tag toggle and persist the confirmed value.
+
+    Unsupported devices return ``501`` and never mutate the stored config.
+    """
+    _require_optional_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    if service is None or not hasattr(service, "set_motion_tag"):
+        raise HTTPException(
+            status_code=501, detail=f"Motion tagging not supported for camera '{camera_id}'"
+        ) from None
+    try:
+        result = await service.set_motion_tag(camera_id, bool(payload.enabled))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced as an HTTP error below
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            raise HTTPException(status_code=int(resp.status_code), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    if not getattr(result, "supported", False):
+        raise HTTPException(
+            status_code=501, detail=f"Motion tagging not supported for camera '{camera_id}'"
+        ) from None
+
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path and config is not None:
+        try:
+            from lookout.providers.config_io import atomic_write_config as _atomic_write_config
+
+            _atomic_write_config(config, config_path)
+        except Exception:  # noqa: BLE001 - cloud write already succeeded; best effort
+            pass
+
+    return {
+        "status": "ok",
+        "supported": True,
+        "enabled": getattr(result, "enabled", None),
+        "result": getattr(result, "raw", {}),
     }
 
 

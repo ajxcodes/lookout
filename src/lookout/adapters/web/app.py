@@ -58,6 +58,7 @@ from lookout.adapters.web.routes import (
     storage_router,
     system_router,
 )
+from lookout.adapters.wyze_iot_cloud import WyzeIotCloudAdapter, WyzeMotionTagAdapter
 from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
 from lookout.config.deep_links import get_deep_link_base
 from lookout.config.loader import load_config
@@ -742,6 +743,21 @@ def create_app(
         cameras=(active_config.cameras if active_config is not None else []),
     )
 
+    # Motion tagging over the Wyze device-management cloud API. Construction is
+    # best-effort so a missing optional dependency cannot break app startup.
+    motion_tag_adapter: WyzeMotionTagAdapter | None = None
+    try:
+        motion_tag_adapter = WyzeMotionTagAdapter(
+            iot_cloud=WyzeIotCloudAdapter(
+                config=wyze_native_config,
+                native_adapter=app.state.wyze_native,
+            ),
+            cameras=(active_config.cameras if active_config is not None else []),
+            native_adapter=app.state.wyze_native,
+        )
+    except Exception as exc:  # noqa: BLE001 - feature degrades to unsupported
+        logger.warning("Wyze motion-tag adapter unavailable: %s", exc)
+
     # Pre-populate embedded go2rtc streams for all enabled cameras (no process start).
     if active_config is not None and native_manager is not None:
         wyze_native = app.state.wyze_native
@@ -803,6 +819,7 @@ def create_app(
                 lookout_config=active_config,
             ),
         ),
+        motion_tag_adapter=motion_tag_adapter,
         config=active_config,
         config_path=resolved_config_path,
     )

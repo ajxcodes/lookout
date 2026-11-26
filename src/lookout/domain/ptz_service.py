@@ -6,8 +6,10 @@ import contextlib
 import importlib
 from typing import TYPE_CHECKING, Any
 
+from lookout.domain.models import MotionTagState, MotionTagWriteResult
+
 if TYPE_CHECKING:
-    from lookout.ports.egress import PtzControlPort, VideoRecorderPort
+    from lookout.ports.egress import MotionTagPort, PtzControlPort, VideoRecorderPort
 
 
 def _http_exception(status_code: int, detail: str) -> Exception:
@@ -54,6 +56,9 @@ class PtzControlService:
         self.config: Any = kwargs.get("config")
         self.config_path: Any = kwargs.get("config_path")
         self.ptz_adapters: dict[str, PtzControlPort] = kwargs.get("ptz_adapters") or {}
+        self.motion_tag_adapter: MotionTagPort | None = kwargs.get(
+            "motion_tag_adapter"
+        ) or kwargs.get("motion_tag")
 
     @staticmethod
     def _reraise(exc: Exception) -> None:
@@ -124,6 +129,26 @@ class PtzControlService:
     async def _ensure_enabled(self, camera: Any, camera_id: str) -> None:
         if not getattr(camera, "ptz_enabled", False):
             raise _http_exception(403, f"PTZ disabled for camera '{camera_id}'")
+
+    def _persist_config(self) -> None:
+        """Persist the in-memory config to the configured path.
+
+        Preserves the historical ``update_settings`` behavior: only writes when
+        the target file already exists. Route handlers perform the atomic
+        create-or-replace write for their own flows.
+        """
+        if not self.config_path:
+            return
+        try:
+            from pathlib import Path
+
+            import yaml
+
+            p = Path(self.config_path)
+            if p.exists() and self.config is not None:
+                p.write_text(yaml.safe_dump(self.config.model_dump(mode="json"), sort_keys=False))
+        except Exception:  # noqa: BLE001
+            pass
 
     # PTZ operations
     async def move(
@@ -357,21 +382,28 @@ class PtzControlService:
             camera.stream_mode = settings["stream_mode"]
         if "continuous_recording" in settings:
             camera.continuous_recording = settings["continuous_recording"]  # persist config
-        if self.config_path:
-            try:
-                from pathlib import Path
-
-                import yaml
-
-                p = Path(self.config_path)
-                if p.exists() and self.config is not None:
-                    p.write_text(
-                        yaml.safe_dump(self.config.model_dump(mode="json"), sort_keys=False)
-                    )
-            except Exception:  # noqa: BLE001
-                pass
+        self._persist_config()
         await self._audit("manual_update_settings", camera_id, settings, "ok")
         return camera
 
     async def patch_settings(self, *a: Any, **k: Any) -> Any:
         return await self.update_settings(*a, **k)
+
+    # Motion tagging (Wyze cloud device-management capability)
+    async def get_motion_tag(self, camera_id: str) -> MotionTagState:
+        self._camera(camera_id)
+        if self.motion_tag_adapter is None:
+            return MotionTagState(supported=False, enabled=None)
+        return await self.motion_tag_adapter.get_motion_tag(camera_id)
+
+    async def set_motion_tag(self, camera_id: str, enabled: bool) -> MotionTagWriteResult:
+        camera = self._camera(camera_id)
+        if self.motion_tag_adapter is None:
+            raise _http_exception(501, f"Motion tagging not supported for camera '{camera_id}'")
+        result = await self.motion_tag_adapter.set_motion_tag(camera_id, bool(enabled))
+        if not result.supported:
+            raise _http_exception(501, f"Motion tagging not supported for camera '{camera_id}'")
+        camera.motion_tag_enabled = bool(enabled)
+        self._persist_config()
+        await self._audit("motion_tag_set", camera_id, {"enabled": bool(enabled)}, "ok")
+        return result
