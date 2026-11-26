@@ -26,6 +26,18 @@ export class CameraSwitcher {
     this.selectedCameraIds = new Set();
     this.mode = "grid";
     this.eventCounts = {};
+    this._resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (this._resizeTimer) clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => this._updateScrollable(), 100);
+    });
+  }
+
+  _updateScrollable() {
+    if (!this.container) return;
+    // Drives the CSS fade affordance only when chips actually overflow.
+    this.container.dataset.scrollable =
+      this.container.scrollWidth > this.container.clientWidth + 2 ? "true" : "false";
   }
 
   setMode(mode) {
@@ -73,6 +85,7 @@ export class CameraSwitcher {
       emptySpan.style.fontSize = "0.75rem";
       emptySpan.textContent = "No cameras discovered";
       this.container.appendChild(emptySpan);
+      this._updateScrollable();
       return;
     }
 
@@ -149,5 +162,6 @@ export class CameraSwitcher {
 
       this.container.appendChild(tab);
     });
+    this._updateScrollable();
   }
 }

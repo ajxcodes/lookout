@@ -4,10 +4,15 @@
 import { resolveUrl } from "../utils/url.js";
 
 export class SettingsModal {
-  constructor({ modalBackdrop, onClose, onAiModeChanged }) {
+  constructor({ modalBackdrop, onClose, onAiModeChanged, onFocusViewChanged }) {
     this.modal = modalBackdrop;
     this.onClose = onClose;
     this.onAiModeChanged = onAiModeChanged;
+    this.onFocusViewChanged = onFocusViewChanged;
+
+    this.focusControlsToggle = this.modal ? this.modal.querySelector("#setting-focus-controls-overlay") : null;
+    this.acousticModeSelect = this.modal ? this.modal.querySelector("#setting-acoustic-mode") : null;
+    this.eventsCollapsedToggle = this.modal ? this.modal.querySelector("#setting-events-collapsed") : null;
 
     this.aiSelect = this.modal ? this.modal.querySelector("#setting-ai-mode") : null;
     this.dropzone = this.modal ? this.modal.querySelector("#face-dropzone") : null;
@@ -18,6 +23,7 @@ export class SettingsModal {
     this.homeAssistantContainer = this.modal ? this.modal.querySelector("#home-assistant-settings") : null;
     this.fileInput = this.modal ? this.modal.querySelector("#face-file-input") : null;
     this.currentResetScope = null;
+    this._lastFocused = null;
 
     this.archiveToggle = this.modal ? this.modal.querySelector("#setting-archive-enabled") : null;
     this.archiveFields = this.modal ? this.modal.querySelector("#archive-settings-fields") : null;
@@ -35,6 +41,16 @@ export class SettingsModal {
     if (closeBtn) {
       closeBtn.addEventListener("click", () => this.close());
     }
+
+    // Focus view preferences apply immediately and are persisted by the app.
+    const focusControls = [
+      this.focusControlsToggle,
+      this.acousticModeSelect,
+      this.eventsCollapsedToggle,
+    ].filter(Boolean);
+    focusControls.forEach((control) => {
+      control.addEventListener("change", () => this._emitFocusViewChange());
+    });
 
     if (this.archiveToggle && this.archiveFields) {
       this.archiveToggle.addEventListener("change", (e) => {
@@ -135,6 +151,9 @@ export class SettingsModal {
       }
     });
 
+    // Keyboard focus lifecycle: Escape closes, Tab is trapped inside the dialog.
+    document.addEventListener("keydown", (event) => this._handleKeydown(event));
+
     if (this.aiSelect) {
       this.aiSelect.addEventListener("change", async (e) => {
         const newMode = e.target.value;
@@ -181,9 +200,92 @@ export class SettingsModal {
     }
   }
 
+  _emitFocusViewChange() {
+    if (!this.onFocusViewChanged) return;
+    const acousticMode = this.acousticModeSelect
+      ? this.acousticModeSelect.value
+      : "below";
+    this.onFocusViewChanged({
+      controlsOverlay: this.focusControlsToggle
+        ? this.focusControlsToggle.checked
+        : true,
+      acousticMode,
+      acousticPinned: acousticMode === "overlay",
+      eventsCollapsed: this.eventsCollapsedToggle
+        ? this.eventsCollapsedToggle.checked
+        : false,
+    });
+  }
+
+  /** Mirror the persisted preferences into the Settings controls. */
+  setFocusViewPreferences(prefs) {
+    if (!prefs) return;
+    if (this.focusControlsToggle) {
+      this.focusControlsToggle.checked = prefs.controlsOverlay !== false;
+    }
+    if (this.acousticModeSelect) {
+      const mode = prefs.acousticMode === "collapsed" ? "hidden" : prefs.acousticMode;
+      this.acousticModeSelect.value =
+        ["overlay", "below", "hidden"].indexOf(mode) !== -1 ? mode : "below";
+    }
+    if (this.eventsCollapsedToggle) {
+      this.eventsCollapsedToggle.checked = Boolean(prefs.eventsCollapsed);
+    }
+  }
+
+  _getFocusableElements() {
+    if (!this.modal) return [];
+    const selector = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    return Array.from(this.modal.querySelectorAll(selector)).filter((el) => {
+      if (el.disabled) return false;
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+      return el.getClientRects().length > 0;
+    });
+  }
+
+  _focusFirst() {
+    const focusables = this._getFocusableElements();
+    if (focusables.length) {
+      focusables[0].focus();
+    } else if (this.modal) {
+      this.modal.setAttribute("tabindex", "-1");
+      this.modal.focus();
+    }
+  }
+
+  _trapFocus(event) {
+    const focusables = this._getFocusableElements();
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    } else if (!this.modal.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  _handleKeydown(event) {
+    if (!this.modal || !this.modal.classList.contains("open")) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.close();
+    } else if (event.key === "Tab") {
+      this._trapFocus(event);
+    }
+  }
+
   async open() {
     if (!this.modal) return;
+    this._lastFocused = document.activeElement;
     this.modal.classList.add("open");
+    this._focusFirst();
     await this.loadSettings();
     await this.loadFaces();
     await this.loadEntities();
@@ -198,6 +300,9 @@ export class SettingsModal {
     this.modal.classList.remove("open");
     if (this.onClose) {
       this.onClose();
+    }
+    if (this._lastFocused && this._lastFocused.isConnected) {
+      this._lastFocused.focus();
     }
   }
 

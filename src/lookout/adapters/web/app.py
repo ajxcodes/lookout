@@ -1017,6 +1017,17 @@ def create_app(
             "version": __version__,
         }
 
+    @app.get("/api/config/public")
+    async def public_viewer_config() -> dict[str, Any]:
+        """Non-secret viewer preferences only; never expose the raw config.
+
+        The viewer uses display_timezone to format event timestamps in a fixed
+        zone while still showing the browser-local value ("show both").
+        """
+        cfg = getattr(app.state, "config", None)
+        timezone = getattr(cfg, "display_timezone", "") if cfg is not None else ""
+        return {"display_timezone": timezone or ""}
+
     @app.post("/api/v1/events/trigger")
     @app.post("/api/events/trigger")
     async def trigger_event(request: Request) -> dict[str, Any]:

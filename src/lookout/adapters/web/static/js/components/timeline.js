@@ -4,6 +4,14 @@
 import { TelemetryRenderer } from "./telemetry.js";
 import { infer_camera_icon } from "./switcher.js";
 import { resolveUrl } from "../utils/url.js";
+import {
+  eventTimeWithLocalHint,
+  formatInBrowserZone,
+  formatInDisplayZone,
+  getDisplayTimezone,
+  zonedDayKey,
+  zonedHour,
+} from "../utils/timezone.js";
 
 export class TimelineList {
   constructor({ container, onSelectEvent, onDeleteEvent }) {
@@ -73,7 +81,7 @@ export class TimelineList {
       if (diffSec < 60) return "just now";
       if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
       if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return formatInDisplayZone(date, { month: "short", day: "numeric" });
     } catch {
       return "";
     }
@@ -133,13 +141,13 @@ export class TimelineList {
     try {
       const date = new Date(isoString);
       const now = new Date();
-      const isToday = date.toDateString() === now.toDateString();
+      // Day/hour bucketing follows the configured display zone (or the
+      // browser-local zone when none is configured).
+      const isToday = zonedDayKey(date) === zonedDayKey(now);
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const isYesterday = zonedDayKey(date) === zonedDayKey(yesterday);
 
-      const yesterday = new Date(now);
-      yesterday.setDate(now.getDate() - 1);
-      const isYesterday = date.toDateString() === yesterday.toDateString();
-
-      const hour = date.getHours();
+      const hour = zonedHour(date);
       let partOfDay = "Morning";
       if (hour >= 12 && hour < 17) partOfDay = "Afternoon";
       else if (hour >= 17 && hour < 21) partOfDay = "Evening";
@@ -147,7 +155,7 @@ export class TimelineList {
 
       if (isToday) return `Today - ${partOfDay}`;
       if (isYesterday) return `Yesterday - ${partOfDay}`;
-      return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${partOfDay}`;
+      return `${formatInDisplayZone(date, { month: "short", day: "numeric" })} - ${partOfDay}`;
     } catch {
       return "Earlier";
     }
@@ -189,6 +197,14 @@ export class TimelineList {
         const groupHeader = document.createElement("div");
         groupHeader.className = "timeline-group-header";
         groupHeader.textContent = currentGroup;
+        if (getDisplayTimezone()) {
+          groupHeader.title = `Browser local time: ${formatInBrowserZone(new Date(evt.timestamp), {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}`;
+        }
         this.container.appendChild(groupHeader);
       }
 
@@ -225,6 +241,13 @@ export class TimelineList {
       const camIcon = (cam && cam.icon) ? cam.icon : infer_camera_icon(camName);
       const camBadge = `<span class="event-camera-tag">${camIcon} ${camName}</span>`;
 
+      // Primary timestamp uses the configured display zone; when one is set the
+      // browser-local value is also available as a tooltip ("show both").
+      const eventTime = eventTimeWithLocalHint(evt.timestamp);
+      const timeTitleAttr = eventTime.localTitle
+        ? ` title="${eventTime.localTitle.replaceAll('"', "&quot;")}"`
+        : "";
+
       card.innerHTML = `
         <div class="thumb-wrap" style="position:relative;">
           <img class="event-thumb" src="${thumbUrl}" alt="Event poster" onerror="this.src='${placeholderUrl}'" />
@@ -235,7 +258,7 @@ export class TimelineList {
             ${this.getCategoryPill(evt.category)}
             ${camBadge}
             ${tierBadge}
-            <span class="event-time">${this.formatRelativeTime(evt.timestamp)}</span>
+            <span class="event-time"${timeTitleAttr}>${this.formatRelativeTime(evt.timestamp)}</span>
           </div>
           <div class="event-summary" title="${evt.summary || ""}">${evt.summary || "Motion detected"}</div>
           ${entityBadges}

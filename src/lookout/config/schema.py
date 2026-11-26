@@ -679,6 +679,13 @@ class LookoutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system_name: str = Field(default="Lookout", description="System installation name")
+    display_timezone: str = Field(
+        default="",
+        description=(
+            "IANA timezone (e.g. America/New_York) used by the viewer for event "
+            "timestamps; empty means browser-local time"
+        ),
+    )
     hardware_profile: str | None = Field(
         default=None,
         description="Declarative edge hardware sizing profile name (e.g. intel-n100-mini-pc)",
