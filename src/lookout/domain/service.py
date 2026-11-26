@@ -1,7 +1,11 @@
 """Domain orchestration service for camera event processing."""
 
+from __future__ import annotations
+
+import importlib
+import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from lookout.domain.models import (
@@ -20,6 +24,27 @@ from lookout.ports.egress import (
     VisionInferencePort,
 )
 from lookout.ports.ingress import EventIngressPort
+
+logger = logging.getLogger(__name__)
+
+
+class _AudioConfigLike(Protocol):
+    """Config surface the acoustic mapper needs, defined in-domain to keep boundaries clean."""
+
+    confidence_threshold: float
+    sound_label_categories: dict[str, EventCategory | None]
+
+
+def _resolve_acoustic(
+    label: str, confidence: float, config: _AudioConfigLike | None
+) -> tuple[EventCategory | None, str | None]:
+    """Late-bind the adapter's pure mapper; the domain may not import adapters statically."""
+    module = importlib.import_module("lookout.adapters.audio_classifier")
+    result: tuple[EventCategory | None, str | None] = module.resolve_acoustic_category(
+        label, confidence, config
+    )
+    return result
+
 
 try:
     from lookout.domain.ptz_service import PtzControlService as PtzControlService
@@ -53,6 +78,7 @@ class EventProcessingService(EventIngressPort):
         notification_threshold: ThreatLevel = ThreatLevel.LOW,
         notification_target: str = "default",
         config: Any = None,
+        audio_config: _AudioConfigLike | None = None,
     ) -> None:
         self.repository = repository
         self.notification = notification
@@ -68,6 +94,14 @@ class EventProcessingService(EventIngressPort):
         self.notification_threshold = notification_threshold
         self.notification_target = notification_target
         self.config = config
+        self.audio_config = audio_config or (
+            getattr(config, "audio_classifier", None) if config is not None else None
+        )
+
+    @staticmethod
+    def _is_unresolved(category: EventCategory) -> bool:
+        """True only while a category has not been resolved by a trusted signal."""
+        return category in (EventCategory.ABSTAINED, EventCategory.UNKNOWN_VISITOR)
 
     @staticmethod
     def _evaluate_threat_level(category: EventCategory) -> ThreatLevel:
@@ -78,6 +112,7 @@ class EventProcessingService(EventIngressPort):
                 | EventCategory.KNOWN_PET
                 | EventCategory.FALSE_POSITIVE
                 | EventCategory.PET_ELIMINATION
+                | EventCategory.ABSTAINED
             ):
                 return ThreatLevel.INFO
             case (
@@ -131,7 +166,8 @@ class EventProcessingService(EventIngressPort):
             snapshot_uri = await self.video_recorder.capture_snapshot(camera_id)
             media_uri = await self.video_recorder.record_clip(camera_id, 10.0)
 
-        category = EventCategory.UNKNOWN_VISITOR
+        category = EventCategory.ABSTAINED
+        abstain_reason: str | None = None
         metrics = DetectionMetrics()
         provenance: list[InferenceProvenance] = []
         resident_id: str | None = None
@@ -167,9 +203,9 @@ class EventProcessingService(EventIngressPort):
                                 category = EventCategory.PET_ELIMINATION
                                 metrics.posture_telemetry = getattr(posture_res, "telemetry", None)
                                 break
-                            elif category == EventCategory.UNKNOWN_VISITOR:
+                            elif self._is_unresolved(category):
                                 category = EventCategory.KNOWN_PET
-                elif has_pet_box and category == EventCategory.UNKNOWN_VISITOR:
+                elif has_pet_box and self._is_unresolved(category):
                     category = EventCategory.KNOWN_PET
 
                 # Spatial zone evaluator
@@ -199,16 +235,24 @@ class EventProcessingService(EventIngressPort):
                     if v_id:
                         vehicle_id = v_id
 
-            # Stage 2: Heavy VLM Cascade (if still unclassified or not resolved by Light ML)
-            if (
-                self.vision_inference is not None
-                and image_bytes
-                and category == EventCategory.UNKNOWN_VISITOR
-            ):
+                    # The catalog is authoritative: a matched entity resolves the
+                    # category so later VLM/audio stages cannot downgrade it.
+                    if self._is_unresolved(category):
+                        if r_id:
+                            category = EventCategory.VERIFIED_RESIDENT
+                        elif p_id:
+                            category = EventCategory.KNOWN_PET
+                        elif v_id:
+                            category = EventCategory.VEHICLE
+
+            # Stage 2: Heavy VLM Cascade (only while the event is unresolved)
+            if self.vision_inference is not None and image_bytes and self._is_unresolved(category):
                 vis_cat, vis_metrics, vis_prov = await self.vision_inference.analyze_scene(
                     image_bytes
                 )
                 category = vis_cat
+                if getattr(vis_prov, "abstain_reason", None):
+                    abstain_reason = vis_prov.abstain_reason
                 if not metrics.bounding_boxes:
                     metrics = vis_metrics
                 provenance.append(vis_prov)
@@ -225,8 +269,16 @@ class EventProcessingService(EventIngressPort):
             if self.audio_classifier is not None and audio_bytes:
                 label, conf, audio_prov = await self.audio_classifier.classify_audio(audio_bytes)
                 provenance.append(audio_prov)
-                if label in ("glass_break", "alarm", "gunshot", "scream"):
-                    category = EventCategory.ACOUSTIC_ANOMALY
+                audio_category, audio_reason = _resolve_acoustic(label, conf, self.audio_config)
+                metadata["audio_classification"] = {
+                    "label": label,
+                    "confidence": conf,
+                    "benign": audio_category is None,
+                }
+                if audio_category is not None and self._is_unresolved(category):
+                    category = audio_category
+                elif audio_reason and self._is_unresolved(category):
+                    abstain_reason = audio_reason
 
             alarm_type = str(metadata.get("alarm_type", "")).lower()
             trigger_type = str(metadata.get("trigger", "")).lower()
@@ -236,15 +288,25 @@ class EventProcessingService(EventIngressPort):
                 if isinstance(metadata.get("ai_tags"), list)
                 else []
             )
-            if alarm_type == "sound" or trigger_type == "sound":
-                category = EventCategory.ACOUSTIC_ANOMALY
-            elif category == EventCategory.UNKNOWN_VISITOR and ai_tags:
+            # A bare 'sound' trigger is not evidence of an acoustic anomaly: bark and
+            # other benign sounds must not escalate an event.
+            if self._is_unresolved(category) and ai_tags:
                 if "package" in ai_tags:
                     category = EventCategory.PACKAGE_EVENT
                 elif "vehicle" in ai_tags:
                     category = EventCategory.VEHICLE
                 elif "pet" in ai_tags:
                     category = EventCategory.KNOWN_PET
+                elif "person" in ai_tags:
+                    category = EventCategory.UNKNOWN_VISITOR
+                elif any(tag in ai_tags for tag in ("shadow", "wind", "leaves")):
+                    category = EventCategory.FALSE_POSITIVE
+            if (
+                (alarm_type == "sound" or trigger_type == "sound")
+                and self._is_unresolved(category)
+                and abstain_reason is None
+            ):
+                abstain_reason = "sound_trigger_without_confident_audio"
 
             threat_level = self._evaluate_threat_level(category)
 
@@ -259,6 +321,8 @@ class EventProcessingService(EventIngressPort):
                 ) or (pet_id or "Pet")
                 zone_label = "Backyard (Lawn)" if zone_id == "lawn" else (zone_id or "yard")
                 summary = f"{pet_name} pooped in {zone_label}"
+            elif category == EventCategory.ABSTAINED:
+                summary = f"Unclassified activity on camera {camera_id}"
             elif matched_entities:
                 summary = f"Detected {', '.join(matched_entities)} on camera {camera_id}"
             else:
@@ -270,6 +334,11 @@ class EventProcessingService(EventIngressPort):
             metadata.get("timestamp")
             or (payload.get("timestamp") if isinstance(payload, dict) else None)
         )
+
+        if category == EventCategory.ABSTAINED:
+            reason = abstain_reason or "no_classification_signal"
+            metadata["abstain_reason"] = reason
+            logger.info("Abstained event on camera %s: %s", camera_id, reason)
 
         event = CameraEvent(
             id=str(uuid4()),
@@ -339,7 +408,6 @@ class EventProcessingService(EventIngressPort):
         types: set[str] = set()
         meta = event.metadata or {}
         kind = str(meta.get("kind", "")).lower()
-        alarm_type = str(meta.get("alarm_type", "")).lower()
         trigger = str(meta.get("trigger", "")).lower()
         detection_type = str(meta.get("detection_type", "")).lower()
         ai_tags = (
@@ -357,12 +425,9 @@ class EventProcessingService(EventIngressPort):
         ):
             types.add("ding")
 
-        if (
-            event.category == EventCategory.ACOUSTIC_ANOMALY
-            or alarm_type == "sound"
-            or trigger == "sound"
-            or "audio_classification" in meta
-        ):
+        # Only a real acoustic anomaly adds the 'sound' type; a benign bark with a
+        # bare sound trigger stays a motion event.
+        if event.category == EventCategory.ACOUSTIC_ANOMALY:
             types.add("sound")
 
         if (
@@ -436,16 +501,23 @@ class EventProcessingService(EventIngressPort):
         if event is None:
             return None
 
+        abstain_reason: str | None = event.metadata.get("abstain_reason")
+
         if self.audio_classifier is not None and audio_bytes:
             label, conf, audio_prov = await self.audio_classifier.classify_audio(audio_bytes)
             event.provenance.append(audio_prov)
-            if label in ("glass_break", "alarm", "smoke_alarm", "scream", "gunshot"):
-                event.category = EventCategory.ACOUSTIC_ANOMALY
-                event.threat_level = ThreatLevel.HIGH
+            audio_category, audio_reason = _resolve_acoustic(label, conf, self.audio_config)
+            event.metadata["audio_classification"] = {
+                "label": label,
+                "confidence": conf,
+                "benign": audio_category is None,
+            }
+            if audio_category is not None and self._is_unresolved(event.category):
+                event.category = audio_category
+                event.threat_level = self._evaluate_threat_level(event.category)
                 event.summary = f"Acoustic anomaly ({label}) detected on camera {event.camera_id}"
-                event.metadata["audio_classification"] = {"label": label, "confidence": conf}
-            elif label in ("bark", "crying", "meow"):
-                event.metadata["audio_classification"] = {"label": label, "confidence": conf}
+            elif audio_reason and self._is_unresolved(event.category):
+                abstain_reason = audio_reason
 
         detector = self.light_ml_detector
         if detector is not None and frame_samples:
@@ -524,8 +596,27 @@ class EventProcessingService(EventIngressPort):
                     )
                     event.summary = f"Detected {pet_name} on camera {event.camera_id}"
 
+        # The enrolled catalog is authoritative in Pass 2 as well: annotate the event
+        # from sampled frames and resolve its category before any VLM re-classification.
+        if self.entity_matcher is not None and frame_samples:
+            self.entity_matcher.annotate_event(event, frame_bytes=frame_samples[0])
+            if self._is_unresolved(event.category):
+                if event.resident_id:
+                    event.category = EventCategory.VERIFIED_RESIDENT
+                elif event.pet_id:
+                    event.category = EventCategory.KNOWN_PET
+                elif event.vehicle_id:
+                    event.category = EventCategory.VEHICLE
+                if not self._is_unresolved(event.category):
+                    event.threat_level = self._evaluate_threat_level(event.category)
+
         # VLM cascade on sampled key frames (best-effort, raises confidence/summary).
-        if self.vision_inference is not None and frame_samples:
+        if (
+            self.vision_inference is not None
+            and frame_samples
+            and self._is_unresolved(event.category)
+            and not event.matched_entities
+        ):
             key_frames: list[bytes] = []
             if len(frame_samples) <= 3:
                 key_frames = list(frame_samples)
@@ -565,7 +656,7 @@ class EventProcessingService(EventIngressPort):
                 if (
                     vis_cat is not None
                     and vis_cat != event.category
-                    and event.category == EventCategory.UNKNOWN_VISITOR
+                    and self._is_unresolved(event.category)
                 ):
                     event.category = vis_cat
                     event.threat_level = self._evaluate_threat_level(event.category)
@@ -579,6 +670,11 @@ class EventProcessingService(EventIngressPort):
                             f"Detected {event.category.value.replace('_', ' ')} "
                             f"on camera {event.camera_id}"
                         )
+
+        if event.category == EventCategory.ABSTAINED:
+            reason = abstain_reason or "no_classification_signal"
+            event.metadata["abstain_reason"] = reason
+            logger.info("Abstained enrichment for event %s: %s", event.id, reason)
 
         await self.repository.save(event)
         return event

@@ -129,11 +129,13 @@ def _category_from(kind: Any, detection_type: Any) -> EventCategory:
         return EventCategory.VEHICLE
     if "animal" in text or "pet" in text or "dog" in text or "cat" in text:
         return EventCategory.ANIMAL_WILDLIFE
-    if "person" in text or "human" in text or "motion" in text:
+    if "shadow" in text or "wind" in text or "leaves" in text:
+        return EventCategory.FALSE_POSITIVE
+    if "person" in text or "human" in text:
         return EventCategory.UNKNOWN_VISITOR
-    if "ding" in text or "doorbell" in text:
-        return EventCategory.UNKNOWN_VISITOR
-    return EventCategory.UNKNOWN_VISITOR
+    if "motion" in text or "ding" in text or "doorbell" in text:
+        return EventCategory.ABSTAINED
+    return EventCategory.ABSTAINED
 
 
 class RingNativeAdapter(VideoRecorderPort):

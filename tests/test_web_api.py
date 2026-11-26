@@ -431,3 +431,37 @@ async def test_on_clip_ready_strips_binary_clip_frame_samples_for_sqlite_and_sse
     assert "clip_frame_samples" not in saved.metadata
     assert saved.metadata.get("clip_frame_samples_count") == 1
     assert not q.empty()
+
+
+def test_events_api_preserves_contract_and_exposes_abstain_reason(
+    client: TestClient, seeded_repo: InMemoryEventRepository
+) -> None:
+    """TR-23 (AC8): abstained events keep the API contract with additive metadata."""
+    seeded_repo._events["event-abstain"] = CameraEvent(
+        id="event-abstain",
+        camera_id="front-porch",
+        timestamp=datetime.now(UTC),
+        category=EventCategory.ABSTAINED,
+        threat_level=ThreatLevel.INFO,
+        summary="Unclassified activity on camera front-porch",
+        metadata={"abstain_reason": "unmapped_label"},
+    )
+
+    response = client.get("/api/events")
+    assert response.status_code == 200
+    entry = next(event for event in response.json()["events"] if event["id"] == "event-abstain")
+    for key in (
+        "id",
+        "camera_id",
+        "timestamp",
+        "category",
+        "threat_level",
+        "summary",
+        "metrics",
+        "provenance",
+        "matched_entities",
+        "metadata",
+    ):
+        assert key in entry
+    assert entry["category"] == "abstained"
+    assert entry["metadata"]["abstain_reason"] == "unmapped_label"

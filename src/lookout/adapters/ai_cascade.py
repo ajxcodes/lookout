@@ -120,6 +120,9 @@ CATEGORY_SYNONYMS: dict[str, EventCategory] = {
     "stranger": EventCategory.UNKNOWN_VISITOR,
     "person": EventCategory.UNKNOWN_VISITOR,
     "human": EventCategory.UNKNOWN_VISITOR,
+    # Neutral outcomes (kept last so explicit person/visitor labels still win)
+    "abstained": EventCategory.ABSTAINED,
+    "unclassified": EventCategory.ABSTAINED,
 }
 
 
@@ -129,6 +132,14 @@ class StructuredOutputParser:
     @classmethod
     def parse(cls, raw_output: str) -> tuple[EventCategory, DetectionMetrics, str]:
         """Extract EventCategory, DetectionMetrics, and summary from raw model text."""
+        category, metrics, summary, _ = cls.parse_detailed(raw_output)
+        return category, metrics, summary
+
+    @classmethod
+    def parse_detailed(
+        cls, raw_output: str
+    ) -> tuple[EventCategory, DetectionMetrics, str, str | None]:
+        """Parse model text and carry an explicit reason when the tier abstains."""
         cleaned = raw_output.strip()
         json_str: str | None = None
 
@@ -159,9 +170,14 @@ class StructuredOutputParser:
     @classmethod
     def _parse_dict(
         cls, data: dict[str, Any], raw_output: str
-    ) -> tuple[EventCategory, DetectionMetrics, str]:
+    ) -> tuple[EventCategory, DetectionMetrics, str, str | None]:
         raw_cat = str(data.get("category", "")).strip().lower()
-        category = CATEGORY_SYNONYMS.get(raw_cat, EventCategory.UNKNOWN_VISITOR)
+        if not raw_cat:
+            category, abstain_reason = EventCategory.ABSTAINED, "unparseable_output"
+        elif raw_cat in CATEGORY_SYNONYMS:
+            category, abstain_reason = CATEGORY_SYNONYMS[raw_cat], None
+        else:
+            category, abstain_reason = EventCategory.ABSTAINED, "unmapped_label"
 
         confidence = 0.8
         try:
@@ -211,23 +227,27 @@ class StructuredOutputParser:
             confidence=confidence,
             bounding_boxes=bounding_boxes,
         )
-        return category, metrics, summary
+        return category, metrics, summary, abstain_reason
 
     @classmethod
-    def _parse_text_fallback(cls, text: str) -> tuple[EventCategory, DetectionMetrics, str]:
+    def _parse_text_fallback(
+        cls, text: str
+    ) -> tuple[EventCategory, DetectionMetrics, str, str | None]:
         text_lower = text.lower()
-        matched_category = EventCategory.UNKNOWN_VISITOR
+        matched_category: EventCategory | None = None
 
         for synonym, cat in CATEGORY_SYNONYMS.items():
             if re.search(rf"\b{re.escape(synonym)}\b", text_lower):
                 matched_category = cat
                 break
 
+        category = matched_category if matched_category is not None else EventCategory.ABSTAINED
+        abstain_reason = None if matched_category is not None else "unparseable_output"
         metrics = DetectionMetrics(
             confidence=0.5,
             bounding_boxes=[],
         )
-        return matched_category, metrics, text
+        return category, metrics, text, abstain_reason
 
 
 @runtime_checkable
@@ -310,7 +330,7 @@ class OllamaVisionProvider:
             tokens_used = data.get("eval_count")
 
         latency_ms = (time.perf_counter() - start) * 1000.0
-        category, metrics, _ = StructuredOutputParser.parse(raw_response)
+        category, metrics, _, abstain_reason = StructuredOutputParser.parse_detailed(raw_response)
 
         provenance = InferenceProvenance(
             provider="ollama",
@@ -319,6 +339,7 @@ class OllamaVisionProvider:
             confidence=metrics.confidence,
             tokens_used=tokens_used,
             raw_output=raw_response,
+            abstain_reason=abstain_reason,
         )
         return category, metrics, provenance
 
@@ -394,7 +415,7 @@ class OpenCodeVisionProvider:
         tokens_used = usage.get("total_tokens", usage.get("prompt_tokens"))
 
         latency_ms = (time.perf_counter() - start) * 1000.0
-        category, metrics, _ = StructuredOutputParser.parse(raw_content)
+        category, metrics, _, abstain_reason = StructuredOutputParser.parse_detailed(raw_content)
 
         provenance = InferenceProvenance(
             provider=self.provider_id,
@@ -403,6 +424,7 @@ class OpenCodeVisionProvider:
             confidence=metrics.confidence,
             tokens_used=tokens_used,
             raw_output=raw_content,
+            abstain_reason=abstain_reason,
         )
         return category, metrics, provenance
 
@@ -463,7 +485,7 @@ class GeminiVisionProvider:
         tokens_used = usage_meta.get("totalTokenCount", usage_meta.get("promptTokenCount"))
 
         latency_ms = (time.perf_counter() - start) * 1000.0
-        category, metrics, _ = StructuredOutputParser.parse(raw_content)
+        category, metrics, _, abstain_reason = StructuredOutputParser.parse_detailed(raw_content)
 
         provenance = InferenceProvenance(
             provider="gemini",
@@ -472,6 +494,7 @@ class GeminiVisionProvider:
             confidence=metrics.confidence,
             tokens_used=tokens_used,
             raw_output=raw_content,
+            abstain_reason=abstain_reason,
         )
         return category, metrics, provenance
 
@@ -493,8 +516,8 @@ class LocalEdgeVisionProvider:
         start = time.perf_counter()
         if self.npu_runtime is not None and self.npu_runtime.is_available():
             boxes, latency_ms = self.npu_runtime.infer(image_bytes)
-            # Infer category from boxes
-            category = EventCategory.UNKNOWN_VISITOR
+            # Infer category from boxes; no detected cue means abstain.
+            category = EventCategory.ABSTAINED
             confidence = 0.88
             for b in boxes:
                 if b.label in ("pet", "dog", "cat"):
@@ -541,9 +564,19 @@ class LocalEdgeVisionProvider:
             )
             boxes = [box]
             confidence = 0.86
+        elif (
+            b"person" in payload_lower or b"human" in payload_lower or b"resident" in payload_lower
+        ):
+            # An explicit person cue is the only path to UNKNOWN_VISITOR here.
+            category = EventCategory.UNKNOWN_VISITOR
+            box = BoundingBox(
+                label="person", confidence=0.85, x_min=0.25, y_min=0.1, x_max=0.75, y_max=0.9
+            )
+            boxes = [box]
+            confidence = 0.85
         else:
             # For real camera images without matched cues, classify as false positive
-            # rather than intruder
+            # rather than intruder; any other no-signal payload abstains.
             is_real_image = image_bytes.startswith(b"\xff\xd8") or image_bytes.startswith(
                 b"\x89PNG"
             )
@@ -552,12 +585,9 @@ class LocalEdgeVisionProvider:
                 boxes = []
                 confidence = 0.50
             else:
-                category = EventCategory.UNKNOWN_VISITOR
-                box = BoundingBox(
-                    label="person", confidence=0.85, x_min=0.25, y_min=0.1, x_max=0.75, y_max=0.9
-                )
-                boxes = [box]
-                confidence = 0.85
+                category = EventCategory.ABSTAINED
+                boxes = []
+                confidence = 0.50
 
         latency_ms = max(0.5, (time.perf_counter() - start) * 1000.0)
         metrics = DetectionMetrics(
@@ -575,9 +605,9 @@ class LocalEdgeVisionProvider:
 
 
 class OfflineVisionFallbackProvider:
-    """Tier 4: Zero-compute fallback returning media-only visitor classification."""
+    """Tier 4: Zero-compute fallback that abstains rather than guessing a visitor."""
 
-    def __init__(self, fallback_category: EventCategory = EventCategory.UNKNOWN_VISITOR) -> None:
+    def __init__(self, fallback_category: EventCategory = EventCategory.ABSTAINED) -> None:
         self.fallback_category = fallback_category
 
     async def analyze(
@@ -594,6 +624,7 @@ class OfflineVisionFallbackProvider:
             latency_ms=0.0,
             confidence=0.5,
             raw_output=f"offline_fallback:{self.fallback_category.value}",
+            abstain_reason="all_tiers_unavailable",
         )
         return self.fallback_category, metrics, provenance
 

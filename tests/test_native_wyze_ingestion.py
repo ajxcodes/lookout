@@ -492,8 +492,29 @@ async def test_record_clip_primes_consumer_before_clip(tmp_path: Any, monkeypatc
     assert b"mdat" in Path(path).read_bytes()
 
 
+def _confident_car_alarm_classifier() -> Any:
+    """Stub classifier emitting a confident car_alarm taxonomy label."""
+    from lookout.domain.models import InferenceProvenance
+
+    class ConfidentCarAlarm:
+        async def classify_audio(self, audio_bytes: bytes) -> tuple[str, float, Any]:
+            return (
+                "car_alarm",
+                0.92,
+                InferenceProvenance(
+                    provider="yamnet",
+                    model_name="models/yamnet.tflite",
+                    latency_ms=1.0,
+                    confidence=0.92,
+                    raw_output="car_alarm:0.92",
+                ),
+            )
+
+    return ConfidentCarAlarm()
+
+
 async def test_wyze_sound_event_categorization_and_notification() -> None:
-    """TR-8: Verify Wyze Sound alarm_type is categorized as ACOUSTIC_ANOMALY / HIGH."""
+    """A bare Sound trigger abstains; a confident car_alarm still escalates."""
     from lookout.adapters.memory.notification import MockNotificationAdapter
     from lookout.adapters.memory.repository import InMemoryEventRepository
     from lookout.domain.models import EventCategory, ThreatLevel
@@ -507,6 +528,56 @@ async def test_wyze_sound_event_categorization_and_notification() -> None:
         "wyze_cam",
         {"metadata": {"alarm_type": "Sound", "trigger": "sound"}},
     )
-    assert event.category == EventCategory.ACOUSTIC_ANOMALY
-    assert event.threat_level == ThreatLevel.HIGH
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert len(notifier.sent_notifications) == 0
+
+    confident_service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        notification=notifier,
+        audio_classifier=_confident_car_alarm_classifier(),
+    )
+    escalated = await confident_service.ingest_raw_event(
+        "wyze_cam",
+        {
+            "audio": b"car alarm siren recording",
+            "metadata": {"alarm_type": "Sound", "trigger": "sound"},
+        },
+    )
+    assert escalated.category == EventCategory.ACOUSTIC_ANOMALY
+    assert escalated.threat_level == ThreatLevel.HIGH
+    assert len(notifier.sent_notifications) == 1
+
+
+async def test_wyze_sound_trigger_without_confident_audio_abstains() -> None:
+    """TR-20 (AC2, AC4): a bare sound trigger abstains; confident audio escalates."""
+    from lookout.adapters.memory.notification import MockNotificationAdapter
+    from lookout.adapters.memory.repository import InMemoryEventRepository
+    from lookout.domain.models import EventCategory, ThreatLevel
+    from lookout.domain.service import EventProcessingService
+
+    notifier = MockNotificationAdapter()
+    service = EventProcessingService(repository=InMemoryEventRepository(), notification=notifier)
+    event = await service.ingest_raw_event(
+        "wyze_cam",
+        {"metadata": {"alarm_type": "Sound", "trigger": "sound"}},
+    )
+    assert event.category == EventCategory.ABSTAINED
+    assert event.threat_level == ThreatLevel.INFO
+    assert len(notifier.sent_notifications) == 0
+
+    confident_service = EventProcessingService(
+        repository=InMemoryEventRepository(),
+        notification=notifier,
+        audio_classifier=_confident_car_alarm_classifier(),
+    )
+    confident = await confident_service.ingest_raw_event(
+        "wyze_cam",
+        {
+            "audio": b"car alarm siren recording",
+            "metadata": {"alarm_type": "Sound", "trigger": "sound"},
+        },
+    )
+    assert confident.category == EventCategory.ACOUSTIC_ANOMALY
+    assert confident.threat_level == ThreatLevel.HIGH
     assert len(notifier.sent_notifications) == 1

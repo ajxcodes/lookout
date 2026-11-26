@@ -21,6 +21,7 @@ class EventCategory(StrEnum):
     ACOUSTIC_ANOMALY = "acoustic_anomaly"
     FALSE_POSITIVE = "false_positive"
     PET_ELIMINATION = "pet_elimination"
+    ABSTAINED = "abstained"
 
 
 class ThreatLevel(IntEnum):
@@ -71,6 +72,7 @@ class InferenceProvenance:
     confidence: float
     tokens_used: int | None = None
     raw_output: str | None = None
+    abstain_reason: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
