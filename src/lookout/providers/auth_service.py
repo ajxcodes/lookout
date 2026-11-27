@@ -36,6 +36,7 @@ _SENSITIVE_KEYS = {
     "key_id",
     "client_secret",
     "access_token",
+    "user_id",
 }
 _SENSITIVE_HINTS = ("token", "secret", "password")
 

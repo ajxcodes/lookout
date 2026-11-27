@@ -754,6 +754,7 @@ def create_app(
             ),
             cameras=(active_config.cameras if active_config is not None else []),
             native_adapter=app.state.wyze_native,
+            model_allowlist=set(wyze_native_config.motion_tag_models),
         )
     except Exception as exc:  # noqa: BLE001 - feature degrades to unsupported
         logger.warning("Wyze motion-tag adapter unavailable: %s", exc)

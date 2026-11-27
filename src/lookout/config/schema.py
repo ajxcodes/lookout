@@ -302,6 +302,10 @@ class WyzeConfig(BaseModel):
     password: str | None = Field(default=None, description="Wyze account password")
     auth_token: str | None = Field(default=None, description="Wyze API access token")
     refresh_token: str | None = Field(default=None, description="Wyze API refresh token")
+    user_id: str | None = Field(
+        default=None,
+        description="Wyze account user id override; defaults to the access-token JWT claim",
+    )
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
     native_ingestion: bool = Field(
         default=False, description="Whether native Wyze ingestion is enabled"
@@ -342,6 +346,18 @@ class WyzeConfig(BaseModel):
     )
     wcsa_timeout_seconds: float = Field(
         default=30.0, gt=0.0, description="Timeout for wcsa/device-management REST calls"
+    )
+    motion_tag_models: list[str] = Field(
+        default_factory=lambda: ["HL_CAM4"],
+        description="Product model strings that support the motion-detection capability",
+    )
+    device_capability_path: str | None = Field(
+        default=None,
+        description="Device-management path that returns iotIidMaps (unset until captured)",
+    )
+    device_management_signature_scheme: Literal["signature2", "legacy"] = Field(
+        default="signature2",
+        description="Device-management request signing scheme",
     )
 
     @model_validator(mode="before")
@@ -868,6 +884,7 @@ SENSITIVE_KEYS: set[str] = {
     "ha_access_token",
     "access_token",
     "mqtt_password",
+    "user_id",
 }
 
 
