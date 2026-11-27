@@ -58,8 +58,9 @@ class SidecarConfigSynchronizer:
 
     def sync_wyze_env(self, config: LookoutConfig) -> list[Path]:
         """Compatibility wrapper for sync_provider('wyze', config)."""
-        res = self.sync_provider("wyze", config)
-        return [res] if isinstance(res, Path) and res.exists() else []
+        self.sync_provider("wyze", config)
+        env_path = self.base_dir / "wyze-bridge.env"
+        return [env_path] if env_path.exists() else []
 
     def sync_ring_env(self, config: LookoutConfig) -> list[Path]:
         """Compatibility wrapper for sync_provider('ring', config)."""

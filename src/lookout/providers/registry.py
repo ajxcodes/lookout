@@ -170,13 +170,15 @@ class ProviderRegistry:
                     async def _login(
                         credentials: dict[str, Any], request: Request
                     ) -> dict[str, Any]:
-                        result = auth_service.login(
+                        result = await auth_service.login(
                             d.provider_id,
                             credentials,
                             getattr(request.app.state, "config", None),
                             driver=d,
                             force=bool(credentials.get("force", False)),
                             sidecar_dir=_sidecar_dir(request),
+                            request_state=request.app.state,
+                            config_path=_persist_path(request),
                         )
                         return auth_service.sanitize_auth_result(result)
 
@@ -198,13 +200,15 @@ class ProviderRegistry:
 
                     @r.post("/rotate")
                     async def _rotate(payload: dict[str, Any], request: Request) -> dict[str, Any]:
-                        result = auth_service.login(
+                        result = await auth_service.login(
                             d.provider_id,
                             payload,
                             getattr(request.app.state, "config", None),
                             driver=d,
                             force=True,
                             sidecar_dir=_sidecar_dir(request),
+                            request_state=request.app.state,
+                            config_path=_persist_path(request),
                         )
                         if result.status == "2fa_required" and payload.get("code"):
                             result = await auth_service.verify(

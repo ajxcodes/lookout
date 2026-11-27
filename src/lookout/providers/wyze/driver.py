@@ -59,16 +59,28 @@ class WyzeProviderDriver(BaseProviderDriver):
             self._manifest_cache = self.load_manifest_from_file(manifest_file)
         return self._manifest_cache
 
+    @staticmethod
+    def _challenge_message(method: str, destination: str | None) -> str:
+        if method == "email":
+            if destination:
+                return f"Wyze emailed a code to {destination}. Enter it below."
+            return "Wyze emailed a verification code. Enter it below."
+        if method == "sms":
+            return "Wyze texted a code to your phone. Enter it below."
+        return "Enter the current 6-digit code from your authenticator app."
+
     def authenticate(self, credentials: dict[str, Any]) -> AuthResult:
-        """Begin a real Wyze SDK login via the issuer, returning a 2FA challenge."""
+        """Begin the Lookout-owned Wyze login, returning tokens or a challenge."""
         email = str(credentials.get("email", ""))
         password = str(credentials.get("password", ""))
         api_key = credentials.get("api_key")
-        api_id = credentials.get("api_id")
-        totp_key = credentials.get("totp_key")
+        api_id = credentials.get("api_id") or credentials.get("key_id")
         try:
-            issuer_session_id = self.token_issuer.begin_login(
-                email, password, key_id=api_id, api_key=api_key, totp_key=totp_key
+            start = self.token_issuer.begin_login(
+                email,
+                password,
+                key_id=str(api_id) if api_id else None,
+                api_key=str(api_key) if api_key else None,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as an error state
             return AuthResult(
@@ -77,12 +89,30 @@ class WyzeProviderDriver(BaseProviderDriver):
                 message=f"Wyze login could not be started: {exc}",
             )
 
+        if start.tokens:
+            return AuthResult(
+                status="authenticated",
+                provider=self.provider_id,
+                auth_token=start.tokens.get("access_token"),
+                refresh_token=start.tokens.get("refresh_token"),
+                email=email,
+            )
+
+        if start.challenge is None or start.issuer_session_id is None:
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message="Wyze login returned neither tokens nor a 2FA challenge",
+            )
+
         session_id = f"wyze_session_{uuid.uuid4().hex[:12]}"
         self.store_session(
             session_id,
             {
                 "email": email,
-                "issuer_session_id": issuer_session_id,
+                "issuer_session_id": start.issuer_session_id,
+                "method": start.challenge.method,
+                "destination": start.challenge.destination,
                 "provider": self.provider_id,
             },
         )
@@ -90,12 +120,12 @@ class WyzeProviderDriver(BaseProviderDriver):
             status="2fa_required",
             session_id=session_id,
             provider=self.provider_id,
-            method="email/sms/totp",
-            message="Enter the 2FA code from your authenticator app or SMS",
+            method=start.challenge.method,
+            message=self._challenge_message(start.challenge.method, start.challenge.destination),
         )
 
     def verify_2fa(self, session_id: str, code: str) -> AuthResult:
-        """Complete the Wyze SDK 2FA exchange and return real tokens."""
+        """Verify the one-time code and return real tokens."""
         session = self.get_session(session_id)
         if not session:
             return AuthResult(
@@ -113,6 +143,15 @@ class WyzeProviderDriver(BaseProviderDriver):
         try:
             tokens = self.token_issuer.complete(str(issuer_session_id), code)
         except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            retryable = bool(getattr(exc, "retryable", False))
+            if retryable:
+                return AuthResult(
+                    status="2fa_required",
+                    session_id=session_id,
+                    provider=self.provider_id,
+                    method=session.get("method"),
+                    message=f"Wyze 2FA verification failed: {exc}",
+                )
             self.token_issuer.dispose(str(issuer_session_id))
             self._sessions.pop(session_id, None)
             return AuthResult(
@@ -129,6 +168,38 @@ class WyzeProviderDriver(BaseProviderDriver):
             auth_token=tokens.get("access_token"),
             refresh_token=tokens.get("refresh_token"),
             email=session.get("email", ""),
+        )
+
+    def resend_2fa(self, session_id: str) -> AuthResult:
+        """Re-send the email/SMS code for an active challenge."""
+        session = self.get_session(session_id)
+        if not session:
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message="Invalid or expired session",
+            )
+        issuer_session_id = session.get("issuer_session_id")
+        if not issuer_session_id:
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message="Invalid or expired issuer session",
+            )
+        try:
+            message = self.token_issuer.resend(str(issuer_session_id))
+        except Exception as exc:  # noqa: BLE001 - surfaced as an error state
+            return AuthResult(
+                status="error",
+                provider=self.provider_id,
+                message=f"Wyze code could not be resent: {exc}",
+            )
+        return AuthResult(
+            status="2fa_required",
+            session_id=session_id,
+            provider=self.provider_id,
+            method=session.get("method"),
+            message=message,
         )
 
     def has_valid_credentials(self, config: LookoutConfig | None = None) -> dict[str, Any]:

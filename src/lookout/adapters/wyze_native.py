@@ -148,11 +148,12 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         cfg = self.config
         token = getattr(cfg, "auth_token", None)
         refresh_token = getattr(cfg, "refresh_token", None)
-        email = getattr(cfg, "email", None)
-        password = getattr(cfg, "password", None)
-        key_id = getattr(cfg, "key_id", None)
-        api_key = getattr(cfg, "api_key", None)
-        totp_key = getattr(cfg, "totp_key", None)
+
+        if not (token or refresh_token):
+            raise WyzeAuthError(
+                "Wyze credentials are not configured. Authenticate through setup so "
+                "wyze.auth_token/refresh_token are persisted."
+            )
 
         try:
             # wyze-sdk ships no py.typed marker; its public surface is untyped.
@@ -162,24 +163,10 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
                 "wyze-sdk is not installed; install 'wyze-sdk>=2.3.16' to use native Wyze ingestion"
             ) from exc
 
-        if token or refresh_token:
-            return Client(
-                token=token,
-                refresh_token=refresh_token,
-                timeout=int(getattr(cfg, "timeout_seconds", 30) or 30),
-            )
-        if email and password and key_id and api_key:
-            return Client(
-                email=email,
-                password=password,
-                key_id=key_id,
-                api_key=api_key,
-                totp_key=totp_key,
-                timeout=int(getattr(cfg, "timeout_seconds", 30) or 30),
-            )
-        raise WyzeAuthError(
-            "Wyze credentials are not configured. Set wyze.auth_token/refresh_token "
-            "or wyze.email/password/key_id/api_key."
+        return Client(
+            token=token,
+            refresh_token=refresh_token,
+            timeout=int(getattr(cfg, "timeout_seconds", 30) or 30),
         )
 
     def _client(self, force: bool = False) -> Any:

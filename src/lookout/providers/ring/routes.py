@@ -50,13 +50,15 @@ def create_ring_router(driver: RingProviderDriver) -> APIRouter:
 
     @router.post("/login")
     async def login(credentials: dict[str, Any], request: Request) -> dict[str, Any]:
-        result = auth_service.login(
+        result = await auth_service.login(
             "ring",
             credentials,
             getattr(request.app.state, "config", None),
             driver=driver,
             force=bool(credentials.get("force", False)),
             sidecar_dir=_sidecar_dir(request),
+            request_state=request.app.state,
+            config_path=_persist_path(request),
         )
         return auth_service.sanitize_auth_result(result)
 
@@ -77,13 +79,15 @@ def create_ring_router(driver: RingProviderDriver) -> APIRouter:
     @router.post("/rotate")
     async def rotate(payload: dict[str, Any], request: Request) -> dict[str, Any]:
         config = getattr(request.app.state, "config", None)
-        result = auth_service.login(
+        result = await auth_service.login(
             "ring",
             payload,
             config,
             driver=driver,
             force=True,
             sidecar_dir=_sidecar_dir(request),
+            request_state=request.app.state,
+            config_path=_persist_path(request),
         )
         if result.status == "2fa_required" and payload.get("code"):
             result = await auth_service.verify(

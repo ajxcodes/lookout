@@ -161,10 +161,10 @@ def test_standalone_sidecar_2fa_modal_interaction(
 ) -> None:
     """TR-17: Verify the real-auth credential flow stages Wyze credentials and opens the 2FA modal.
 
-    The wizard now collects real provider credentials in ``#modal-credentials`` before
-    issuing tokens. ``begin_login`` only stages the (fake) credentials locally and
-    returns ``2fa_required``; no network call or token issuance happens until the
-    user submits a 2FA code, which this test does not do.
+    The wizard collects real provider credentials in ``#modal-credentials`` before
+    issuing tokens. The backend's ``begin_login`` returns ``2fa_required`` for this
+    fake issuer; token issuance only happens after the user submits a one-time code,
+    which this test does not do.
     """
     base_url = unconfigured_server["standalone_base_url"]
     page.goto(f"{base_url}/setup")
@@ -180,8 +180,6 @@ def test_standalone_sidecar_2fa_modal_interaction(
     expect(page.locator("#modal-credentials")).to_be_visible(timeout=5000)
     page.locator("#cred-email").fill("wyze-e2e@example.com")
     page.locator("#cred-password").fill("fake-password")
-    page.locator("#cred-api-id").fill("fake-api-id")
-    page.locator("#cred-api-key").fill("fake-api-key")
     page.locator("#btn-cred-submit").click()
 
     # Staging credentials returns 2fa_required, which opens the 2FA modal.

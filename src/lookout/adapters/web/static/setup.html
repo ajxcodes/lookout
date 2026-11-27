@@ -168,7 +168,7 @@
           <h3 id="modal-2fa-title" style="margin:0;font-size:1.125rem;font-weight:600;">Two-Factor Authentication</h3>
           <button class="btn" id="modal-2fa-close" type="button" style="padding:2px 8px;">✕</button>
         </div>
-        <p id="modal-2fa-desc" style="font-size:0.875rem;color:#94a3b8;margin-bottom:16px;">Enter the 6-digit verification code sent to your account.</p>
+        <p id="modal-2fa-desc" style="font-size:0.875rem;color:#94a3b8;margin-bottom:16px;">Enter the one-time code from your email, text message, or authenticator app.</p>
         <div class="form-group" style="margin-bottom:16px;">
           <label class="form-label" for="code-2fa" style="display:block;margin-bottom:4px;font-size:0.8125rem;">Verification Code</label>
           <input class="form-input" id="code-2fa" type="text" placeholder="123456" maxlength="8" style="width:100%;font-size:1.25rem;letter-spacing:4px;text-align:center;box-sizing:border-box;">
@@ -200,20 +200,6 @@
         <div class="form-group" style="margin-bottom:12px;">
           <label class="form-label" for="cred-password" style="display:block;margin-bottom:4px;font-size:0.8125rem;">Password</label>
           <input class="form-input" id="cred-password" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;">
-        </div>
-        <div id="cred-wyze-fields" style="display:none;">
-          <div class="form-group" style="margin-bottom:12px;">
-            <label class="form-label" for="cred-api-id" style="display:block;margin-bottom:4px;font-size:0.8125rem;">API Key ID</label>
-            <input class="form-input" id="cred-api-id" type="text" style="width:100%;box-sizing:border-box;">
-          </div>
-          <div class="form-group" style="margin-bottom:12px;">
-            <label class="form-label" for="cred-api-key" style="display:block;margin-bottom:4px;font-size:0.8125rem;">API Key</label>
-            <input class="form-input" id="cred-api-key" type="password" style="width:100%;box-sizing:border-box;">
-          </div>
-          <div class="form-group" style="margin-bottom:12px;">
-            <label class="form-label" for="cred-totp" style="display:block;margin-bottom:4px;font-size:0.8125rem;">TOTP secret (if 2FA is enabled)</label>
-            <input class="form-input" id="cred-totp" type="password" style="width:100%;box-sizing:border-box;">
-          </div>
         </div>
         <div id="cred-status" style="font-size:0.8125rem;margin-bottom:16px;"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;">

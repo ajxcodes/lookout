@@ -289,15 +289,21 @@ Common blocker for everything cloud-wcsa: replicating Wyze's **dynamic signature
 **Token lifecycle (Ktor shared module):**
 - Access token + refresh token pair. On `401` / error code `2001` (access-token expired), the Ktor interceptor (`KtorDiModuleInterceptUtilKt.handle2001OrAccessTokenError`) calls `POST /app/user/refresh_token` and retries the original request; `RefreshTokenRepositoryViewModel` surfaces invalid-access/invalid-refresh-token errors to the UI.
 - `WyzeKtorAuth` / `WyzeKtorSignature` generate `signature2` using an `appid` header — this is the *newer* signing scheme (coexists with the legacy `WpkWyzeExService.isDynamicSignature(true)` + app key `9319141212m2ik` used by wcsa/device-management and the rest of the REST surface).
-- Lookout's `wyze-sdk` `Client` already handles token/refresh_token and email/password/key_id/api_key + totp_key flows; the Ktor `signature2` scheme is *not* reproduced in Lookout today (only the legacy dynamic signature is partially relevant to wcsa).
+- Lookout's native data plane is token-first (`wyze_sdk.Client(token=…, refresh_token=…)`); the login handshake itself is owned by Lookout (see below) and never collects a TOTP shared secret or Developer API key. The Ktor `signature2` scheme is *not* reproduced in Lookout today (only the legacy dynamic signature is partially relevant to wcsa).
 
 **2FA / login variants observed:**
-- TOTP: `totp_key` supported by `wyze-sdk` `Client`.
 - Passkey: `/app/login/passkey/option`, `/app/login/passkey/assertion`.
 - OAuth: `oauth/authorize?response_type=code&client_id=…&redirect_uri=wyze://wyzeapp:8080/v2?id=wyze/auth/login&scope=authcode-read%20native%20openid%20email&kount_session_id=…` (Kount session id for fraud scoring).
 - Account info: `/app/user/get_user_info`, `/user/account`, `gateway-oauth/user/account`, `gateway-oauth/passkey`.
 
-**Integration note:** Lookout does not need to reimplement Wyze login — `wyze-sdk` covers it. The gap is the *dynamic signature* (`signature2` / legacy) for wcsa and device-management calls (see §15.7). Auth tokens are already persisted by the native adapter.
+**Lookout-owned login handshake (one-time code, never the TOTP secret):** `wyze-sdk` is used only as the HTTP transport/header layer (`AuthServiceClient`); the login handshake lives in `providers/wyze/authenticator.py`. Initial login is `POST /api/user/login` with `{email, password: triple_md5(password), nonce}`. A response that carries `access_token` completes immediately (no 2FA prompt). Otherwise the challenge is normalized from `mfa_details.primary_option` / `mfa_options`:
+- **Email:** `POST /v2/user/login/sendEmailCode` with params `{userId, sessionId: email_session_id}`; the response `session_id` becomes `verification_id`. A 404/405 falls back once to `POST /api/user/login/email/mfa_sending_email` with `{email, user_id}`.
+- **SMS:** `POST /user/login/sendSmsCode` with params `{mfaPhoneType: "Primary", sessionId: sms_session_id, userId}`; the response `session_id` becomes `verification_id`.
+- **Authenticator app:** no send; `verification_id` is `mfa_details.totp_apps[0].app_id`.
+
+The user's one-time code is then sent verbatim as `verification_code` (with `mfa_type`/`verification_id`) to `POST /api/user/login`. It is never passed to `mintotp.totp`, never treated as a shared TOTP secret, and never logged. `totp_key` is **not** collected anywhere in the UI or config.
+
+**Integration note:** The native data plane is token-first (`wyze_sdk.Client(token=…, refresh_token=…)`). Developer API keys (`key_id`/`api_key`) are **not required** for login or event polling and have been removed from `WyzeConfig`, the setup wizard, sidecar sync, credential storage, discovery, and the manifest; the login endpoint still tolerates optional `api_id`/`api_key` from manual API callers as `keyid`/`apikey` headers. The remaining gap is the *dynamic signature* (`signature2` / legacy) for wcsa and device-management calls (see §15.7); if that lane (#68) proves to need Developer API keys, they will be reintroduced scoped to it with captured evidence.
 
 ## 14b. Notifications (push + in-app) — follow-up pass
 

@@ -83,6 +83,19 @@ def test_wizard_renders_four_auth_states_without_hardcoded_credentials() -> None
     assert "logout" in source.lower()
 
 
+def test_no_totp_secret_or_api_key_fields_in_wizard() -> None:
+    """TR-11 (AC4): the wizard never asks for a TOTP secret or API key/ID."""
+    static = Path(__file__).parents[1] / "src/lookout/adapters/web/static"
+    html = (static / "setup.html").read_text(encoding="utf-8")
+    script = (static / "js/setup-wizard.js").read_text(encoding="utf-8")
+    assert "cred-totp" not in html
+    assert "cred-api-id" not in html
+    assert "cred-api-key" not in html
+    combined = (html + script).lower()
+    assert "authenticator" in combined
+    assert "totp_key" not in combined
+
+
 def test_setup_finalize_generates_valid_yaml(unconfigured_app) -> None:
     """TR-15: Verify POST /api/setup/finalize writes valid YAML config and transitions state."""
     app, target_path = unconfigured_app

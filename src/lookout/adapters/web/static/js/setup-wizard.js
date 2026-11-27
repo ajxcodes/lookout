@@ -168,10 +168,6 @@ export class SetupWizard {
     this.credDesc = document.getElementById("cred-desc");
     this.credEmail = document.getElementById("cred-email");
     this.credPassword = document.getElementById("cred-password");
-    this.credApiId = document.getElementById("cred-api-id");
-    this.credApiKey = document.getElementById("cred-api-key");
-    this.credTotp = document.getElementById("cred-totp");
-    this.credWyzeFields = document.getElementById("cred-wyze-fields");
     this.credStatus = document.getElementById("cred-status");
     this.btnCredSubmit = document.getElementById("btn-cred-submit");
     this.btnCredCancel = document.getElementById("btn-cred-cancel");
@@ -649,12 +645,6 @@ export class SetupWizard {
     }
     if (this.credEmail) this.credEmail.value = "";
     if (this.credPassword) this.credPassword.value = "";
-    if (this.credApiId) this.credApiId.value = "";
-    if (this.credApiKey) this.credApiKey.value = "";
-    if (this.credTotp) this.credTotp.value = "";
-    if (this.credWyzeFields) {
-      this.credWyzeFields.style.display = provider === "wyze" ? "block" : "none";
-    }
     if (this.credStatus) {
       this.credStatus.textContent = "";
       this.credStatus.style.color = "inherit";
@@ -665,8 +655,6 @@ export class SetupWizard {
   closeCredentialsModal() {
     if (this.modalCredentials) this.modalCredentials.style.display = "none";
     if (this.credPassword) this.credPassword.value = "";
-    if (this.credApiKey) this.credApiKey.value = "";
-    if (this.credTotp) this.credTotp.value = "";
   }
 
   async submitCredentials() {
@@ -675,9 +663,6 @@ export class SetupWizard {
     const creds = {
       email: (this.credEmail && this.credEmail.value.trim()) || "",
       password: (this.credPassword && this.credPassword.value) || "",
-      api_id: (this.credApiId && this.credApiId.value.trim()) || undefined,
-      api_key: (this.credApiKey && this.credApiKey.value) || undefined,
-      totp_key: (this.credTotp && this.credTotp.value) || undefined,
       force: this.forceAuth,
     };
     if (!creds.email || !creds.password) {
@@ -748,8 +733,9 @@ export class SetupWizard {
     if (this.modal2faTitle) {
       this.modal2faTitle.textContent = `${provider === "wyze" ? "Wyze" : "Ring"} 2FA Verification`;
     }
-    if (this.modal2faDesc && message) {
-      this.modal2faDesc.textContent = message;
+    if (this.modal2faDesc) {
+      this.modal2faDesc.textContent =
+        message || "Enter the one-time code from your email, text message, or authenticator app.";
     }
     if (this.code2faInput) {
       this.code2faInput.value = "";
@@ -787,10 +773,29 @@ export class SetupWizard {
   }
 
   async resend2fa() {
+    const provider = this.active2faProvider || "wyze";
+    const sessionId = this.active2faSessionId;
     if (this.status2fa) {
       this.status2fa.textContent = "Resending 2FA code...";
+      this.status2fa.style.color = "inherit";
     }
-    await this.startAuth(this.active2faProvider || "wyze");
+    try {
+      const res = await fetch(resolveUrl(`/api/auth/${provider}/resend`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const data = await res.json();
+      if (this.status2fa) {
+        this.status2fa.textContent = data.message || "A new code was requested.";
+        this.status2fa.style.color = data.status === "error" ? "#ef4444" : "inherit";
+      }
+    } catch (err) {
+      if (this.status2fa) {
+        this.status2fa.textContent = `Resend error: ${err.message}`;
+        this.status2fa.style.color = "#ef4444";
+      }
+    }
   }
 
   async submit2fa() {

@@ -14,6 +14,7 @@ import pytest
 from lookout.adapters.native_stream_manager import MediaCaptureError
 from lookout.adapters.wyze_native import (
     WyzeApiError,
+    WyzeAuthError,
     WyzeNativeAdapter,
     WyzeStreamSourceError,
     WyzeTutkPtzAdapter,
@@ -135,6 +136,33 @@ def test_wyze_adapter_implements_ports() -> None:
     assert isinstance(adapter, VideoRecorderPort)
     assert isinstance(adapter, PtzControlPort)
     assert isinstance(WyzeTutkPtzAdapter(config=WyzeConfig()), PtzControlPort)
+
+
+def test_build_client_uses_tokens_only(monkeypatch) -> None:
+    """TR-21 (AC4): the native lane builds a token-only client."""
+    captured_kwargs: dict[str, Any] = {}
+
+    class _FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+
+    import wyze_sdk
+
+    monkeypatch.setattr(wyze_sdk, "Client", _FakeClient)
+    adapter = WyzeNativeAdapter(config=WyzeConfig(auth_token="ACCESS_A", refresh_token="REFRESH_A"))
+    adapter._build_client()
+    assert captured_kwargs["token"] == "ACCESS_A"
+    assert captured_kwargs["refresh_token"] == "REFRESH_A"
+    assert "email" not in captured_kwargs
+    assert "totp_key" not in captured_kwargs
+
+
+def test_build_client_requires_tokens_without_interactive_login() -> None:
+    """TR-27 (AC5): no token means a clear error, never an interactive login."""
+    adapter = WyzeNativeAdapter(config=WyzeConfig(email="u@example.com", password="pw"))
+    with pytest.raises(WyzeAuthError) as excinfo:
+        adapter._build_client()
+    assert "auth_token" in str(excinfo.value)
 
 
 def test_build_stream_source_uses_validated_wyze_url() -> None:

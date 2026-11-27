@@ -22,6 +22,7 @@ from auth_test_helpers import (
 
 from lookout.adapters.ring_native import encode_ring_token
 from lookout.providers.ring.authenticator import RingAuthCliIssuer
+from lookout.providers.wyze.driver import WyzeProviderDriver
 
 _MOCK_LITERALS = (
     "mock-ringtoken-12345",
@@ -100,6 +101,22 @@ def test_tokens_absent_from_logs_and_tempfiles_are_0600(tmp_path: Path, caplog) 
     os.chmod(name, 0o600)
     assert stat.S_IMODE(Path(name).stat().st_mode) == 0o600
     Path(name).unlink()
+
+
+def test_verification_code_and_tokens_never_logged(caplog) -> None:
+    """TR-20 (AC8): a verification code and issued token never reach the logs."""
+    issuer = FakeWyzeIssuer(access="SECRET_ACCESS", refresh="SECRET_REFRESH")
+    driver = WyzeProviderDriver(token_issuer=issuer)
+
+    with caplog.at_level(logging.DEBUG):
+        start = driver.authenticate({"email": "u@example.com", "password": "pw"})
+        assert start.session_id is not None
+        result = driver.verify_2fa(start.session_id, "654321")
+        assert result.status == "authenticated"
+
+    assert "654321" not in caplog.text
+    assert "SECRET_ACCESS" not in caplog.text
+    assert "SECRET_REFRESH" not in caplog.text
 
 
 def test_no_mock_token_literals_in_auth_source() -> None:

@@ -14,7 +14,7 @@ def sync_wyze_environment(config: LookoutConfig, target_dir: Path) -> list[Path]
     if config is None or config.wyze is None:
         return []
     wyze = config.wyze
-    if not (wyze.email or wyze.auth_token or wyze.api_key or wyze.key_id):
+    if not (wyze.email or wyze.auth_token or wyze.refresh_token):
         return []
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -26,12 +26,6 @@ def sync_wyze_environment(config: LookoutConfig, target_dir: Path) -> list[Path]
         lines.append(f"WYZE_PASSWORD={wyze.password}")
     if wyze.auth_token:
         lines.append(f"WYZE_ACCESS_TOKEN={wyze.auth_token}")
-    if wyze.api_key:
-        lines.append(f"WYZE_API_KEY={wyze.api_key}")
-    if wyze.key_id:
-        lines.append(f"KEY_ID={wyze.key_id}")
-    if wyze.totp_key:
-        lines.append(f"TOTP_KEY={wyze.totp_key}")
 
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     env_path.chmod(0o600)
