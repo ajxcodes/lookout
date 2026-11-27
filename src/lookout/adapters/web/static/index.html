@@ -605,6 +605,28 @@
           </label>
           <div id="cs-pan-scan-status" style="font-size:0.8125rem;opacity:0.7;"></div>
         </div>
+        <div class="setting-group" id="cs-wyze-push-group" style="display:none;">
+          <label class="setting-label">Wyze cloud push notifications</label>
+          <div style="font-size:0.8125rem;opacity:0.7;margin-bottom:6px;">These toggles are changed in the Wyze cloud and are separate from Lookout alerts below.</div>
+          <label class="cs-wyze-push-row" data-push-key="MotionPush" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-motion"> Motion
+          </label>
+          <label class="cs-wyze-push-row" data-push-key="SoundPush" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-sound"> Sound
+          </label>
+          <label class="cs-wyze-push-row" data-push-key="SmartDetectionPush" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-smart-detection"> Smart detection
+          </label>
+          <label class="cs-wyze-push-row" data-push-key="LowBatteryPush" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-low-battery"> Low battery
+          </label>
+          <label class="cs-wyze-push-row" data-push-key="AiPush" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-ai"> AI notifications
+          </label>
+          <label class="cs-wyze-push-row" data-push-key="PushSwitch" style="display:none;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="cs-cam-wyze-push-push"> Push switch
+          </label>
+        </div>
         <div class="setting-group" id="cs-auth-group" style="display:none;">
           <label class="setting-label">Authentication</label>
           <button class="btn" id="cs-reauth-btn" type="button">Reauthenticate</button>

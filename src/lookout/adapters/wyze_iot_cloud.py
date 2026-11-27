@@ -47,6 +47,11 @@ _MOTION_TAG_PROPERTY = "motion-detection::motion-tag"
 # constant is the default and the documented fallback.
 DEFAULT_CAPABLE_MOTION_TAG_MODELS = frozenset({"HL_CAM4"})
 
+# ``run_action`` success codes observed in golden envelopes (``code: 1`` is the
+# common ACK; ``0`` and ``200`` appear in other lanes). Any other present code
+# is a protocol failure and must never be reported as a successful write.
+_RUN_ACTION_SUCCESS_CODES = frozenset({"0", "1", "200"})
+
 
 @dataclass
 class IotPropertyResult:
@@ -58,6 +63,7 @@ class IotPropertyResult:
     capability_iid: int | None = None
     capability_iids: dict[str, int] = field(default_factory=dict)
     capability_map_known: bool = False
+    properties_by_capability: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class WyzeProtocolError(RuntimeError):
@@ -313,6 +319,41 @@ class WyzeIotCloudAdapter:
         return props
 
     @staticmethod
+    def _extract_properties_by_capability(data: Any) -> dict[str, dict[str, Any]]:
+        """Return ``{capability: {leaf: value}}`` without collapsing siblings.
+
+        The flat ``properties`` map keys by the full property name for
+        ``capabilities`` entries, but a response may name the same leaf under
+        two capabilities (for example ``MotionPush::push`` and
+        ``SoundPush::push``), so each capability keeps its own leaf map.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        containers: list[Any] = [data]
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            containers.append(data["data"])
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            caps = container.get("capabilities")
+            if not isinstance(caps, list):
+                continue
+            for item in caps:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name") or item.get("capability")
+                if name is None:
+                    continue
+                leaves = out.setdefault(str(name), {})
+                for prop in item.get("properties", []) or []:
+                    if not isinstance(prop, dict):
+                        continue
+                    key = prop.get("prop") or prop.get("name") or prop.get("key")
+                    if key is None:
+                        continue
+                    leaves[str(key).rsplit("::", 1)[-1]] = prop.get("value")
+        return out
+
+    @staticmethod
     def _coerce_iid(value: Any) -> int | None:
         if value is None or isinstance(value, bool):
             return None
@@ -447,6 +488,7 @@ class WyzeIotCloudAdapter:
         capabilities: list[str] | None = None,
         properties: list[str] | None = None,
         capability_iids: dict[str, int] | None = None,
+        capability_properties: dict[str, list[str]] | None = None,
     ) -> IotPropertyResult:
         caps = list(capabilities or [_MOTION_TAG_CAPABILITY])
 
@@ -470,7 +512,12 @@ class WyzeIotCloudAdapter:
             entries: list[dict[str, Any]] = []
             for name in caps:
                 iid = iid_map.get(name)
-                names = list(properties) if properties else [f"{name}::motion-tag"]
+                if capability_properties is not None:
+                    names = list(capability_properties.get(name) or [])
+                elif properties:
+                    names = list(properties)
+                else:
+                    names = [f"{name}::motion-tag"]
                 entries.append(
                     {
                         "name": name,
@@ -492,6 +539,7 @@ class WyzeIotCloudAdapter:
         data = await self._request(path, build_body)
 
         props = self._extract_properties(data)
+        by_capability = self._extract_properties_by_capability(data)
         response_iids = self._extract_capability_iids(data)
         if response_iids:
             iid_map = {**iid_map, **response_iids}
@@ -507,6 +555,7 @@ class WyzeIotCloudAdapter:
             capability_iid=iid_map.get(cap_name),
             capability_iids=dict(iid_map),
             capability_map_known=map_known,
+            properties_by_capability=by_capability,
         )
 
     async def run_action(
@@ -547,11 +596,9 @@ class WyzeIotCloudAdapter:
         path = "/device-management/api/action/run_action"
         data = await self._request(path, build_body)
         code = data.get("code") if isinstance(data, dict) else None
-        if code is not None and str(code) not in {"1", "0", "200"}:
+        if code is not None and str(code) not in _RUN_ACTION_SUCCESS_CODES:
             msg = data.get("msg") if isinstance(data, dict) else None
-            # Only treat obvious failure codes; be lenient.
-            if str(code).startswith("4") or str(code).startswith("5"):
-                raise WyzeProtocolError(f"Wyze run_action failed: code={code} msg={msg}")
+            raise WyzeProtocolError(f"Wyze run_action failed: code={code} msg={msg}")
         return {"status": "ok", "response": data}
 
     async def get_motion_tag(
