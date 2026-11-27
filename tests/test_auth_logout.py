@@ -137,3 +137,28 @@ def test_logout_does_not_remove_or_mutate_cameras(tmp_path: Path) -> None:
 
     assert config.cameras == before
     assert config.ring.logged_out is True and config.wyze.logged_out is True
+
+
+def test_wyze_logout_clears_cached_user_id(tmp_path: Path) -> None:
+    """TR-26 (AC5): Wyze logout clears the cached account id and token only."""
+    inject_fake_issuers()
+    config = LookoutConfig(
+        wyze=WyzeConfig(auth_token="wyze-token", user_id="acct-123"),
+        cameras=[
+            CameraConfig(
+                id="native-wyze",
+                name="Office",
+                stream_url="wyze://10.0.0.2?uid=u",
+                native_provider="wyze",
+                native_device_id="wyze-dev-1",
+            )
+        ],
+    )
+    before = copy.deepcopy(config.cameras)
+    client, _app, _path = make_client(tmp_path, config)
+
+    response = client.post("/api/auth/wyze/logout", json={})
+    assert response.status_code == 200
+    assert config.wyze.user_id is None
+    assert config.wyze.auth_token is None
+    assert config.cameras == before

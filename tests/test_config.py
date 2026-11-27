@@ -15,6 +15,7 @@ from lookout.config.schema import (
     CameraConfig,
     CascadeConfig,
     NotificationTargetConfig,
+    WyzeConfig,
 )
 from lookout.domain.models import EventCategory, ThreatLevel
 
@@ -322,6 +323,15 @@ def test_wyze_config_schema_validation() -> None:
     """
     config = load_config_from_yaml(yaml_content)
     assert config.wyze.email == "user@wyze.com" and config.wyze.enabled is True
+
+
+def test_wyze_device_management_defaults() -> None:
+    """TR-24: Device-management lane defaults stay conservative."""
+    cfg = WyzeConfig()
+    assert cfg.motion_tag_models == ["HL_CAM4"]
+    assert cfg.device_management_signature_scheme == "signature2"
+    assert cfg.device_capability_path is None
+    assert cfg.user_id is None
 
 
 def test_legacy_wyze_auth_fields_are_dropped_on_load() -> None:

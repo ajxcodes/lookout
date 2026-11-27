@@ -25,6 +25,7 @@ WYZE_SECRET_FIELDS = (
     "auth_token",
     "refresh_token",
     "password",
+    "user_id",
 )
 
 _SIDECAR_NAMES = {"ring": "ring-mqtt.env", "wyze": "wyze-bridge.env"}

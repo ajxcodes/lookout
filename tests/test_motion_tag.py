@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from lookout.adapters.wyze_iot_cloud import (
     IotPropertyResult,
     WyzeIotCloudAdapter,
     WyzeMotionTagAdapter,
+    WyzeProtocolError,
 )
 from lookout.adapters.wyze_signing import WyzeSigner
 from lookout.config.schema import CameraConfig, LookoutConfig, StorageConfig, WyzeConfig
@@ -41,10 +43,20 @@ def _wyze_camera(**overrides) -> CameraConfig:
 class FakeIotCloud:
     """Records envelopes and serves a configurable capability response."""
 
-    def __init__(self, *, supported: bool = True, value: bool = True, iid: int = 7):
+    def __init__(
+        self,
+        *,
+        supported: bool = True,
+        value: bool = True,
+        iid: int = 7,
+        capability_iids: dict | None = None,
+        map_known: bool = False,
+    ):
         self.supported = supported
         self.value = value
         self.iid = iid
+        self.capability_iids = dict(capability_iids or {})
+        self.map_known = map_known
         self.read_calls: list[dict] = []
         self.write_bodies: list[dict] = []
 
@@ -74,6 +86,8 @@ class FakeIotCloud:
             properties=properties,
             raw={"code": 1},
             capability_iid=self.iid if self.supported else None,
+            capability_iids=dict(self.capability_iids),
+            capability_map_known=self.map_known,
         )
 
     async def run_action(
@@ -135,6 +149,50 @@ def _build_app(tmp_path, adapter) -> tuple[LookoutConfig, Path, TestClient]:
         config_path=config_path,
     )
     return config, config_path, TestClient(app)
+
+
+def test_motion_tag_models_config_wires_allowlist(tmp_path):
+    config = LookoutConfig(
+        storage=StorageConfig(base_path=str(tmp_path / "media")),
+        wyze=WyzeConfig(
+            auth_token="test-token-not-real",
+            motion_tag_models=["HL_CAM4", "WYZE_ASCENT"],
+        ),
+        cameras=[_wyze_camera()],
+    )
+    app = create_app(config=config, config_path=tmp_path / "config.yaml")
+    adapter = app.state.ptz_service.motion_tag_adapter
+    assert adapter.model_allowlist == {"HL_CAM4", "WYZE_ASCENT"}
+
+
+def test_capability_map_known_without_motion_detection_is_unsupported():
+    iot = FakeIotCloud(supported=True, value=True, capability_iids={}, map_known=True)
+    adapter = _adapter(iot)
+
+    state = _run(adapter.get_motion_tag("cam1"))
+    assert state.supported is False
+    assert state.enabled is None
+
+    written = _run(adapter.set_motion_tag("cam1", True))
+    assert written.supported is False
+    assert iot.write_bodies == []
+
+
+class _ProtocolFailingAdapter:
+    async def get_motion_tag(self, camera_id):
+        raise WyzeProtocolError("Wyze request failed: HTTP 400")
+
+    async def set_motion_tag(self, camera_id, enabled):
+        raise WyzeProtocolError("Wyze request failed: HTTP 400")
+
+
+def test_route_returns_502_on_capable_protocol_error(tmp_path):
+    config, _config_path, client = _build_app(tmp_path, _ProtocolFailingAdapter())
+    before = config.cameras[0].motion_tag_enabled
+
+    response = client.get("/api/cameras/cam1/motion_tag")
+    assert response.status_code == 502
+    assert config.cameras[0].motion_tag_enabled == before
 
 
 # ----------------------------------------------------------------------
@@ -291,8 +349,8 @@ class _MockClient:
         self._responses = list(responses)
         self.calls = []
 
-    async def post(self, url, json=None, headers=None):
-        self.calls.append({"url": url, "json": json, "headers": headers or {}})
+    async def post(self, url, content=None, headers=None, json=None):
+        self.calls.append({"url": url, "content": content, "json": json, "headers": headers or {}})
         if self._responses:
             return self._responses.pop(0)
         return _Resp(200, {})
@@ -322,8 +380,10 @@ def test_400_1001_from_capable_model_surfaces_error_without_refresh():
         iot_cloud=iot,
         device_resolver=lambda _cid: ("AA:BB:CC:DD:EE:FF", "HL_CAM4"),
     )
-    with pytest.raises(RuntimeError, match="HTTP 400"):
+    with pytest.raises(WyzeProtocolError) as excinfo:
         _run(adapter.get_motion_tag("cam1"))
+    assert excinfo.value.status_code == 502
+    assert "HTTP 400" in str(excinfo.value)
     assert spy.calls == 0
     assert len(client.calls) == 1
 
@@ -366,13 +426,13 @@ def test_motion_tag_write_envelope_uses_signer_and_no_real_tokens():
     )
     result = _run(adapter.set_motion_tag("cam1", True))
     assert result.supported is True
-    body = client.calls[1]["json"]
+    body = json.loads(client.calls[1]["content"])
     assert body["capabilities"][0]["properties"][0] == {
         "separator": "::",
         "prop": "motion-detection::motion-tag",
         "value": True,
     }
-    assert "signature" in client.calls[1]["headers"]
+    assert "signature2" in client.calls[1]["headers"]
     assert "test-token" not in str(body)
 
 
