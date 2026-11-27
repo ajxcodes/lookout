@@ -18,6 +18,43 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["setup"])
 
+# Provider credential fields that a prior authentication step attaches to the
+# live config.  The first-run wizard authenticates in step 2 and then posts a
+# configuration body with no ``wyze`` section, so these must be carried over.
+_PROVIDER_CREDENTIAL_FIELDS = ("auth_token", "refresh_token", "email", "logged_out")
+
+
+def _merge_live_provider_credentials(body: dict[str, Any], live_config: Any) -> None:
+    """Carry credentials from the live config into a finalize body.
+
+    Step 2 of the first-run wizard authenticates a provider and writes the
+    issued token onto ``app.state.config``.  The finalize payload is the
+    wizard's ``configData`` object, which has no ``wyze`` section, so validating
+    and saving it verbatim would replace the fresh token with schema defaults.
+    Copy the live provider section (or its missing credential fields) into the
+    body whenever the posted payload does not supply a credential value.
+    """
+    if live_config is None:
+        return
+    for provider_id in ("wyze", "ring"):
+        live_section = getattr(live_config, provider_id, None)
+        if live_section is None:
+            continue
+        doc = getattr(live_section, "model_dump", None)
+        if not callable(doc):
+            continue
+        body_section = body.get(provider_id)
+        if not isinstance(body_section, dict):
+            # Section omitted entirely: keep the whole live section, tokens and all.
+            body[provider_id] = doc(mode="json")
+            continue
+        for field in _PROVIDER_CREDENTIAL_FIELDS:
+            if body_section.get(field) is not None:
+                continue
+            value = getattr(live_section, field, None)
+            if value is not None:
+                body_section[field] = value
+
 
 class AiTestRequest(BaseModel):
     """Payload for testing AI vision inference credentials and connectivity."""
@@ -219,6 +256,13 @@ async def finalize_setup(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception as err:
         raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {err}") from err
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Configuration payload must be an object")
+
+    # Preserve credentials attached by the step-2 authentication before the
+    # body (which omits provider sections) replaces the runtime config.
+    _merge_live_provider_credentials(body, getattr(request.app.state, "config", None))
 
     try:
         validated_config = LookoutConfig.model_validate(body)

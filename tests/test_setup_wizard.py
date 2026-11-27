@@ -1,12 +1,16 @@
 """Unit and integration tests for the first-run onboarding setup wizard."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
+from auth_test_helpers import FakeWyzeIssuer, ReachableNativeAdapter, inject_fake_issuers
 from fastapi.testclient import TestClient
 
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.app import create_app
+from lookout.providers.wyze.authenticator import WyzeChallenge
 
 
 @pytest.fixture
@@ -135,3 +139,143 @@ def test_setup_finalize_generates_valid_yaml(unconfigured_app) -> None:
     status_res = client.get("/api/setup/status")
     assert status_res.status_code == 200
     assert status_res.json()["configured"] is True
+
+
+def _wizard_payload() -> dict[str, Any]:
+    """Approximate the wizard's first-run ``configData`` body (no ``wyze`` key)."""
+    return {
+        "system_name": "Lookout",
+        "residents": [],
+        "pets": [],
+        "cameras": [],
+        "notification_targets": [
+            {
+                "name": "default-target",
+                "target_type": "webhook",
+                "destination": "http://localhost:8080/webhook",
+            }
+        ],
+        "storage": {
+            "base_path": "./data",
+            "database_path": "./data/lookout.db",
+        },
+        "ring": {
+            "auth_token": None,
+            "api_url": "https://api.ring.com",
+            "timeout_seconds": 15.0,
+        },
+    }
+
+
+def _first_run_app(tmp_path: Path) -> tuple[TestClient, Any, Path]:
+    """Build an unconfigured app with an offline, reachable native adapter."""
+    target_path = tmp_path / "config.yaml"
+    app = create_app(
+        config=None,
+        repository=InMemoryEventRepository(),
+        config_path=target_path,
+    )
+    app.state.sidecar_dir = tmp_path / "sidecars"
+    app.state.wyze_native = ReachableNativeAdapter(provider="wyze")
+    return TestClient(app), app, target_path
+
+
+@pytest.mark.parametrize(
+    ("method", "wire_mfa_type", "access", "refresh"),
+    [
+        ("email", "Email", "EMAIL_A", "EMAIL_R"),
+        ("sms", "PrimaryPhone", "SMS_A", "SMS_R"),
+        ("totp", "TotpVerificationCode", "TOTP_A", "TOTP_R"),
+    ],
+)
+def test_first_run_two_factor_token_survives_finalize(
+    tmp_path: Path, method: str, wire_mfa_type: str, access: str, refresh: str
+) -> None:
+    """AC1/AC2/AC3: a step-2 token reaches ``app.state`` and ``config.yaml``."""
+    issuer = FakeWyzeIssuer(
+        access=access,
+        refresh=refresh,
+        challenge=WyzeChallenge(
+            method=method,
+            wire_mfa_type=wire_mfa_type,
+            verification_id=f"{method}-vid",
+            destination="u***@example.com",
+        ),
+    )
+    inject_fake_issuers(wyze=issuer)
+    client, app, target_path = _first_run_app(tmp_path)
+
+    login = client.post(
+        "/api/auth/wyze/login",
+        json={"email": "u@example.com", "password": "pw"},
+    )
+    assert login.status_code == 200, login.text
+    body = login.json()
+    assert body["status"] == "2fa_required"
+    assert body["method"] == method
+
+    verify = client.post(
+        "/api/auth/wyze/verify",
+        json={"session_id": body["session_id"], "code": "654321"},
+    )
+    assert verify.json()["status"] == "authenticated", verify.text
+    assert app.state.config.wyze.auth_token == access
+
+    finalize = client.post("/api/setup/finalize", json=_wizard_payload())
+    assert finalize.status_code == 200, finalize.text
+    assert app.state.config.wyze.auth_token == access
+    saved = yaml.safe_load(target_path.read_text(encoding="utf-8"))
+    assert saved["wyze"]["auth_token"] == access
+    assert saved["wyze"]["refresh_token"] == refresh
+
+
+def test_first_run_no_2fa_token_survives_finalize(tmp_path: Path) -> None:
+    """AC5: a no-2FA token issued at login also reaches ``config.yaml``."""
+    issuer = FakeWyzeIssuer(
+        tokens={"access_token": "NO2FA_A", "refresh_token": "NO2FA_R"},
+        challenge=None,
+    )
+    inject_fake_issuers(wyze=issuer)
+    client, app, target_path = _first_run_app(tmp_path)
+
+    login = client.post(
+        "/api/auth/wyze/login",
+        json={"email": "u@example.com", "password": "pw"},
+    )
+    assert login.status_code == 200, login.text
+    assert login.json()["status"] == "authenticated"
+    assert app.state.config.wyze.auth_token == "NO2FA_A"
+    assert issuer.complete_calls == 0
+
+    finalize = client.post("/api/setup/finalize", json=_wizard_payload())
+    assert finalize.status_code == 200, finalize.text
+    assert app.state.config.wyze.auth_token == "NO2FA_A"
+    saved = yaml.safe_load(target_path.read_text(encoding="utf-8"))
+    assert saved["wyze"]["auth_token"] == "NO2FA_A"
+    assert saved["wyze"]["refresh_token"] == "NO2FA_R"
+
+
+def test_finalize_keeps_explicit_body_credentials(tmp_path: Path) -> None:
+    """A body that supplies provider credentials overrides the live values."""
+    issuer = FakeWyzeIssuer(
+        tokens={"access_token": "NO2FA_A", "refresh_token": "NO2FA_R"},
+        challenge=None,
+    )
+    inject_fake_issuers(wyze=issuer)
+    client, app, target_path = _first_run_app(tmp_path)
+    client.post(
+        "/api/auth/wyze/login",
+        json={"email": "u@example.com", "password": "pw"},
+    )
+
+    payload = _wizard_payload()
+    payload["wyze"] = {
+        "auth_token": "EXPLICIT_A",
+        "refresh_token": "EXPLICIT_R",
+        "email": "explicit@example.com",
+    }
+    finalize = client.post("/api/setup/finalize", json=payload)
+    assert finalize.status_code == 200, finalize.text
+    assert app.state.config.wyze.auth_token == "EXPLICIT_A"
+    saved = yaml.safe_load(target_path.read_text(encoding="utf-8"))
+    assert saved["wyze"]["auth_token"] == "EXPLICIT_A"
