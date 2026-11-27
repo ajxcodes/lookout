@@ -324,6 +324,26 @@ def test_wyze_config_schema_validation() -> None:
     assert config.wyze.email == "user@wyze.com" and config.wyze.enabled is True
 
 
+def test_legacy_wyze_auth_fields_are_dropped_on_load() -> None:
+    """TR-12 (AC4): legacy TOTP/API key fields load safely and are not retained."""
+    config = load_config_from_yaml(
+        """
+        wyze:
+          email: "user@wyze.com"
+          password: "pw"
+          key_id: "legacy-id"
+          api_key: "legacy-key"
+          totp_key: "JBSWY3DPEHPK3PXP"
+          api_id: "legacy-api-id"
+        """
+    )
+    assert not hasattr(config.wyze, "totp_key")
+    assert not hasattr(config.wyze, "api_key")
+    assert not hasattr(config.wyze, "key_id")
+    assert not hasattr(config.wyze, "api_id")
+    assert config.wyze.email == "user@wyze.com"
+
+
 def test_ring_config_extended_schema_validation() -> None:
     """TR-15: Validate RingConfig extended schema with refresh token and oauth_url."""
     yaml_content = """

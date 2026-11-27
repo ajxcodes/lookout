@@ -35,10 +35,8 @@ def probe_wyze(
 
     probe = wyze_credentials_present(config=config, sidecar_dir=sidecar_dir)
     env_email = os.environ.get("WYZE_EMAIL")
-    env_api_key = os.environ.get("WYZE_API_KEY") or os.environ.get("API_KEY")
     has_config = bool(
-        wyze_cfg is not None
-        and (wyze_cfg.email and (wyze_cfg.auth_token or wyze_cfg.password or wyze_cfg.api_key))
+        wyze_cfg is not None and (wyze_cfg.email and (wyze_cfg.auth_token or wyze_cfg.password))
     )
     is_port_open = driver.probe_socket("127.0.0.1", 5000) or driver.probe_socket("127.0.0.1", 8554)
 
@@ -57,14 +55,7 @@ def probe_wyze(
                 res.get("reachable") if hasattr(res, "get") else getattr(res, "reachable", False)
             )
 
-    if (
-        probe["present"]
-        or env_email
-        or env_api_key
-        or has_config
-        or is_port_open
-        or remote_reachable
-    ):
+    if probe["present"] or env_email or has_config or is_port_open or remote_reachable:
         active_email = (
             env_email or (wyze_cfg.email if wyze_cfg is not None else None) or "wyze_user@local"
         )

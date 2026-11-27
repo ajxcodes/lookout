@@ -290,6 +290,9 @@ class Go2RtcConfig(BaseModel):
     )
 
 
+_LEGACY_WYZE_AUTH_FIELDS = frozenset({"totp_key", "key_id", "api_key", "api_id"})
+
+
 class WyzeConfig(BaseModel):
     """Configuration for Wyze cloud and bridge adapter."""
 
@@ -297,9 +300,6 @@ class WyzeConfig(BaseModel):
 
     email: str | None = Field(default=None, description="Wyze account email")
     password: str | None = Field(default=None, description="Wyze account password")
-    key_id: str | None = Field(default=None, description="Wyze API Key ID")
-    api_key: str | None = Field(default=None, description="Wyze API Key")
-    totp_key: str | None = Field(default=None, description="Wyze TOTP secret key for automatic 2FA")
     auth_token: str | None = Field(default=None, description="Wyze API access token")
     refresh_token: str | None = Field(default=None, description="Wyze API refresh token")
     enabled: bool = Field(default=True, description="Whether Wyze bridge integration is active")
@@ -343,6 +343,13 @@ class WyzeConfig(BaseModel):
     wcsa_timeout_seconds: float = Field(
         default=30.0, gt=0.0, description="Timeout for wcsa/device-management REST calls"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_auth_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k not in _LEGACY_WYZE_AUTH_FIELDS}
+        return data
 
 
 class RingConfig(BaseModel):
@@ -854,7 +861,6 @@ SENSITIVE_KEYS: set[str] = {
     "auth_token",
     "refresh_token",
     "api_key",
-    "totp_key",
     "key_id",
     "client_secret",
     "home_assistant_access_token",

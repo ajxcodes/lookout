@@ -12,6 +12,7 @@ All three route families delegate here.  The service owns:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import logging
@@ -31,7 +32,6 @@ _SENSITIVE_KEYS = {
     "auth_token",
     "refresh_token",
     "password",
-    "totp_key",
     "api_key",
     "key_id",
     "client_secret",
@@ -71,7 +71,7 @@ def _provider_email(config: Any | None, provider_id: str) -> str | None:
     return getattr(section, "email", None) if section is not None else None
 
 
-def login(
+async def login(
     provider_id: str,
     credentials: dict[str, Any],
     config: Any | None,
@@ -81,10 +81,15 @@ def login(
     force: bool = False,
     sidecar_dir: str | Path = DEFAULT_SIDECAR_DIR,
     environ: Mapping[str, str] | None = None,
+    request_state: Any | None = None,
+    config_path: str | Path | None = None,
+    sync_env: bool = True,
 ) -> AuthResult:
     """Start a login, or skip when valid credentials already exist.
 
-    ``force=True`` (the Rotate action) always invokes the issuer.
+    ``force=True`` (the Rotate action) always invokes the issuer.  A no-2FA
+    account returns ``authenticated`` directly, so the tokens are applied and
+    health-verified here instead of waiting for ``verify``.
     """
     pid = str(provider_id).lower()
     if not force:
@@ -99,9 +104,20 @@ def login(
             )
 
     active_driver = driver or _resolve_driver(pid, registry)
-    result = active_driver.authenticate(credentials)
+    result = await asyncio.to_thread(active_driver.authenticate, credentials)
     if not isinstance(result, AuthResult):
         result = AuthResult.model_validate(result)
+    if result.status == "authenticated":
+        return await _finalize_authenticated(
+            pid,
+            result,
+            config,
+            request_state=request_state,
+            sidecar_dir=sidecar_dir,
+            config_path=config_path,
+            environ=environ,
+            sync_env=sync_env,
+        )
     return result
 
 
@@ -246,28 +262,60 @@ async def _verify_healthy(provider_id: str, request_state: Any | None) -> bool:
     return True
 
 
-async def verify(
+async def _reset_native_client(adapter: Any | None) -> None:
+    """Drop a cached native client so the next probe uses the fresh token."""
+    if adapter is None:
+        return
+    reset = getattr(adapter, "reset_client", None)
+    if callable(reset):
+        try:
+            result = reset()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # noqa: BLE001 - reset must not block the login
+            logger.warning("Native client reset failed: %s", exc)
+        return
+    if hasattr(adapter, "_client_instance"):
+        with contextlib.suppress(Exception):
+            adapter._client_instance = None
+
+
+def _resolve_native_adapter(request_state: Any | None, provider_id: str) -> Any | None:
+    if request_state is None:
+        return None
+    return getattr(request_state, f"{provider_id}_native", None)
+
+
+async def _finalize_authenticated(
     provider_id: str,
-    session_id: str,
-    code: str,
-    config: Any,
+    result: AuthResult,
+    config: Any | None,
     *,
-    driver: Any | None = None,
-    registry: Any | None = None,
-    request_state: Any | None = None,
-    sidecar_dir: str | Path = DEFAULT_SIDECAR_DIR,
-    config_path: str | Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    sync_env: bool = True,
+    request_state: Any | None,
+    sidecar_dir: str | Path,
+    config_path: str | Path | None,
+    environ: Mapping[str, str] | None,
+    sync_env: bool,
 ) -> AuthResult:
-    """Complete issuance, apply credentials and verify before reporting success."""
+    """Apply a fresh token, reset the native client, and health-verify it.
+
+    The reset happens *after* ``apply_credentials`` so ``test_connection`` never
+    exercises the cached client that still holds the previous token.  Any
+    failure restores the config snapshot and rolls the on-disk config back.
+    """
     pid = str(provider_id).lower()
-    active_driver = driver or _resolve_driver(pid, registry)
-    result = active_driver.verify_2fa(session_id, code)
-    if not isinstance(result, AuthResult):
-        result = AuthResult.model_validate(result)
-    if result.status != "authenticated":
-        return result
+    if config is None:
+        if request_state is None:
+            return AuthResult(
+                status="error",
+                provider=pid,
+                message="Authentication succeeded but no configuration is available",
+            )
+        from lookout.config.schema import LookoutConfig
+
+        config = LookoutConfig()
+        with contextlib.suppress(Exception):
+            request_state.config = config
 
     section = getattr(config, pid, None)
     snapshot = section.model_dump() if section is not None else None
@@ -285,6 +333,7 @@ async def verify(
             environ=environ,
             sync_env=sync_env,
         )
+        await _reset_native_client(_resolve_native_adapter(request_state, pid))
         if not await _verify_healthy(pid, request_state):
             raise RuntimeError("post-authentication health verification failed")
     except Exception as exc:  # noqa: BLE001 - always roll back cleanly
@@ -299,6 +348,7 @@ async def verify(
             # Re-sync the sidecar from the restored config so a failed rotation
             # cannot strand new tokens there while config.yaml holds the old ones.
             _resync_sidecar_env(config, pid, sidecar_dir)
+        await _reset_native_client(_resolve_native_adapter(request_state, pid))
         return AuthResult(
             status="error",
             provider=pid,
@@ -309,6 +359,40 @@ async def verify(
     if poller is not None and hasattr(poller, "resume"):
         poller.resume(pid)
     return result
+
+
+async def verify(
+    provider_id: str,
+    session_id: str,
+    code: str,
+    config: Any,
+    *,
+    driver: Any | None = None,
+    registry: Any | None = None,
+    request_state: Any | None = None,
+    sidecar_dir: str | Path = DEFAULT_SIDECAR_DIR,
+    config_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    sync_env: bool = True,
+) -> AuthResult:
+    """Complete issuance, apply credentials and verify before reporting success."""
+    pid = str(provider_id).lower()
+    active_driver = driver or _resolve_driver(pid, registry)
+    result = await asyncio.to_thread(active_driver.verify_2fa, session_id, code)
+    if not isinstance(result, AuthResult):
+        result = AuthResult.model_validate(result)
+    if result.status != "authenticated":
+        return result
+    return await _finalize_authenticated(
+        pid,
+        result,
+        config,
+        request_state=request_state,
+        sidecar_dir=sidecar_dir,
+        config_path=config_path,
+        environ=environ,
+        sync_env=sync_env,
+    )
 
 
 def logout(

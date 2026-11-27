@@ -30,18 +30,6 @@
       "label": "Wyze Password",
       "type": "password",
       "required": true
-    },
-    {
-      "key": "api_key",
-      "label": "API Key (Optional)",
-      "type": "text",
-      "required": false
-    },
-    {
-      "key": "api_id",
-      "label": "API ID (Optional)",
-      "type": "text",
-      "required": false
     }
   ],
   "docs_url": "https://github.com/mrlt8/docker-wyze-bridge"

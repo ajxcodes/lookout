@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from lookout.providers import auth_service
+from lookout.providers.base import AuthResult
 
 if TYPE_CHECKING:
     from lookout.providers.wyze.driver import WyzeProviderDriver
@@ -22,6 +24,12 @@ class VerifyRequest(BaseModel):
 
     session_id: str = Field(..., description="Active 2FA session ID")
     code: str = Field(..., description="Verification code")
+
+
+class ResendRequest(BaseModel):
+    """Payload for re-sending a 2FA code (no code required)."""
+
+    session_id: str = Field(..., description="Active 2FA session ID")
 
 
 def _persist_path(request: Request) -> Path | None:
@@ -50,13 +58,15 @@ def create_wyze_router(driver: WyzeProviderDriver) -> APIRouter:
 
     @router.post("/login")
     async def login(credentials: dict[str, Any], request: Request) -> dict[str, Any]:
-        result = auth_service.login(
+        result = await auth_service.login(
             "wyze",
             credentials,
             getattr(request.app.state, "config", None),
             driver=driver,
             force=bool(credentials.get("force", False)),
             sidecar_dir=_sidecar_dir(request),
+            request_state=request.app.state,
+            config_path=_persist_path(request),
         )
         return auth_service.sanitize_auth_result(result)
 
@@ -74,16 +84,25 @@ def create_wyze_router(driver: WyzeProviderDriver) -> APIRouter:
         )
         return auth_service.sanitize_auth_result(result)
 
+    @router.post("/resend")
+    async def resend(payload: ResendRequest, request: Request) -> dict[str, Any]:
+        result = await asyncio.to_thread(driver.resend_2fa, payload.session_id)
+        if not isinstance(result, AuthResult):
+            result = AuthResult.model_validate(result)
+        return auth_service.sanitize_auth_result(result)
+
     @router.post("/rotate")
     async def rotate(payload: dict[str, Any], request: Request) -> dict[str, Any]:
         config = getattr(request.app.state, "config", None)
-        result = auth_service.login(
+        result = await auth_service.login(
             "wyze",
             payload,
             config,
             driver=driver,
             force=True,
             sidecar_dir=_sidecar_dir(request),
+            request_state=request.app.state,
+            config_path=_persist_path(request),
         )
         if result.status == "2fa_required" and payload.get("code"):
             result = await auth_service.verify(

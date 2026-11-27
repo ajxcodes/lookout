@@ -1,5 +1,6 @@
 """Playwright E2E browser tests for Standalone Lookout deployment."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -159,14 +160,40 @@ def test_standalone_resident_face_enrollment_modal(
 def test_standalone_sidecar_2fa_modal_interaction(
     page: Page, unconfigured_server: dict[str, Any]
 ) -> None:
-    """TR-17: Verify the real-auth credential flow stages Wyze credentials and opens the 2FA modal.
+    """TR-17: Verify the real-auth credential flow opens the one-time-code 2FA modal.
 
-    The wizard now collects real provider credentials in ``#modal-credentials`` before
-    issuing tokens. ``begin_login`` only stages the (fake) credentials locally and
-    returns ``2fa_required``; no network call or token issuance happens until the
-    user submits a 2FA code, which this test does not do.
+    The wizard collects real provider credentials in ``#modal-credentials`` before
+    issuing tokens, then branches on the backend's response. Login is intercepted at
+    the browser layer so the spec stays hermetic: fake credentials must never reach
+    ``auth-prod.api.wyze.com``, where they would now produce a 400 instead of the old
+    fabricated ``2fa_required`` challenge.
     """
     base_url = unconfigured_server["standalone_base_url"]
+
+    # Mutable so the same handler can serve the success and failure phases.
+    login_response: dict[str, Any] = {
+        "status_code": 200,
+        "payload": {
+            "status": "2fa_required",
+            "provider": "wyze",
+            "session_id": "e2e-session",
+            "method": "email",
+            "message": "Wyze emailed a code. Enter it below.",
+            "email": None,
+            "phone": None,
+            "details": None,
+        },
+    }
+
+    def fulfill_login(route: Any) -> None:
+        route.fulfill(
+            status=login_response["status_code"],
+            content_type="application/json",
+            body=json.dumps(login_response["payload"]),
+        )
+
+    page.route("**/api/auth/wyze/login", fulfill_login)
+
     page.goto(f"{base_url}/setup")
 
     expect(page.locator("#step-1")).to_be_visible()
@@ -180,18 +207,42 @@ def test_standalone_sidecar_2fa_modal_interaction(
     expect(page.locator("#modal-credentials")).to_be_visible(timeout=5000)
     page.locator("#cred-email").fill("wyze-e2e@example.com")
     page.locator("#cred-password").fill("fake-password")
-    page.locator("#cred-api-id").fill("fake-api-id")
-    page.locator("#cred-api-key").fill("fake-api-key")
     page.locator("#btn-cred-submit").click()
 
-    # Staging credentials returns 2fa_required, which opens the 2FA modal.
+    # A 2fa_required response opens the one-time-code modal.
     expect(page.locator("#modal-2fa")).to_be_visible(timeout=5000)
     expect(page.locator("#btn-verify-2fa")).to_be_visible(timeout=5000)
+    expect(page.locator("#modal-2fa-desc")).to_contain_text("emailed a code")
     assert page.locator("#modal-2fa").is_visible() and page.locator("#btn-verify-2fa").is_visible()
+
+    # #109 invariant: the modal asks only for a one-time code. It must not collect a
+    # TOTP secret or API key id/secret.
+    expect(page.locator("#code-2fa")).to_be_visible()
+    expect(page.locator("#modal-2fa #cred-totp")).to_have_count(0)
+    expect(page.locator("#modal-2fa #cred-api-key")).to_have_count(0)
+    expect(page.locator("#modal-2fa #cred-api-id")).to_have_count(0)
+    expect(page.locator("#modal-2fa input[type='password']")).to_have_count(0)
 
     # Close the modal so no pending 2FA state leaks to other tests.
     page.locator("#modal-2fa-close").click()
     expect(page.locator("#modal-2fa")).to_be_hidden(timeout=5000)
+
+    # A failed login surfaces the provider message instead of fabricating a challenge.
+    login_response["status_code"] = 400
+    login_response["payload"] = {
+        "status": "error",
+        "provider": "wyze",
+        "message": "400 Client Error: Bad Request for url: https://auth-prod.api.wyze.com/api/user/login",
+    }
+
+    page.locator("#btn-auth-wyze").click()
+    expect(page.locator("#modal-credentials")).to_be_visible(timeout=5000)
+    page.locator("#cred-email").fill("wyze-e2e@example.com")
+    page.locator("#cred-password").fill("fake-password")
+    page.locator("#btn-cred-submit").click()
+
+    expect(page.locator("#cred-status")).to_contain_text("Bad Request", timeout=5000)
+    expect(page.locator("#modal-2fa")).to_be_hidden()
 
 
 def test_standalone_ptz_controls_gated_on_ptz_enabled(page: Page, standalone_base_url: str) -> None:

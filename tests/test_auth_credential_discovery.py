@@ -26,13 +26,13 @@ def _write_sidecar(tmp_path: Path, envelope: str = _VALID_ENVELOPE) -> Path:
     return sidecar_dir
 
 
-def test_sidecar_env_token_triggers_pre_authenticated_skip(tmp_path: Path) -> None:
+async def test_sidecar_env_token_triggers_pre_authenticated_skip(tmp_path: Path) -> None:
     """TR-7 (AC3): sidecar token yields pre_authenticated and skips the issuer."""
     sidecar_dir = _write_sidecar(tmp_path)
     issuer = FakeRingIssuer()
     driver = RingProviderDriver(token_issuer=issuer)
 
-    result = auth_service.login(
+    result = await auth_service.login(
         "ring",
         {"email": "ring@example.com", "password": "pw"},
         LookoutConfig(),

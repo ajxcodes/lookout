@@ -1,5 +1,6 @@
 """REST API endpoints for sidecar provider authentication, 2FA flows, and status."""
 
+import asyncio
 import logging
 import socket
 from pathlib import Path
@@ -13,6 +14,7 @@ from lookout.adapters.sidecar_discovery import SidecarDiscoveryEngine
 from lookout.adapters.sidecar_registry import SidecarProviderRegistry
 from lookout.adapters.sidecar_sync import SidecarConfigSynchronizer
 from lookout.config.schema import mask_config_dict
+from lookout.providers.base import AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,10 @@ class AdoptRequest(BaseModel):
     stream_url: str = Field(..., description="Camera stream URL")
     camera_id: str = Field(..., description="Camera ID")
     camera_name: str = Field(..., description="Display name for camera")
+
+
+class ResendRequest(BaseModel):
+    session_id: str = Field(..., description="Active 2FA session ID")
 
 
 class TestConnectionRequest(BaseModel):
@@ -102,13 +108,15 @@ async def initiate_provider_login(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    result = auth_service.login(
+    result = await auth_service.login(
         provider,
         credentials,
         getattr(request.app.state, "config", None),
         driver=adapter,
         force=bool(credentials.get("force", False)),
         sidecar_dir=_sidecar_dir(request),
+        request_state=request.app.state,
+        config_path=_persist_path(request),
     )
     return auth_service.sanitize_auth_result(result)
 
@@ -138,6 +146,33 @@ async def verify_provider_2fa(
     return auth_service.sanitize_auth_result(result)
 
 
+@router.post("/{provider}/resend")
+async def resend_provider_code(
+    provider: str, payload: ResendRequest, request: Request
+) -> dict[str, Any]:
+    """Re-send an email/SMS code without reopening the credential modal."""
+    from lookout.providers import auth_service
+
+    try:
+        adapter = registry.get_provider(provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    resend = getattr(adapter, "resend_2fa", None)
+    if not callable(resend):
+        return auth_service.sanitize_auth_result(
+            AuthResult(
+                status="error",
+                provider=provider,
+                message="Resending a code is not supported for this provider",
+            )
+        )
+    result = await asyncio.to_thread(resend, payload.session_id)
+    if not isinstance(result, AuthResult):
+        result = AuthResult.model_validate(result)
+    return auth_service.sanitize_auth_result(result)
+
+
 @router.post("/{provider}/rotate")
 async def rotate_provider_credentials(
     provider: str, payload: dict[str, Any], request: Request
@@ -151,13 +186,15 @@ async def rotate_provider_credentials(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     config = getattr(request.app.state, "config", None)
-    result = auth_service.login(
+    result = await auth_service.login(
         provider,
         payload,
         config,
         driver=adapter,
         force=True,
         sidecar_dir=_sidecar_dir(request),
+        request_state=request.app.state,
+        config_path=_persist_path(request),
     )
     if result.status == "2fa_required" and payload.get("code"):
         result = await auth_service.verify(

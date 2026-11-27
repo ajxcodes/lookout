@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.app import create_app
 from lookout.config.schema import LookoutConfig
+from lookout.providers.wyze.authenticator import WyzeChallenge, WyzeLoginStart
 
 RING_ISSUED_TOKEN = (
     "eyJhbGciOiJkaXRjIiwidHlwZSI6IkpXVCJ9.eyJydCI6InJlYWwtcmluZy1ydC0xMjM0NTY3ODkwIn0"
@@ -83,16 +84,74 @@ class FakeRingIssuer:
         self.disposed.append(session_id)
 
 
+_UNSET = object()
+_DEFAULT_WYZE_CHALLENGE = WyzeChallenge(
+    method="email",
+    wire_mfa_type="Email",
+    verification_id="fake-vid",
+    destination="u***@example.com",
+)
+
+
+class FakeAuthTransport:
+    """Queue-backed stand-in for the ``AuthServiceClient`` transport."""
+
+    def __init__(self, responses: list[Any] | None = None) -> None:
+        self.responses = list(responses or [])
+        self.calls: list[dict[str, Any]] = []
+
+    def api_call(
+        self,
+        endpoint: str,
+        *,
+        http_verb: str = "POST",
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        request_specific_headers: dict[str, Any] | None = None,
+        nonce: Any = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "endpoint": endpoint,
+                "params": dict(params or {}),
+                "json": dict(json or {}),
+                "headers": dict(request_specific_headers or {}),
+            }
+        )
+        if not self.responses:
+            raise RuntimeError("FakeAuthTransport ran out of responses")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 class FakeWyzeIssuer:
     def __init__(
         self,
         access: str = WYZE_ISSUED_ACCESS,
         refresh: str = WYZE_ISSUED_REFRESH,
+        *,
+        tokens: dict[str, str] | None | object = _UNSET,
+        challenge: WyzeChallenge | None | object = _UNSET,
     ) -> None:
         self.access = access
         self.refresh = refresh
+        if tokens is _UNSET and challenge is _UNSET:
+            self.tokens = None
+            self.challenge: WyzeChallenge | None = _DEFAULT_WYZE_CHALLENGE
+        elif tokens is _UNSET:
+            self.tokens = None
+            self.challenge = challenge  # type: ignore[assignment]
+        elif challenge is _UNSET:
+            self.tokens = tokens  # type: ignore[assignment]
+            self.challenge = None
+        else:
+            self.tokens = tokens  # type: ignore[assignment]
+            self.challenge = challenge  # type: ignore[assignment]
         self.begin_calls = 0
         self.complete_calls = 0
+        self.resend_calls = 0
         self.disposed: list[str] = []
         self.last_email: str | None = None
 
@@ -102,15 +161,28 @@ class FakeWyzeIssuer:
         password: str,
         key_id: str | None = None,
         api_key: str | None = None,
-        totp_key: str | None = None,
-    ) -> str:
+    ) -> WyzeLoginStart:
         self.begin_calls += 1
         self.last_email = email
-        return "fake-wyze-issuer-session"
+        if self.tokens is not None:
+            return WyzeLoginStart(
+                issuer_session_id=None,
+                tokens=dict(self.tokens),
+                challenge=None,
+            )
+        return WyzeLoginStart(
+            issuer_session_id="fake-wyze-issuer-session",
+            tokens=None,
+            challenge=self.challenge,
+        )
 
     def complete(self, session_id: str, code: str) -> dict[str, str]:
         self.complete_calls += 1
         return {"access_token": self.access, "refresh_token": self.refresh}
+
+    def resend(self, session_id: str) -> str:
+        self.resend_calls += 1
+        return "A new code was sent."
 
     def dispose(self, session_id: str) -> None:
         self.disposed.append(session_id)

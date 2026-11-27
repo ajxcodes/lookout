@@ -45,11 +45,11 @@ def test_adopt_pre_existing_stream() -> None:
     assert any(c.id == "adopted-wyze-1" for c in config.cameras)
 
 
-def test_auto_discovery_wyze_api_key_env() -> None:
-    """Verify WYZE_API_KEY triggers pre_authenticated status for Wyze."""
+def test_auto_discovery_wyze_access_token_env() -> None:
+    """TR-26 (AC4): WYZE_ACCESS_TOKEN (not WYZE_API_KEY) marks Wyze pre-authenticated."""
     engine = SidecarDiscoveryEngine()
-    config = LookoutConfig(system_name="Discovery API Key Test")
+    config = LookoutConfig(system_name="Discovery Access Token Test")
 
-    with patch.dict(os.environ, {"WYZE_API_KEY": "env-wyze-api-key"}):
+    with patch.dict(os.environ, {"WYZE_ACCESS_TOKEN": "env-wyze-access-token"}):
         status = engine.detect_pre_existing_sidecars(config)
         assert status["wyze"]["status"] == "pre_authenticated"

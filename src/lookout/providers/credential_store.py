@@ -25,9 +25,6 @@ WYZE_SECRET_FIELDS = (
     "auth_token",
     "refresh_token",
     "password",
-    "key_id",
-    "api_key",
-    "totp_key",
 )
 
 _SIDECAR_NAMES = {"ring": "ring-mqtt.env", "wyze": "wyze-bridge.env"}
@@ -42,6 +39,10 @@ _REDACT_KEYS = {
         "WYZE_API_KEY",
         "API_ID",
         "WYZE_API_ID",
+        "KEY_ID",
+        "WYZE_KEY_ID",
+        "TOTP_KEY",
+        "WYZE_TOTP_KEY",
     },
 }
 
