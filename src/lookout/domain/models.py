@@ -215,3 +215,40 @@ class PanScanWriteResult:
     supported: bool
     enabled: bool | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+# The six boolean push-notification capabilities readable and writable over the
+# Wyze device-management cloud lane. ``PushNotificationAction`` is deliberately
+# excluded: it is an action/enum in the APK, not a boolean toggle.
+PUSH_SETTING_KEYS: tuple[str, ...] = (
+    "MotionPush",
+    "SoundPush",
+    "SmartDetectionPush",
+    "LowBatteryPush",
+    "AiPush",
+    "PushSwitch",
+)
+
+
+@dataclass(frozen=True)
+class PushSettingsState:
+    """Outcome of a Wyze cloud push-settings read.
+
+    ``settings`` holds the confirmed boolean per capability; capabilities the
+    device does not advertise (or whose value could not be read unambiguously)
+    are listed in ``unsupported`` and omitted from ``settings``.
+    """
+
+    supported: bool
+    settings: dict[str, bool] = field(default_factory=dict)
+    unsupported: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PushSettingsWriteResult:
+    """Outcome of a single push-setting write, including the raw response."""
+
+    supported: bool
+    key: str | None = None
+    enabled: bool | None = None
+    raw: dict[str, Any] = field(default_factory=dict)

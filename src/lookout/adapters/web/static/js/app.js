@@ -152,6 +152,10 @@ class LookoutApp {
     this.csPanScanGroup = document.getElementById("cs-pan-scan-group");
     this.csCamPanScan = document.getElementById("cs-cam-pan-scan");
     this.csPanScanStatus = document.getElementById("cs-pan-scan-status");
+    this.csWyzePushGroup = document.getElementById("cs-wyze-push-group");
+    this.csWyzePushRows = Array.from(
+      document.querySelectorAll("#cs-wyze-push-group [data-push-key]")
+    );
     this.csAuthGroup = document.getElementById("cs-auth-group");
     this.csReauthBtn = document.getElementById("cs-reauth-btn");
     this.csRemoveBtn = document.getElementById("cs-remove-btn");
@@ -1590,9 +1594,17 @@ class LookoutApp {
       if (this.csPanScanStatus) this.csPanScanStatus.textContent = "";
     }
     this._panScanBaseline = null;
+    if (this.csWyzePushGroup) {
+      this.csWyzePushGroup.style.display = "none";
+      this.csWyzePushRows.forEach((row) => {
+        row.style.display = "none";
+      });
+    }
+    this._pushSettingsBaseline = null;
     if (cam && (cam.native_provider === "wyze" || cam.provider_badge === "wyze")) {
       this.loadMotionTagSupport(cam);
       this.loadPanScanSupport(cam);
+      this.loadPushSettingsSupport(cam);
     }
     if (this.csAuthGroup) {
       this.csAuthGroup.style.display = cam && cam.auth_required ? "" : "none";
@@ -1656,6 +1668,40 @@ class LookoutApp {
       }
     } catch (err) {
       console.warn("Pan Scan probe failed:", err);
+    }
+  }
+
+  async loadPushSettingsSupport(cam) {
+    if (!this.csWyzePushGroup) return;
+    this.csWyzePushGroup.style.display = "none";
+    this.csWyzePushRows.forEach((row) => {
+      row.style.display = "none";
+    });
+    this._pushSettingsBaseline = null;
+    if (!cam || !cam.id) return;
+    try {
+      const res = await fetch(
+        resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/wyze_push_settings`)
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !data.supported) return;
+      const settings = data.settings || {};
+      const unsupported = new Set(data.unsupported || []);
+      const baseline = {};
+      this.csWyzePushRows.forEach((row) => {
+        const key = row.getAttribute("data-push-key");
+        if (!key || unsupported.has(key)) return;
+        if (!Object.prototype.hasOwnProperty.call(settings, key)) return;
+        row.style.display = "flex";
+        const input = row.querySelector("input[type=checkbox]");
+        if (input) input.checked = settings[key] === true;
+        baseline[key] = settings[key] === true;
+      });
+      this.csWyzePushGroup.style.display = "";
+      this._pushSettingsBaseline = baseline;
+    } catch (err) {
+      console.warn("Wyze push settings probe failed:", err);
     }
   }
 
@@ -1731,6 +1777,34 @@ class LookoutApp {
       } catch (err) {
         console.warn("Pan Scan save failed:", err);
       }
+    }
+    if (this.csWyzePushGroup && this.csWyzePushGroup.style.display !== "none") {
+      const baseline = this._pushSettingsBaseline || {};
+      for (const row of this.csWyzePushRows) {
+        const key = row.getAttribute("data-push-key");
+        const input = row.querySelector("input[type=checkbox]");
+        if (!key || !input) continue;
+        if (!Object.prototype.hasOwnProperty.call(baseline, key)) continue;
+        if (input.checked === baseline[key]) continue;
+        try {
+          const pushRes = await fetch(
+            resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/wyze_push_settings`),
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key, enabled: input.checked }),
+            }
+          );
+          if (pushRes.ok) {
+            const pushData = await pushRes.json();
+            cam.wyze_push_settings = (pushData && pushData.settings) || {};
+            baseline[key] = input.checked;
+          }
+        } catch (err) {
+          console.warn("Wyze push settings save failed:", err);
+        }
+      }
+      this._pushSettingsBaseline = baseline;
     }
     this.closeCameraSettings();
   }

@@ -17,6 +17,8 @@ if TYPE_CHECKING:
         MotionTagWriteResult,
         PanScanState,
         PanScanWriteResult,
+        PushSettingsState,
+        PushSettingsWriteResult,
         StorageStatus,
         ThreatLevel,
     )
@@ -260,6 +262,21 @@ class PanScanPort(Protocol):
 
     async def set_pan_scan(self, camera_id: str, enabled: bool) -> PanScanWriteResult:
         """Write the Pan Scan toggle; returns an explicit unsupported result when absent."""
+        ...
+
+
+@runtime_checkable
+class WyzePushSettingsPort(Protocol):
+    """Wyze cloud push-notification settings over the device-management lane."""
+
+    async def get_push_settings(self, camera_id: str) -> PushSettingsState:
+        """Read every advertised push setting; unsupported keys are reported explicitly."""
+        ...
+
+    async def set_push_setting(
+        self, camera_id: str, key: str, enabled: bool
+    ) -> PushSettingsWriteResult:
+        """Write one push setting; an unobserved/absent capability degrades to unsupported."""
         ...
 
 

@@ -63,6 +63,7 @@ from lookout.adapters.wyze_iot_cloud import WyzeIotCloudAdapter, WyzeMotionTagAd
 from lookout.adapters.wyze_motion_tag_router import WyzeMotionTagRouter
 from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
 from lookout.adapters.wyze_pan_scan import WyzePanScanAdapter
+from lookout.adapters.wyze_push_settings import WyzePushSettingsAdapter
 from lookout.config.deep_links import get_deep_link_base
 from lookout.config.loader import load_config
 from lookout.config.schema import LookoutConfig, RingConfig, StorageConfig, WyzeConfig
@@ -797,6 +798,22 @@ def create_app(
     except Exception as exc:  # noqa: BLE001 - feature degrades to unsupported
         logger.warning("Wyze pan-scan adapter unavailable: %s", exc)
 
+    # Push-notification settings over the same cloud lane. Like Pan Scan it owns
+    # a dedicated cloud instance: the capability map is replaced on each probe,
+    # so a shared instance could pin sibling push capabilities as known-absent.
+    push_settings_adapter: Any = None
+    try:
+        push_settings_adapter = WyzePushSettingsAdapter(
+            iot_cloud=WyzeIotCloudAdapter(
+                config=wyze_native_config,
+                native_adapter=app.state.wyze_native,
+            ),
+            cameras=lambda: active_config.cameras if active_config is not None else [],
+            native_adapter=app.state.wyze_native,
+        )
+    except Exception as exc:  # noqa: BLE001 - feature degrades to unsupported
+        logger.warning("Wyze push-settings adapter unavailable: %s", exc)
+
     # Pre-populate embedded go2rtc streams for all enabled cameras (no process start).
     if active_config is not None and native_manager is not None:
         wyze_native = app.state.wyze_native
@@ -860,6 +877,7 @@ def create_app(
         ),
         motion_tag_adapter=motion_tag_adapter,
         pan_scan_adapter=pan_scan_adapter,
+        push_settings_adapter=push_settings_adapter,
         config=active_config,
         config_path=resolved_config_path,
     )

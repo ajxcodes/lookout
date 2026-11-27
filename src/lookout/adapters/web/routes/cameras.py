@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from lookout.adapters.web.helpers import build_camera_card_data, infer_camera_icon
+from lookout.domain.models import PUSH_SETTING_KEYS
 from lookout.providers import config_io
 
 atomic_write_config = config_io.atomic_write_config
@@ -467,6 +468,11 @@ class PanScanRequest(BaseModel):
     enabled: bool
 
 
+class PushSettingsRequest(BaseModel):
+    key: str
+    enabled: bool
+
+
 def _require_api_key(request: Request) -> None:
     auth = request.headers.get("authorization") or request.headers.get("x-api-key")
     token = None
@@ -865,6 +871,103 @@ async def camera_pan_scan_set(
         "status": "ok",
         "supported": True,
         "enabled": getattr(result, "enabled", None),
+        "result": getattr(result, "raw", {}),
+    }
+
+
+@router.get("/cameras/{camera_id}/wyze_push_settings")
+@router.get("/v1/cameras/{camera_id}/wyze_push_settings")
+async def camera_wyze_push_settings(camera_id: str, request: Request) -> dict[str, Any]:
+    """Read the Wyze cloud push-notification toggles for a camera.
+
+    Settings the device does not advertise (or whose value cannot be read
+    unambiguously) are reported in ``unsupported`` and omitted from ``settings``
+    so the UI can keep those rows hidden.
+    """
+    _require_optional_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    if service is None or not hasattr(service, "get_push_settings"):
+        return {
+            "supported": False,
+            "settings": {},
+            "unsupported": list(PUSH_SETTING_KEYS),
+        }
+    try:
+        state = await service.get_push_settings(camera_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced as an HTTP error below
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            raise HTTPException(status_code=int(resp.status_code), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    return {
+        "supported": bool(getattr(state, "supported", False)),
+        "settings": dict(getattr(state, "settings", None) or {}),
+        "unsupported": list(getattr(state, "unsupported", None) or []),
+    }
+
+
+@router.post("/cameras/{camera_id}/wyze_push_settings")
+@router.post("/v1/cameras/{camera_id}/wyze_push_settings")
+async def camera_wyze_push_settings_set(
+    camera_id: str, payload: PushSettingsRequest, request: Request
+) -> dict[str, Any]:
+    """Write one Wyze cloud push setting and persist the confirmed value.
+
+    Unknown keys return ``400``; unsupported capabilities return ``501`` and
+    never mutate the stored config.
+    """
+    _require_optional_api_key(request)
+    config = request.app.state.config
+    if not _camera_exists(config, camera_id):
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found") from None
+    service: Any = getattr(request.app.state, "ptz_service", None)
+    if service is None or not hasattr(service, "set_push_setting"):
+        raise HTTPException(
+            status_code=501,
+            detail=f"Wyze push settings not supported for camera '{camera_id}'",
+        ) from None
+    try:
+        result = await service.set_push_setting(camera_id, payload.key, bool(payload.enabled))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced as an HTTP error below
+        status = getattr(exc, "status_code", None)
+        if status is not None:
+            raise HTTPException(status_code=int(status), detail=str(exc)) from None
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) is not None:
+            raise HTTPException(status_code=int(resp.status_code), detail=str(exc)) from None
+        raise HTTPException(status_code=500, detail=str(exc)) from None
+    if not getattr(result, "supported", False):
+        raise HTTPException(
+            status_code=501,
+            detail=f"Wyze push setting '{payload.key}' not supported for camera '{camera_id}'",
+        ) from None
+
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path and config is not None:
+        try:
+            from lookout.providers.config_io import atomic_write_config as _atomic_write_config
+
+            _atomic_write_config(config, config_path)
+        except Exception:  # noqa: BLE001 - cloud write already succeeded; best effort
+            pass
+
+    camera = _get_camera(config, camera_id)
+    return {
+        "status": "ok",
+        "supported": True,
+        "key": payload.key,
+        "enabled": getattr(result, "enabled", None),
+        "settings": dict(getattr(camera, "wyze_push_settings", None) or {}),
         "result": getattr(result, "raw", {}),
     }
 

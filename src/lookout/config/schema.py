@@ -239,6 +239,13 @@ class CameraConfig(BaseModel):
         default=None,
         description="Tri-state Pan Scan toggle for Wyze pan-class devices (None = unknown/hidden)",
     )
+    wyze_push_settings: dict[str, bool] | None = Field(
+        default=None,
+        description=(
+            "Last confirmed Wyze cloud push toggles keyed by capability "
+            "(None = never synced/hidden)"
+        ),
+    )
 
     @model_validator(mode="after")
     def _sync_notification_flags(self) -> Self:

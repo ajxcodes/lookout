@@ -250,3 +250,94 @@ def test_protocol_400_surfaces_typed_502_error():
     assert excinfo.value.status_code == 502
     assert spy.calls == 0
     assert len(client.calls) == 1
+
+
+# ----------------------------------------------------------------------
+# #85: per-capability read envelope/parser and truthful run_action
+# ----------------------------------------------------------------------
+def test_get_iot_prop_capability_properties_emits_per_capability_entries():
+    cfg = WyzeConfig(auth_token="tok", device_management_base_url="https://example.test")
+    client = _MockClient([_Resp(200, {"code": 1, "data": {}})])
+    adapter = WyzeIotCloudAdapter(config=cfg, http_client=client, user_id="u1")
+
+    _run(
+        adapter.get_iot_prop(
+            "dev1",
+            "HL_CAM4",
+            user_id="u1",
+            capabilities=["MotionPush", "SoundPush"],
+            capability_properties={
+                "MotionPush": ["MotionPush::push"],
+                "SoundPush": ["SoundPush::push"],
+            },
+        )
+    )
+    body = json.loads(client.calls[0]["content"])
+    assert body["capabilities"][0]["properties"] == [
+        {"separator": "::", "prop": "MotionPush::push"}
+    ]
+    assert body["capabilities"][1]["properties"] == [{"separator": "::", "prop": "SoundPush::push"}]
+
+
+def test_get_iot_prop_parses_per_capability_properties_without_collision():
+    cfg = WyzeConfig(auth_token="tok", device_management_base_url="https://example.test")
+    client = _MockClient(
+        [
+            _Resp(
+                200,
+                {
+                    "code": 1,
+                    "data": {
+                        "capabilities": [
+                            {
+                                "name": "MotionPush",
+                                "iid": 11,
+                                "properties": [{"prop": "push", "value": True}],
+                            },
+                            {
+                                "name": "SoundPush",
+                                "iid": 12,
+                                "properties": [{"prop": "push", "value": False}],
+                            },
+                        ]
+                    },
+                },
+            )
+        ]
+    )
+    adapter = WyzeIotCloudAdapter(config=cfg, http_client=client, user_id="u1")
+    result = _run(
+        adapter.get_iot_prop(
+            "dev1",
+            "HL_CAM4",
+            user_id="u1",
+            capabilities=["MotionPush", "SoundPush"],
+            capability_properties={
+                "MotionPush": ["MotionPush::push"],
+                "SoundPush": ["SoundPush::push"],
+            },
+        )
+    )
+
+    assert result.properties_by_capability["MotionPush"]["push"] is True
+    assert result.properties_by_capability["SoundPush"]["push"] is False
+    assert result.properties["push"] is False
+
+
+def test_run_action_rejects_business_error_code_1001():
+    cfg = WyzeConfig(auth_token="tok", device_management_base_url="https://example.test")
+    client = _MockClient([_Resp(200, {"code": 1001, "msg": "Invalid property"})])
+    adapter = WyzeIotCloudAdapter(config=cfg, http_client=client, user_id="u1")
+
+    with pytest.raises(WyzeProtocolError) as excinfo:
+        _run(adapter.run_action("dev1", "HL_CAM4", user_id="u1"))
+    assert excinfo.value.status_code == 502
+
+
+def test_run_action_accepts_code_zero():
+    cfg = WyzeConfig(auth_token="tok", device_management_base_url="https://example.test")
+    client = _MockClient([_Resp(200, {"code": 0})])
+    adapter = WyzeIotCloudAdapter(config=cfg, http_client=client, user_id="u1")
+
+    result = _run(adapter.run_action("dev1", "HL_CAM4", user_id="u1"))
+    assert result["status"] == "ok"

@@ -7,14 +7,23 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 from lookout.domain.models import (
+    PUSH_SETTING_KEYS,
     MotionTagState,
     MotionTagWriteResult,
     PanScanState,
     PanScanWriteResult,
+    PushSettingsState,
+    PushSettingsWriteResult,
 )
 
 if TYPE_CHECKING:
-    from lookout.ports.egress import MotionTagPort, PanScanPort, PtzControlPort, VideoRecorderPort
+    from lookout.ports.egress import (
+        MotionTagPort,
+        PanScanPort,
+        PtzControlPort,
+        VideoRecorderPort,
+        WyzePushSettingsPort,
+    )
 
 
 def _http_exception(status_code: int, detail: str) -> Exception:
@@ -66,6 +75,9 @@ class PtzControlService:
         ) or kwargs.get("motion_tag")
         self.pan_scan_adapter: PanScanPort | None = kwargs.get("pan_scan_adapter") or kwargs.get(
             "pan_scan"
+        )
+        self.push_settings_adapter: WyzePushSettingsPort | None = kwargs.get(
+            "push_settings_adapter"
         )
 
     @staticmethod
@@ -433,4 +445,40 @@ class PtzControlService:
         camera.pan_scan_enabled = bool(enabled)
         self._persist_config()
         await self._audit("pan_scan_set", camera_id, {"enabled": bool(enabled)}, "ok")
+        return result
+
+    # Wyze cloud push-notification settings (device-management capabilities)
+    async def get_push_settings(self, camera_id: str) -> PushSettingsState:
+        self._camera(camera_id)
+        if self.push_settings_adapter is None:
+            return PushSettingsState(
+                supported=False,
+                settings={},
+                unsupported=list(PUSH_SETTING_KEYS),
+            )
+        return await self.push_settings_adapter.get_push_settings(camera_id)
+
+    async def set_push_setting(
+        self, camera_id: str, key: str, enabled: bool
+    ) -> PushSettingsWriteResult:
+        camera = self._camera(camera_id)
+        if key not in PUSH_SETTING_KEYS:
+            raise _http_exception(400, f"Unknown Wyze push setting '{key}'")
+        if self.push_settings_adapter is None:
+            raise _http_exception(501, f"Wyze push settings not supported for camera '{camera_id}'")
+        result = await self.push_settings_adapter.set_push_setting(camera_id, key, bool(enabled))
+        if not result.supported:
+            raise _http_exception(
+                501, f"Wyze push setting '{key}' not supported for camera '{camera_id}'"
+            )
+        current = dict(getattr(camera, "wyze_push_settings", None) or {})
+        current[key] = bool(enabled)
+        camera.wyze_push_settings = current
+        self._persist_config()
+        await self._audit(
+            "wyze_push_settings_set",
+            camera_id,
+            {"key": key, "enabled": bool(enabled)},
+            "ok",
+        )
         return result
