@@ -388,6 +388,13 @@ class WyzeConfig(BaseModel):
         default="signature2",
         description="Device-management request signing scheme",
     )
+    agora_ptz: bool = Field(
+        default=False,
+        description=(
+            "Use the camera-position::* Lane-B PTZ adapter (cloud set_property transport) "
+            "instead of the rotary_* cloud lane"
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -376,6 +376,15 @@ Add `WyzeAgoraPtzAdapter(PtzControlPort)` (new file, e.g. `adapters/wyze_agora_p
 
 **Limited-scope alternative — cloud IoT `set_property` PTZ (untested for PTZ, plausible).** `camera-position::*` writes may be reachable through the same device-management `run_action` REST (`§15.6`) as `camera-pnt::scan`; if the spike confirms, Lane B's adapter can target the cloud endpoint instead of the RTC channel — much cheaper, no Agora media needed. Validate on device before choosing.
 
+**Lookout implementation note (#71).** Lane B ships as `adapters/wyze_agora_ptz.py` (`WyzeAgoraPtzAdapter`), selected by `wyze.agora_ptz` (default `false`; Lane A stays the default and the fallback).
+
+- **Shipped transport is the cloud `run_action` variant:** `POST <devicemgmt>/device-management/api/action/run_action` with `capability: "camera-position"`, `iid: null` until a capability map is captured, and one property `{separator: "::", prop: "camera-position::<action>", value: <params>}` signed by `WyzeSigner` (`signature2`). The protocol-exact data-channel envelope (`{cmd: "run_action", tid, ts, action, params}`) also ships, behind an injected async sender (`DataChannelCameraPositionTransport`); `create_app` does not populate it.
+- `step(direction)` sends `move-position {direction: <lowercase up|down|left|right>, step: 1000}`; the step magnitude is **fixed** at 1000 and `amount`/`speed` are accepted but **not transmitted**. `stop()` sends `stop-move-position {}`. `move()` maps to absolute `set-position {horizontal, vertical}` in degrees (`pan*90`), matching Lane A's scale; zoom is unsupported.
+- `get-position` is sent with empty params and decoded from the response `params`/`data`/`result`/`response` container, then **normalised against ±90** and clamped to `[-1, 1]` (`source: "camera-position::get-position"`). No `last_command` fallback: a response without a position raises a 502-mapped error.
+- Presets are **numeric indices only**: `goto_preset("0".."N")` → `goto-waypoint {home: false, index: N}` and `"home"` → `{home: true, index: 0}`. `set_preset` / `list_presets` are explicitly unsupported (`edit-waypoint`'s value shape is not captured, so no speculative write).
+- All commands flow through `PtzControlService` (audit untouched); unsupported commands are returned values, not exceptions.
+- **Caveat:** the cloud envelope is unverified on hardware. If the operator's on-device smoke check shows a different envelope, only `CloudCameraPositionTransport.run_action` needs to change.
+
 ### 15.3 SD-card playback — explicitly out of scope for phase/10-fixes
 
 - Requires wcsa signing (§15.7) **and** either (a) Agora RTC/RDT media path (no Linux userland SDK available) or (b) legacy gwell/TUTK pass-through (`INNER_PASS_THROUGH_CMD_PLAYBACK_*`) below evidence we should extend go2rtc's wyze:// with it — bounded but touchy, and it only covers v2/Pan-class SD.
