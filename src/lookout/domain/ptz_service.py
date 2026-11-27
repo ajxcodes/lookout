@@ -6,10 +6,15 @@ import contextlib
 import importlib
 from typing import TYPE_CHECKING, Any
 
-from lookout.domain.models import MotionTagState, MotionTagWriteResult
+from lookout.domain.models import (
+    MotionTagState,
+    MotionTagWriteResult,
+    PanScanState,
+    PanScanWriteResult,
+)
 
 if TYPE_CHECKING:
-    from lookout.ports.egress import MotionTagPort, PtzControlPort, VideoRecorderPort
+    from lookout.ports.egress import MotionTagPort, PanScanPort, PtzControlPort, VideoRecorderPort
 
 
 def _http_exception(status_code: int, detail: str) -> Exception:
@@ -59,6 +64,9 @@ class PtzControlService:
         self.motion_tag_adapter: MotionTagPort | None = kwargs.get(
             "motion_tag_adapter"
         ) or kwargs.get("motion_tag")
+        self.pan_scan_adapter: PanScanPort | None = kwargs.get("pan_scan_adapter") or kwargs.get(
+            "pan_scan"
+        )
 
     @staticmethod
     def _reraise(exc: Exception) -> None:
@@ -406,4 +414,23 @@ class PtzControlService:
         camera.motion_tag_enabled = bool(enabled)
         self._persist_config()
         await self._audit("motion_tag_set", camera_id, {"enabled": bool(enabled)}, "ok")
+        return result
+
+    # Pan Scan (Wyze cloud device-management capability)
+    async def get_pan_scan(self, camera_id: str) -> PanScanState:
+        self._camera(camera_id)
+        if self.pan_scan_adapter is None:
+            return PanScanState(supported=False, enabled=None, tracking=None)
+        return await self.pan_scan_adapter.get_pan_scan(camera_id)
+
+    async def set_pan_scan(self, camera_id: str, enabled: bool) -> PanScanWriteResult:
+        camera = self._camera(camera_id)
+        if self.pan_scan_adapter is None:
+            raise _http_exception(501, f"Pan Scan not supported for camera '{camera_id}'")
+        result = await self.pan_scan_adapter.set_pan_scan(camera_id, bool(enabled))
+        if not result.supported:
+            raise _http_exception(501, f"Pan Scan not supported for camera '{camera_id}'")
+        camera.pan_scan_enabled = bool(enabled)
+        self._persist_config()
+        await self._audit("pan_scan_set", camera_id, {"enabled": bool(enabled)}, "ok")
         return result

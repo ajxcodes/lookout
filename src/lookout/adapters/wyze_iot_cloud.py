@@ -445,6 +445,7 @@ class WyzeIotCloudAdapter:
         *,
         user_id: str | None = None,
         capabilities: list[str] | None = None,
+        properties: list[str] | None = None,
         capability_iids: dict[str, int] | None = None,
     ) -> IotPropertyResult:
         caps = list(capabilities or [_MOTION_TAG_CAPABILITY])
@@ -469,11 +470,12 @@ class WyzeIotCloudAdapter:
             entries: list[dict[str, Any]] = []
             for name in caps:
                 iid = iid_map.get(name)
+                names = list(properties) if properties else [f"{name}::motion-tag"]
                 entries.append(
                     {
                         "name": name,
                         "iid": int(iid) if iid is not None else None,
-                        "properties": [{"separator": "::", "prop": f"{name}::motion-tag"}],
+                        "properties": [{"separator": "::", "prop": prop} for prop in names],
                     }
                 )
             return {

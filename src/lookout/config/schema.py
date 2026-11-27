@@ -235,6 +235,10 @@ class CameraConfig(BaseModel):
             "Tri-state motion-tag toggle for Wyze ascent/cam4-class devices (None = unknown/hidden)"
         ),
     )
+    pan_scan_enabled: bool | None = Field(
+        default=None,
+        description="Tri-state Pan Scan toggle for Wyze pan-class devices (None = unknown/hidden)",
+    )
 
     @model_validator(mode="after")
     def _sync_notification_flags(self) -> Self:
