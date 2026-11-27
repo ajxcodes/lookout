@@ -192,3 +192,26 @@ class MotionTagWriteResult:
     supported: bool
     enabled: bool | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PanScanState:
+    """Tri-state outcome of a Wyze Pan Scan capability read.
+
+    ``supported`` is False when the device does not advertise the cloud
+    ``camera-pnt`` capability (for example a fixed, non-pan camera).
+    ``tracking`` reports the smart-tracking state for the UI warning only.
+    """
+
+    supported: bool
+    enabled: bool | None = None
+    tracking: bool | None = None
+
+
+@dataclass(frozen=True)
+class PanScanWriteResult:
+    """Outcome of a Pan Scan write, including the raw transport response."""
+
+    supported: bool
+    enabled: bool | None = None
+    raw: dict[str, Any] = field(default_factory=dict)

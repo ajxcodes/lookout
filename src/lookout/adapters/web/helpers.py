@@ -104,6 +104,7 @@ def build_camera_card_data(
         "ptz_protocol": getattr(cam, "ptz_protocol", "none"),
         "ptz_max_speed": getattr(cam, "ptz_max_speed", 0.5),
         "motion_tag_enabled": getattr(cam, "motion_tag_enabled", None),
+        "pan_scan_enabled": getattr(cam, "pan_scan_enabled", None),
         "native_provider": getattr(cam, "native_provider", None),
         "auth_required": bool(auth_required),
         "live_stream_url": getattr(cam, "live_stream_url", None),

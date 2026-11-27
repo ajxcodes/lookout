@@ -15,6 +15,8 @@ if TYPE_CHECKING:
         InferenceProvenance,
         MotionTagState,
         MotionTagWriteResult,
+        PanScanState,
+        PanScanWriteResult,
         StorageStatus,
         ThreatLevel,
     )
@@ -245,6 +247,19 @@ class MotionTagPort(Protocol):
 
     async def set_motion_tag(self, camera_id: str, enabled: bool) -> MotionTagWriteResult:
         """Write the motion-tag toggle; returns an explicit unsupported result when absent."""
+        ...
+
+
+@runtime_checkable
+class PanScanPort(Protocol):
+    """Wyze Pan Scan toggle over the cloud device-management lane."""
+
+    async def get_pan_scan(self, camera_id: str) -> PanScanState:
+        """Read the Pan Scan toggle; returns an explicit unsupported state when absent."""
+        ...
+
+    async def set_pan_scan(self, camera_id: str, enabled: bool) -> PanScanWriteResult:
+        """Write the Pan Scan toggle; returns an explicit unsupported result when absent."""
         ...
 
 

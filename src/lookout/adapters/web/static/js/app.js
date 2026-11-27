@@ -149,6 +149,9 @@ class LookoutApp {
     this.csMotionTagGroup = document.getElementById("cs-motion-tag-group");
     this.csCamMotionTag = document.getElementById("cs-cam-motion-tag");
     this.csMotionTagStatus = document.getElementById("cs-motion-tag-status");
+    this.csPanScanGroup = document.getElementById("cs-pan-scan-group");
+    this.csCamPanScan = document.getElementById("cs-cam-pan-scan");
+    this.csPanScanStatus = document.getElementById("cs-pan-scan-status");
     this.csAuthGroup = document.getElementById("cs-auth-group");
     this.csReauthBtn = document.getElementById("cs-reauth-btn");
     this.csRemoveBtn = document.getElementById("cs-remove-btn");
@@ -1582,8 +1585,14 @@ class LookoutApp {
       if (this.csMotionTagStatus) this.csMotionTagStatus.textContent = "";
     }
     this._motionTagBaseline = null;
+    if (this.csPanScanGroup) {
+      this.csPanScanGroup.style.display = "none";
+      if (this.csPanScanStatus) this.csPanScanStatus.textContent = "";
+    }
+    this._panScanBaseline = null;
     if (cam && (cam.native_provider === "wyze" || cam.provider_badge === "wyze")) {
       this.loadMotionTagSupport(cam);
+      this.loadPanScanSupport(cam);
     }
     if (this.csAuthGroup) {
       this.csAuthGroup.style.display = cam && cam.auth_required ? "" : "none";
@@ -1620,6 +1629,33 @@ class LookoutApp {
       if (this.csMotionTagStatus) this.csMotionTagStatus.textContent = "";
     } catch (err) {
       console.warn("Motion tag probe failed:", err);
+    }
+  }
+
+  async loadPanScanSupport(cam) {
+    if (!this.csPanScanGroup) return;
+    this.csPanScanGroup.style.display = "none";
+    this._panScanBaseline = null;
+    if (!cam || !cam.id) return;
+    try {
+      const res = await fetch(resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/pan_scan`));
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !data.supported) {
+        if (this.csPanScanStatus && data && data.enabled === null) {
+          this.csPanScanStatus.textContent = "Not supported on this camera";
+        }
+        return;
+      }
+      this.csPanScanGroup.style.display = "";
+      if (this.csCamPanScan) this.csCamPanScan.checked = data.enabled === true;
+      this._panScanBaseline = data.enabled === true;
+      if (this.csPanScanStatus) {
+        this.csPanScanStatus.textContent =
+          data.tracking === true ? "Smart tracking is on; Pan Scan may be paused." : "";
+      }
+    } catch (err) {
+      console.warn("Pan Scan probe failed:", err);
     }
   }
 
@@ -1670,6 +1706,30 @@ class LookoutApp {
         }
       } catch (err) {
         console.warn("Motion tag save failed:", err);
+      }
+    }
+    if (
+      this.csPanScanGroup &&
+      this.csPanScanGroup.style.display !== "none" &&
+      this.csCamPanScan &&
+      this.csCamPanScan.checked !== this._panScanBaseline
+    ) {
+      try {
+        const psRes = await fetch(
+          resolveUrl(`/api/cameras/${encodeURIComponent(cam.id)}/pan_scan`),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: this.csCamPanScan.checked }),
+          }
+        );
+        if (psRes.ok) {
+          const psData = await psRes.json();
+          cam.pan_scan_enabled = psData.enabled === true;
+          this._panScanBaseline = cam.pan_scan_enabled;
+        }
+      } catch (err) {
+        console.warn("Pan Scan save failed:", err);
       }
     }
     this.closeCameraSettings();
