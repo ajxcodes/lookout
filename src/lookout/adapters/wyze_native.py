@@ -15,7 +15,7 @@ import re
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from lookout.adapters.native_stream_manager import MediaCaptureError, NativeStreamManager
@@ -100,10 +100,16 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         self._last_error: str | None = None
         self._last_success: Any | None = None
         self._last_event_count: int = 0
-        self._ptz = WyzeTutkPtzAdapter(
-            config=self.config, client=self, stream_manager=stream_manager
-        )
         self.iot_cloud = iot_cloud
+        self._ptz: _PtzAdapterWithStatus = build_wyze_ptz_adapter(
+            self.config,
+            client=self,
+            stream_manager=stream_manager,
+            iot_cloud=iot_cloud,
+            cameras=self.cameras,
+            native_adapter=self,
+            data_channel_sender=kwargs.get("agora_data_channel_sender"),
+        )
 
     # ------------------------------------------------------------------
     # Compatibility PTZ surface (delegates to the TUTK/cloud PTZ adapter)
@@ -850,3 +856,56 @@ class WyzeTutkPtzAdapter(PtzControlPort):
             **self._last_position,
             "source": "last_command",
         }
+
+
+class _PtzAdapterWithStatus(PtzControlPort, Protocol):
+    """A PTZ adapter that also exposes the last command and speed."""
+
+    last_command: str | None
+    last_speed: float | None
+
+
+def build_wyze_ptz_adapter(
+    config: WyzeConfig | None = None,
+    *,
+    client: Any,
+    stream_manager: NativeStreamManager | None = None,
+    iot_cloud: Any | None = None,
+    cameras: Any = (),
+    native_adapter: Any = None,
+    data_channel_sender: Any | None = None,
+) -> _PtzAdapterWithStatus:
+    """Build the configured Wyze PTZ lane.
+
+    The default (``wyze.agora_ptz`` false) is the cloud ``rotary_*`` lane,
+    constructed byte-for-byte as before. When the flag is true the Lane-B
+    ``camera-position::*`` adapter is used: the data-channel transport when a
+    sender was injected, otherwise the cloud ``run_action`` transport. The
+    Lane-B import stays inside this function so ``wyze_agora_ptz`` can be
+    imported first without a cycle.
+    """
+    if not getattr(config, "agora_ptz", False):
+        return WyzeTutkPtzAdapter(config=config, client=client, stream_manager=stream_manager)
+
+    from lookout.adapters.wyze_agora_ptz import (
+        CloudCameraPositionTransport,
+        DataChannelCameraPositionTransport,
+        WyzeAgoraPtzAdapter,
+    )
+
+    if data_channel_sender is not None:
+        return WyzeAgoraPtzAdapter(
+            transport=DataChannelCameraPositionTransport(send=data_channel_sender)
+        )
+
+    if iot_cloud is None:
+        from lookout.adapters.wyze_iot_cloud import WyzeIotCloudAdapter
+
+        iot_cloud = WyzeIotCloudAdapter(config=config, native_adapter=native_adapter)
+    return WyzeAgoraPtzAdapter(
+        transport=CloudCameraPositionTransport(
+            iot_cloud=iot_cloud,
+            cameras=cameras,
+            native_adapter=native_adapter,
+        )
+    )

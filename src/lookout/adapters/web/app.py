@@ -61,7 +61,7 @@ from lookout.adapters.web.routes import (
 from lookout.adapters.wyze_hl import HualaiBridgePropertyTransport, WyzeHlMotionTagAdapter
 from lookout.adapters.wyze_iot_cloud import WyzeIotCloudAdapter, WyzeMotionTagAdapter
 from lookout.adapters.wyze_motion_tag_router import WyzeMotionTagRouter
-from lookout.adapters.wyze_native import WyzeNativeAdapter, WyzeTutkPtzAdapter
+from lookout.adapters.wyze_native import WyzeNativeAdapter, build_wyze_ptz_adapter
 from lookout.adapters.wyze_pan_scan import WyzePanScanAdapter
 from lookout.adapters.wyze_push_settings import WyzePushSettingsAdapter
 from lookout.config.deep_links import get_deep_link_base
@@ -852,10 +852,12 @@ def create_app(
             bridge_name = getattr(cam, "ptz_cam_name", None) or cam.id
             cam_name_map[cam.id] = bridge_name
             if proto == "native-wyze" or getattr(cam, "native_provider", None) == "wyze":
-                ptz_adapters[cam.id] = WyzeTutkPtzAdapter(
+                ptz_adapters[cam.id] = build_wyze_ptz_adapter(
                     config=wyze_native_config,
                     client=app.state.wyze_native,
                     stream_manager=native_manager,
+                    cameras=lambda: active_config.cameras if active_config is not None else [],
+                    native_adapter=app.state.wyze_native,
                 )
             elif proto in ("go2rtc-wyze", "go2rtc-onvif"):
                 ptz_adapters[cam.id] = Go2RtcPtzAdapter(
