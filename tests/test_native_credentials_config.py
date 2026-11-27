@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from lookout.adapters.memory import InMemoryEventRepository
 from lookout.adapters.web.app import create_app
-from lookout.config.schema import LookoutConfig
+from lookout.config.schema import CameraConfig, LookoutConfig, StorageConfig
 
 
 class FakeNativeAdapter:
@@ -192,6 +192,53 @@ def test_discover_rejects_unknown_provider(tmp_path: Path) -> None:
     response = client.post("/api/native/discover", json={"provider": "nope"})
 
     assert response.status_code == 400
+
+
+class FakeWyzeDiscovery:
+    async def discover_devices(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "AA:BB:CC:DD:EE:FF",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "model": "HL_PAN3",
+            }
+        ]
+
+
+def test_discover_backfills_native_model_for_matching_camera(tmp_path: Path) -> None:
+    """TR-28: discovery persists native_model for the matching Wyze camera only."""
+    config = LookoutConfig(
+        storage=StorageConfig(base_path=str(tmp_path / "media")),
+        cameras=[
+            CameraConfig(
+                id="mochi_pan_cam",
+                name="Mochi Pan",
+                stream_url="wyze://?mac=AA:BB:CC:DD:EE:FF&subtype=hd",
+                native_provider="wyze",
+                native_device_id="AA:BB:CC:DD:EE:FF",
+            ),
+            CameraConfig(
+                id="office_cam",
+                name="Office",
+                stream_url="wyze://?mac=11:22:33:44:55:66&subtype=hd",
+                native_provider="wyze",
+                native_device_id="11:22:33:44:55:66",
+            ),
+        ],
+    )
+    config_path = tmp_path / "nested" / "config.yaml"
+    app = create_app(config=config, config_path=config_path)
+    app.state.wyze_native = FakeWyzeDiscovery()
+    client = TestClient(app)
+
+    response = client.post("/api/native/discover", json={"provider": "wyze"})
+
+    assert response.status_code == 200
+    assert response.json()["models_backfilled"] == 1
+    written = yaml.safe_load(config_path.read_text())
+    cameras = {camera["id"]: camera for camera in written["cameras"]}
+    assert cameras["mochi_pan_cam"]["native_model"] == "HL_PAN3"
+    assert cameras["office_cam"]["native_model"] is None
 
 
 def test_status_reports_configuration_without_network_io(tmp_path: Path) -> None:

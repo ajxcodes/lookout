@@ -334,6 +334,23 @@ def test_wyze_device_management_defaults() -> None:
     assert cfg.user_id is None
 
 
+def test_hl_motion_tag_defaults_and_disjoint_routing() -> None:
+    """TR-24: HL lane defaults are disjoint from the cloud lane."""
+    config = WyzeConfig()
+    assert config.hl_motion_tag_models == ["WYZE_CAKP2JFUS", "HL_PAN3"]
+    assert config.hl_control_timeout_seconds == 10.0
+    assert set(config.motion_tag_models).isdisjoint(set(config.hl_motion_tag_models)) is True
+
+
+def test_camera_native_model_defaults_to_none_and_round_trips() -> None:
+    """TR-25: native_model is optional and survives a model dump."""
+    default_camera = CameraConfig(id="c", name="c", stream_url="rtsp://x/y")
+    assert default_camera.native_model is None
+
+    camera = CameraConfig(id="c", name="c", stream_url="rtsp://x/y", native_model="HL_PAN3")
+    assert camera.model_dump()["native_model"] == "HL_PAN3"
+
+
 def test_legacy_wyze_auth_fields_are_dropped_on_load() -> None:
     """TR-12 (AC4): legacy TOTP/API key fields load safely and are not retained."""
     config = load_config_from_yaml(

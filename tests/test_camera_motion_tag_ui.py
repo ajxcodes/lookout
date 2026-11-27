@@ -28,3 +28,16 @@ def test_camera_card_exposes_motion_tag_state() -> None:
     )
     card = build_camera_card_data(cam)
     assert card["motion_tag_enabled"] is True
+
+
+def test_motion_tag_toggle_stays_hidden_for_unsupported_lane() -> None:
+    """TR-29: the group is hidden by default and only revealed after support."""
+    app_js = APP.read_text(encoding="utf-8")
+    load_body = app_js.split("async loadMotionTagSupport(cam) {", 1)[1].split(
+        "\n  async saveCameraSettings", 1
+    )[0]
+
+    assert 'this.csMotionTagGroup.style.display = "none"' in load_body
+    guard = "if (!data || !data.supported)"
+    assert guard in load_body
+    assert load_body.index(guard) < load_body.index('this.csMotionTagGroup.style.display = ""')

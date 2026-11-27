@@ -235,6 +235,9 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
         cameras_client = getattr(client, "cameras", None)
         if cameras_client is None or not hasattr(cameras_client, "_list_cameras"):
             raise WyzeApiError("Wyze client does not expose camera listing")
+        # The raw list is intentionally unfiltered: unknown product models (for
+        # example ``HL_PAN3``) are missing from ``DeviceModels.CAMERA`` in the
+        # pinned SDK but must still be discoverable.
         raw = cameras_client._list_cameras()
         return [dict(item) for item in raw if isinstance(item, dict)]
 
@@ -450,6 +453,8 @@ class WyzeNativeAdapter(VideoRecorderPort, PtzControlPort):
             mac = getattr(camera, "native_device_id", None)
         if mac is None:
             mac = str(camera_id)
+        if not model and camera is not None:
+            model = getattr(camera, "native_model", None)
         if not model:
             raise WyzeStreamSourceError(f"No Wyze product model resolved for camera '{camera_id}'")
         return str(mac), str(model)

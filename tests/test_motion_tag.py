@@ -162,7 +162,7 @@ def test_motion_tag_models_config_wires_allowlist(tmp_path):
     )
     app = create_app(config=config, config_path=tmp_path / "config.yaml")
     adapter = app.state.ptz_service.motion_tag_adapter
-    assert adapter.model_allowlist == {"HL_CAM4", "WYZE_ASCENT"}
+    assert adapter.cloud.model_allowlist == {"HL_CAM4", "WYZE_ASCENT"}
 
 
 def test_capability_map_known_without_motion_detection_is_unsupported():

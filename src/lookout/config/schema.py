@@ -200,6 +200,13 @@ class CameraConfig(BaseModel):
     native_device_id: str | None = Field(
         default=None, description="Native provider device id for this camera"
     )
+    native_model: str | None = Field(
+        default=None,
+        description=(
+            "Native provider product model backfilled by discovery; preferred over the "
+            "stream-URL model query for identity resolution"
+        ),
+    )
     ha_enabled: bool = Field(
         default=True, description="Whether this camera is published to Home Assistant"
     )
@@ -350,6 +357,17 @@ class WyzeConfig(BaseModel):
     motion_tag_models: list[str] = Field(
         default_factory=lambda: ["HL_CAM4"],
         description="Product model strings that support the motion-detection capability",
+    )
+    hl_motion_tag_models: list[str] = Field(
+        default_factory=lambda: ["WYZE_CAKP2JFUS", "HL_PAN3"],
+        description=(
+            "Product model strings that support the HL/Hualai camera-property motion_tagging lane"
+        ),
+    )
+    hl_control_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0.0,
+        description="Timeout for HL bridge camera-property control requests",
     )
     device_capability_path: str | None = Field(
         default=None,
