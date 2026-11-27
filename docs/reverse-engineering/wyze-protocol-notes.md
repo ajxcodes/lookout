@@ -219,6 +219,16 @@ Body (WpkIotRequest):
 
 - `NewDetectionSettingsViewModel.setMotionTaggingEnableTask` builds `new Lpnk` (obfuscated 1-bool class `a: Boolean`) → `ConnectControl.setCameraProperty(prop, callback)`; UI toggles `CameraInfo.showTrackingBorder`. Property→wire-id mapping lives in obfuscated HLApi serializer code (not resolvable statically).
 
+#### 9.2.1 Resolved HL contract (phase 11 addendum)
+
+- **Property / bridge topic:** `motion_tagging`.
+- **Underlying Hualai/TUTK commands:** read `K10290GetMotionTagging`, write `K10292SetMotionTagging`; device parameter code `21` (`motion_tagging`).
+- **Boolean encoding:** `1` = on, `2` = off. Decoding accepts the tolerant set `{1, "1", "on", "true", True}` → on and `{2, "2", "off", "false", False}` → off; anything else is "not readable" and degrades to `supported: false` rather than a guessed boolean.
+- **Bridge read:** `GET {base}/api/{bridge_cam}/motion_tagging` → JSON. **Bridge write:** `POST {base}/api/{bridge_cam}/motion_tagging` with form body `value=1|2`.
+- **Status mapping:** HTTP `404`/`501` (the bridge does not know the camera or topic) maps to "unsupported"; any other HTTP error, timeout, or connection failure is a transport failure (`502`).
+- **Layering:** the bridge is the TUTK control transport boundary. Lookout owns no native TUTK control channel and does not implement `ConnectControl.setCameraProperty` itself; `HlCameraPropertyPort` is the seam a future native transport can implement without a domain or route change.
+- **Default model split:** cloud device-management lane `HL_CAM4`; HL camera-property lane `WYZE_CAKP2JFUS` (Cam v3) and `HL_PAN3` (Pan v3). `WYZECP1_JEF` (original Pan) exposes neither path and stays unsupported/hidden.
+
 ### 9.3 Read paths
 
 - Via the same cloud `get_iot_prop` call (capability name list `["motion-tag"]`-family) for the settings screen (`motionTaggingStatusTask`).

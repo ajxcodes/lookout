@@ -267,6 +267,23 @@ def test_providers_have_no_web_framework_cross_coupling() -> None:
     assert provider_violations == []
 
 
+def test_ports_and_domain_do_not_import_hl_adapters() -> None:
+    """TR-30: no domain/ports module may import the new HL adapter modules."""
+    forbidden = {
+        "lookout.adapters.wyze_hl",
+        "lookout.adapters.wyze_motion_tag_router",
+        "lookout.adapters.wyze_device_identity",
+    }
+    violations: list[str] = []
+    for package in ("domain", "ports"):
+        for py_file in (LOOKOUT_ROOT / package).glob("*.py"):
+            for mod in _extract_imported_modules(py_file):
+                if mod in forbidden:
+                    violations.append(f"{package}/{py_file.name} -> {mod}")
+
+    assert violations == []
+
+
 def test_npu_adapters_and_hwaccel_maintain_hexagonal_boundaries() -> None:
     """Verify npu, ffmpeg, and benchmark reside in adapters and do not leak into domain/ports."""
     domain_dir = LOOKOUT_ROOT / "domain"

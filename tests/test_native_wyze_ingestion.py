@@ -472,6 +472,45 @@ async def test_poll_events_handles_epoch_ms_time() -> None:
     assert payloads[0]["timestamp"] == datetime.fromtimestamp(1700000000, tz=UTC).isoformat()
 
 
+async def test_discover_devices_includes_model_missing_from_sdk_catalog() -> None:
+    """TR-26: raw product models absent from the SDK catalog stay discoverable."""
+    from wyze_sdk.models.devices import DeviceModels
+
+    assert "HL_PAN3" not in DeviceModels.CAMERA
+    raw_device = {
+        "mac": "AA:BB:CC:DD:EE:FF",
+        "product_model": "HL_PAN3",
+        "nickname": "Mochi Pan",
+        "ip": "192.168.1.60",
+        "p2p_id": "UPE2UNBNWDFAKE02AB",
+        "enr": "mnfNV14qMEFPrcnS/pan3",
+    }
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), client=FakeWyzeRawClient([raw_device]))
+
+    devices = await adapter.discover_devices()
+
+    assert devices[0]["model"] == "HL_PAN3"
+    assert devices[0]["id"] == "AA:BB:CC:DD:EE:FF"
+
+
+def test_resolve_device_identity_uses_native_model_without_discovery() -> None:
+    """TR-27: identity resolves from native_model with an empty discovery cache."""
+    camera = CameraConfig(
+        id="mochi_pan_cam",
+        name="Mochi Pan",
+        stream_url="wyze://?mac=AA:BB:CC:DD:EE:FF&subtype=hd",
+        native_provider="wyze",
+        native_device_id="AA:BB:CC:DD:EE:FF",
+        native_model="HL_PAN3",
+    )
+    adapter = WyzeNativeAdapter(config=WyzeConfig(), cameras=[camera])
+
+    assert adapter.resolve_device_identity("mochi_pan_cam") == (
+        "AA:BB:CC:DD:EE:FF",
+        "HL_PAN3",
+    )
+
+
 def test_build_stream_source_honors_dtls_and_subtype_config() -> None:
     """TR-5: stream_dtls/stream_subtype config changes the TUTK source tail."""
     adapter = WyzeNativeAdapter(config=WyzeConfig(stream_dtls=False, stream_subtype="sd"))

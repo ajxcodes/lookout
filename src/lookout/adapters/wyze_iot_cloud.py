@@ -13,8 +13,12 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
+from lookout.adapters.wyze_device_identity import (
+    identity_from_camera,
+    iter_cameras,
+    resolve_wyze_device_identity,
+)
 from lookout.adapters.wyze_identity import decode_jwt_user_id
 from lookout.adapters.wyze_signing import SignedRequest, WyzeSigner
 from lookout.domain.models import MotionTagState, MotionTagWriteResult
@@ -614,7 +618,8 @@ class WyzeMotionTagAdapter:
         user_id: str | None = None,
     ) -> None:
         self.iot_cloud = iot_cloud
-        self.cameras = list(cameras or [])
+        self._cameras_source = cameras
+        self.cameras = cameras if callable(cameras) else list(cameras or [])
         self.device_resolver = device_resolver
         self.native_adapter = native_adapter
         self.model_allowlist: set[str] = (
@@ -636,8 +641,12 @@ class WyzeMotionTagAdapter:
         self._states.clear()
         self._capability_iids.clear()
 
+    def _iter_cameras(self) -> list[Any]:
+        """Return cameras from the configured sequence or zero-arg callable."""
+        return iter_cameras(self._cameras_source)
+
     def _camera(self, camera_id: str) -> Any:
-        for camera in self.cameras:
+        for camera in self._iter_cameras():
             if str(getattr(camera, "id", "")) == str(camera_id):
                 return camera
         return None
@@ -658,56 +667,25 @@ class WyzeMotionTagAdapter:
 
     @staticmethod
     def _identity_from_camera(camera: Any) -> tuple[str, str] | None:
-        provider = str(getattr(camera, "native_provider", "") or "").lower()
-        stream_url = str(getattr(camera, "stream_url", "") or "")
-        if provider != "wyze" and not stream_url.startswith("wyze://"):
+        identity = identity_from_camera(camera)
+        if identity is None:
             return None
-        device_id = getattr(camera, "native_device_id", None)
-        model: str | None = None
-        if stream_url.startswith("wyze://"):
-            query = parse_qs(urlsplit(stream_url).query)
-            mac_values = query.get("mac") or []
-            if not device_id and mac_values:
-                device_id = mac_values[0]
-            model_values = query.get("model") or []
-            if model_values:
-                model = model_values[0]
-        if not device_id or not model:
-            return None
-        return str(device_id), str(model)
+        return identity.device_id, identity.model
 
     def _resolve_identity(self, camera_id: str) -> tuple[str, str] | None:
         cid = str(camera_id)
         cached = self._identities.get(cid)
         if cached is not None:
             return cached
-        identity: tuple[str, str] | None = None
-        if self.device_resolver is not None:
-            try:
-                resolved = self.device_resolver(cid)
-            except Exception:  # noqa: BLE001 - failed resolution is retried later
-                resolved = None
-            if resolved:
-                identity = (str(resolved[0]), str(resolved[1]))
-        if identity is None and self.native_adapter is not None:
-            resolver = getattr(self.native_adapter, "resolve_device_identity", None)
-            if callable(resolver):
-                try:
-                    identity = resolver(cid)
-                except Exception:  # noqa: BLE001 - failed resolution is retried later
-                    identity = None
-                if identity is not None:
-                    identity = (str(identity[0]), str(identity[1]))
-        if identity is None:
-            camera = self._camera(cid)
-            if camera is not None:
-                identity = self._identity_from_camera(camera)
+        identity = resolve_wyze_device_identity(
+            cid,
+            cameras=self._cameras_source,
+            device_resolver=self.device_resolver,
+            native_adapter=self.native_adapter,
+        )
         if identity is None:
             return None
-        device_id, model = identity
-        if not device_id or not model:
-            return None
-        self._identities[cid] = (device_id, model)
+        self._identities[cid] = (identity.device_id, identity.model)
         return self._identities[cid]
 
     def _model_supported(self, model: str) -> bool:

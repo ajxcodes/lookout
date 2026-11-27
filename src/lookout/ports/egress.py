@@ -237,7 +237,7 @@ class IotCapabilityPort(Protocol):
 
 @runtime_checkable
 class MotionTagPort(Protocol):
-    """Port for the Wyze cloud motion-tag capability (ascent/cam4-class devices)."""
+    """Wyze motion-tag toggle (cloud device-management lane or HL camera-property lane)."""
 
     async def get_motion_tag(self, camera_id: str) -> MotionTagState:
         """Read the motion-tag toggle; returns an explicit unsupported state when absent."""
@@ -245,4 +245,17 @@ class MotionTagPort(Protocol):
 
     async def set_motion_tag(self, camera_id: str, enabled: bool) -> MotionTagWriteResult:
         """Write the motion-tag toggle; returns an explicit unsupported result when absent."""
+        ...
+
+
+@runtime_checkable
+class HlCameraPropertyPort(Protocol):
+    """Port for HL/Hualai camera-property reads and writes over a control transport."""
+
+    async def get_property(self, camera_name: str, property_name: str) -> Any:
+        """Read a camera property and return the raw transport value."""
+        ...
+
+    async def set_property(self, camera_name: str, property_name: str, value: Any) -> Any:
+        """Write a camera property and return the raw transport response."""
         ...

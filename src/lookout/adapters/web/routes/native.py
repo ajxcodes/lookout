@@ -235,7 +235,44 @@ async def native_discover(
             status_code=502,
             detail=f"{type(exc).__name__}: {exc}",
         ) from exc
-    return {"status": "ok", "provider": provider, "devices": devices}
+    models_backfilled = _backfill_native_models(request, provider, devices)
+    return {
+        "status": "ok",
+        "provider": provider,
+        "devices": devices,
+        "models_backfilled": models_backfilled,
+    }
+
+
+def _backfill_native_models(request: Request, provider: str, devices: list[dict[str, Any]]) -> int:
+    """Persist discovered product models onto matching configured Wyze cameras."""
+    if provider != "wyze":
+        return 0
+    active_config = getattr(request.app.state, "config", None)
+    cameras = getattr(active_config, "cameras", None) or []
+    discovered: dict[str, str] = {}
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        mac = device.get("mac") or device.get("id")
+        model = device.get("model")
+        if mac and model:
+            discovered[str(mac)] = str(model)
+    backfilled = 0
+    for camera in cameras:
+        if str(getattr(camera, "native_provider", "") or "").lower() != "wyze":
+            continue
+        device_id = str(getattr(camera, "native_device_id", "") or "")
+        if not device_id or getattr(camera, "native_model", None):
+            continue
+        model = discovered.get(device_id)
+        if not model:
+            continue
+        camera.native_model = model
+        backfilled += 1
+    if backfilled:
+        _persist_config(request)
+    return backfilled
 
 
 @router.get("/status")
